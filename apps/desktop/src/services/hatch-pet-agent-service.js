@@ -777,7 +777,9 @@ const createHatchPetAgentService = ({
           dataDir,
           runId,
           scope,
-          evidenceId: String(board?.sha256 || '').slice(0, 64),
+          evidenceId: normalizedScope === 'final-package'
+            ? crypto.randomBytes(16).toString('hex')
+            : String(board?.sha256 || '').slice(0, 64),
           evaluation: {
             ...evaluation,
             gate,

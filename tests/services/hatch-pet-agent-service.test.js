@@ -497,6 +497,30 @@ test('sprite evaluation rejects an all-zero response even when the provider omit
   assert.match(h.calls[1].messages[0].content, /previous evaluation was invalid/i)
 })
 
+test('final package reevaluation keeps the previous evidence for the same board', async (t) => {
+  const scores = { identity: 96, actionDistinctness: 92, crossAction: 94, smallScale: 90, style: 92, overall: 93 }
+  const completion = { arguments: { schemaVersion: 1, recommendation: 'pass', confidence: 0.95, scores, defects: [] } }
+  const h = createHarness({ completions: [
+    completion,
+    { arguments: { ...completion.arguments, scores: { ...scores, overall: 70 } } }
+  ] })
+  t.after(() => fs.rmSync(h.dataDir, { recursive: true, force: true }))
+  const boardPath = path.join(h.dataDir, 'board.png')
+  await sharp({ create: { width: 8, height: 8, channels: 4, background: '#fff' } }).png().toFile(boardPath)
+  const input = {
+    runId: 'package-evidence-revision',
+    scope: 'final-package',
+    board: { path: boardPath, sha256: 'a'.repeat(64), regions: [{ regionId: 'source' }] },
+    profile: getQualityFirstQualityProfile()
+  }
+  const accepted = await h.service.evaluateSprite(input)
+  const rejected = await h.service.evaluateSprite(input)
+  assert.notEqual(accepted.evidenceRelativePath, rejected.evidenceRelativePath)
+  const readStoredGate = (result) => JSON.parse(fs.readFileSync(path.join(h.dataDir, result.evidenceRelativePath), 'utf8')).evaluation.gate
+  assert.equal(readStoredGate(accepted).outcome, 'pass')
+  assert.equal(readStoredGate(rejected).outcome, 'repair')
+})
+
 test('sprite evaluation propagates cancellation to the provider without retrying', async () => {
   let providerSignal
   const controller = new AbortController()

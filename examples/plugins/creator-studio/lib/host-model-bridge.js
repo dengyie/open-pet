@@ -441,7 +441,9 @@ const evaluateQualityFirstFinalPackage = async ({
     relativePath: atlasQa?.visualReview?.contactSheet,
     label: 'Quality-first action review'
   })
-  const outputPath = path.join(dataDir, 'runs', String(runId || ''), 'evaluations', 'final-package-review-board.png')
+  const boardDir = path.join(dataDir, 'runs', String(runId || ''), 'evaluations', 'final-package-boards')
+  fs.mkdirSync(boardDir, { recursive: true })
+  const outputPath = path.join(fs.mkdtempSync(path.join(boardDir, 'attempt-')), 'final-package-review-board.png')
   const board = await createFinalPackageEvaluatorBoard({
     sourcePath: safeSourcePath,
     canonicalPath: safeCanonicalPath,
@@ -3823,11 +3825,22 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
         }))
       }))
     if (!officialRows.some((row) => row.actionId === 'idle')) return null
+    const revisionsDir = path.join(dataDir, 'runs', run.runId, 'package-revisions')
+    fs.mkdirSync(revisionsDir, { recursive: true })
+    const revisionDir = fs.mkdtempSync(path.join(revisionsDir, 'attempt-'))
+    try {
+      return await buildFinalPackage({ canonical, finalVisualConfirmation, officialRows, revisionDir })
+    } catch (error) {
+      fs.rmSync(revisionDir, { recursive: true, force: true })
+      throw error
+    }
+  }
+  const buildFinalPackage = async ({ canonical, finalVisualConfirmation, officialRows, revisionDir }) => {
     const atlasGenerationResult = {
       outputs: [{ dataRelativePath: canonical.relativePath }]
     }
-    const outputDir = path.join(dataDir, `runs/${run.runId}/quality-first/package`)
-    const qaDir = path.join(dataDir, `runs/${run.runId}/quality-first/qa`)
+    const outputDir = path.join(revisionDir, 'package')
+    const qaDir = path.join(revisionDir, 'qa')
     const packaged = await buildRealAtlasFromGeneratedImage({
       dataDir,
       generationResult: atlasGenerationResult,

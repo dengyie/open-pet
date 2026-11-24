@@ -968,6 +968,76 @@ test('quality-first final package requires a passing code-owned visual gate over
   }), /canonical.*inside the Creator Studio data directory/i)
 })
 
+test('failed final review of a replacement row preserves the published package and review board', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-package-revision-'))
+  const runId = 'package-revision'
+  const runDir = path.join(dataDir, 'runs', runId)
+  fs.mkdirSync(runDir, { recursive: true })
+  const reference = `runs/${runId}/reference.png`
+  const plan = createSpriteAssetPlan({
+    version: 1, revision: 1, character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId: 'idle' }, { actionId: 'waving' }]
+  })
+  const drawFrame = (outputPath, frameIndex) => sharp(Buffer.from(
+    `<svg width="192" height="208" xmlns="http://www.w3.org/2000/svg">
+      <rect x="58" y="96" width="46" height="58" fill="#f6b73c"/>
+      <rect x="${78 + frameIndex * 3}" y="74" width="12" height="26" fill="#1c7ed6"/>
+      <rect x="90" y="150" width="20" height="8" fill="#2f9e44"/>
+    </svg>`
+  )).png().toFile(outputPath)
+  const addRow = async (actionId) => {
+    const row = require('../../examples/plugins/creator-studio/lib/full-pet-row-contract').getOfficialFullPetRow(actionId)
+    const frames = await Promise.all(row.durations.map(async (durationMs, index) => {
+      const framePath = path.join(runDir, `${actionId}-${index}.png`)
+      await drawFrame(framePath, index)
+      return { index, durationMs, path: framePath }
+    }))
+    writeActionCheckpoint({ dataDir, runId, result: { actionId, ok: true, outputCount: frames.length, row: { actionId, quality: 'row-real', frames } } })
+  }
+  await drawFrame(path.join(dataDir, reference), 0)
+  await addRow('idle')
+  const canonical = { relativePath: reference, sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(dataDir, reference))).digest('hex') }
+  const originalFetch = global.fetch
+  const env = Object.fromEntries(['OPENPET_BRIDGE_URL', 'OPENPET_BRIDGE_TOKEN'].map(key => [key, process.env[key]]))
+  t.after(() => {
+    global.fetch = originalFetch
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+  process.env.OPENPET_BRIDGE_URL = 'http://127.0.0.1:1'
+  process.env.OPENPET_BRIDGE_TOKEN = 'fixture-token'
+  const boards = []
+  global.fetch = async (url, options) => {
+    if (String(url).endsWith('/creator/model-settings')) return Response.json({ config: { model: 'gpt-image-2' } })
+    assert.match(String(url), /\/creator\/hatch-pet\/evaluate$/)
+    const { board } = JSON.parse(options.body)
+    boards.push(board)
+    const gate = boards.length === 1
+      ? { ok: true, outcome: 'pass', failures: [] }
+      : { ok: false, outcome: 'reject', failures: ['visual-defect-action-unreadable'] }
+    return Response.json({ result: { gate } })
+  }
+  const runtime = await createQualityFirstHostRuntime({
+    dataDir, run: { runId, petId: 'revision-pet', input: { referenceImage: { relativePath: reference } } }, planOverride: plan
+  })
+  const published = await runtime.finalizePackage({ canonical })
+  const publishedPaths = [
+    published.spritesheetRelativePath, published.bundleRelativePath, published.petJsonRelativePath,
+    published.atlasQaRelativePath, published.visualEvaluation.boardRelativePath
+  ].map(relativePath => path.join(dataDir, relativePath))
+  const publishedBytes = publishedPaths.map(filePath => fs.readFileSync(filePath))
+  await addRow('waving')
+  await assert.rejects(runtime.finalizePackage({ canonical }), { code: 'final_package_visual_gate_failed' })
+  assert.equal(boards.length, 2)
+  assert.ok(boards[1].regions.some(region => region.regionId === 'sequence-waving'))
+  assert.notEqual(boards[1].sha256, boards[0].sha256)
+  assert.notEqual(boards[1].relativePath, boards[0].relativePath)
+  assert.deepEqual(publishedPaths.map(filePath => fs.readFileSync(filePath)), publishedBytes)
+  assert.deepEqual(fs.readdirSync(path.join(runDir, 'package-revisions')), [path.basename(path.dirname(published.artifacts.outputDir))])
+})
+
 test('video action candidates build their evaluator board with the accepted canonical', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-video-action-evaluator-'))
   const runId = 'run-video-action-evaluator'
