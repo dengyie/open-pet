@@ -17,6 +17,7 @@ const { createProviderVideoTask } = require('../../examples/plugins/creator-stud
 const { createVideoRunnerRequest, createVideoRunnerResponse } = require('../../examples/plugins/creator-studio/lib/video-runner-protocol')
 const { createVideoRunnerService } = require('../../examples/plugins/creator-studio/lib/video-runner-service')
 const { buildVideoPrompt, createVideoCandidateArtifacts, isVideoTechnicalFailure, runVideoAction } = require('../../examples/plugins/creator-studio/lib/video-action-runner')
+const { runQualityFirstAction } = require('../../examples/plugins/creator-studio/lib/quality-first-action-runner')
 
 const HASH_A = 'a'.repeat(64)
 const HASH_B = 'b'.repeat(64)
@@ -1126,6 +1127,25 @@ test('runVideoAction does not retry a non-retryable bridge error', async () => {
     }
   }), /invalid request/)
   assert.equal(calls, 1)
+})
+
+test('the outer action runner does not resubmit video jobs after the video retry is exhausted', async () => {
+  let calls = 0
+  const result = await runQualityFirstAction({
+    context: { actionId: 'waving' },
+    reserveCreativeDispatch: async () => {},
+    generateCandidate: () => createRunVideoActionFixture({
+      bridge: async () => {
+        calls++
+        throw Object.assign(new Error('Provider timed out'), { code: 'video_provider_timeout', retryable: true })
+      }
+    }),
+    processCandidate: async () => assert.fail('no generated video'),
+    evaluateCandidate: async () => assert.fail('no generated video')
+  })
+  assert.equal(calls, 2)
+  assert.equal(result.failureCode, 'video_provider_timeout')
+  assert.equal(result.candidates.length, 1)
 })
 
 test('runVideoAction cancels retry backoff when the request is aborted', async () => {
