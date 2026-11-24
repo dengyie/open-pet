@@ -93,6 +93,10 @@ const MOTIONS = [
 
 const GENERIC_EMOTE = ['Emote', /\b(?:emote|emoji|expression|sparkle)\b|表情/u, 'emote', 'show the expression using existing facial features only', 'visible expressive features required by the emote']
 
+const primaryMotionClauses = (value) => briefClauses(value)
+  .map((clause) => clause.split(/\bwhile\b|同时|同時/u, 1)[0].trim())
+  .filter(Boolean)
+
 const findMotion = (clauses) => {
   for (const clause of clauses) {
     const match = MOTIONS.map((motion) => ({ motion, index: clause.search(motion[1]) }))
@@ -104,11 +108,12 @@ const findMotion = (clauses) => {
 }
 
 const toProviderAction = (action = {}) => {
-  const clauses = briefClauses(action.motionPrompt)
-  const [name, , animationType, moment, movingPart] = findMotion(clauses) || findMotion(briefClauses(action.name)) ||
+  const clauses = primaryMotionClauses(action.motionPrompt)
+  const titleClauses = primaryMotionClauses(action.name)
+  const [name, , animationType, moment, movingPart] = findMotion(clauses) || findMotion(titleClauses) ||
     ['Custom action', null, action.loop ? 'stationary_loop' : 'reaction', 'show a small anchored reaction', 'visible expressive features']
   const hasSideInDescription = Object.values(SIDE_TERMS).some((pattern) => clauses.some((clause) => pattern.test(clause)))
-  const side = chooseUnambiguous(hasSideInDescription ? clauses : briefClauses(action.name), SIDE_TERMS)
+  const side = chooseUnambiguous(hasSideInDescription ? clauses : titleClauses, SIDE_TERMS)
   const speed = chooseUnambiguous(clauses, {
     slowly: /\b(?:slowly|slow|gently|gentle)\b|缓慢|緩慢|慢慢|轻轻|輕輕/u,
     quickly: /\b(?:quickly|quick|fast|rapidly)\b|快速|迅速/u

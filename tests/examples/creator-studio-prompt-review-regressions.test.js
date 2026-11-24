@@ -68,6 +68,14 @@ test('specific motion wins over a generic expression label', () => {
   assert.equal(toProviderAction({ motionPrompt: 'An expressive emote' }).name, 'Emote')
 })
 
+test('background posture does not replace the requested expression or action', () => {
+  for (const motionPrompt of ['An annoyed expression while standing still', '做出不耐煩的表情，同時站起后保持不動']) {
+    assert.equal(toProviderAction({ motionPrompt }).name, 'Emote')
+  }
+  assert.equal(toProviderAction({ motionPrompt: 'Wave while standing still' }).name, 'Waving')
+  assert.equal(toProviderAction({ motionPrompt: 'While standing still, wave' }).name, 'Waving')
+})
+
 test('eye rolls and whole-body rolls remain distinct in English and Chinese', () => {
   for (const motionPrompt of ['Roll its eyes', 'An eye roll', '翻白眼']) {
     const action = toProviderAction({ motionPrompt })
