@@ -12,6 +12,13 @@ const CATEGORY_ORDER = Object.freeze([
   'exclusion'
 ])
 
+const TRANSPARENT_OUTPUT_DIRECTIVES = [
+  /(?<!\b(?:no |non[- ]|not ))\btransparent\s+(?:background|backdrop|bg|png|alpha|output)\b/i,
+  /\b(?:background|backdrop|bg|output)(?:\s*:\s*|\s+(?:(?:must|should)\s+be|is|becomes?)\s+)(?:(?:fully|completely)\s+)?transparent\b/i,
+  /\bno\s+background(?:\s+(?:at all|whatsoever))?(?=\s*(?:$|[.,;:!?，。；！？])|\s+(?:and|or|with)\b)/i,
+  /透明背景|背景透明|透明底|去背景|无背景/
+]
+
 const categoryRank = (category) => {
   const index = CATEGORY_ORDER.indexOf(category)
   return index === -1 ? CATEGORY_ORDER.length : index
@@ -287,7 +294,9 @@ const validateClauses = ({ task, clauses, capabilities }) => {
     }
   }
   if (!capabilities.supportsDirectTransparency && clauses.some((clause) => (
-    clause.category === 'background' && /\btransparent\b/i.test(clause.text)
+    clause.category === 'background'
+      ? /\btransparent\b/i.test(clause.text)
+      : clause.category === 'change' && TRANSPARENT_OUTPUT_DIRECTIVES.some((pattern) => pattern.test(clause.text))
   ))) {
     throw createTaskError('image_prompt_capability_conflict', 'Selected image model prompt cannot request transparency')
   }

@@ -347,6 +347,43 @@ test('background clause validation rejects direct transparency on opaque-output 
   )
 })
 
+test('opaque-output image models reject explicit transparent-output requests in character briefs', () => {
+  for (const brief of [
+    'cat on a transparent background',
+    'cat on a transparent backdrop',
+    'cat on a transparent bg',
+    'cat as a transparent PNG',
+    'cat with transparent alpha',
+    'the background must be fully transparent',
+    'cat with no background',
+    '透明背景上的猫',
+    '猫，背景透明',
+    '猫，透明底',
+    '猫，去背景',
+    '猫，无背景'
+  ]) {
+    assert.throws(
+      () => buildCharacterAnchorPrompt({ model: 'gpt-image-2', appearanceIntent: [brief] }),
+      { code: 'image_prompt_capability_conflict' },
+      brief
+    )
+  }
+})
+
+test('character briefs can describe background texture and use transparency on capable models', () => {
+  const opaque = buildCharacterAnchorPrompt({
+    model: 'gpt-image-2',
+    appearanceIntent: ['cat with no background texture']
+  })
+  assert.match(opaque.prompt, /cat with no background texture/)
+
+  const direct = buildCharacterAnchorPrompt({
+    model: 'gpt-image-1.5',
+    appearanceIntent: ['cat on a transparent background']
+  })
+  assert.match(direct.prompt, /cat on a transparent background/)
+})
+
 test('gpt image 2 frame sheets define every cell without ranges or anatomy assumptions', () => {
   const result = buildActionSpriteRowPrompt({
     model: 'gpt-image-2',
