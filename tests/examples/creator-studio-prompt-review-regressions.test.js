@@ -103,6 +103,13 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
     assert.equal(toProviderAction({ motionPrompt }).viewDirection, undefined)
   }
   assert.equal(toProviderAction({ motionPrompt: 'Run in place while facing viewer-left with the right paw raised' }).viewDirection, 'strict viewer-left side profile')
+  for (const motionPrompt of [
+    '向左跑，同时朝右边挥手',
+    '跑步，同时面向屏幕左侧并朝右边挥手',
+    '跑向屏幕左侧并朝右边挥手'
+  ]) {
+    assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-left side profile', motionPrompt)
+  }
 })
 
 test('eye rolls and whole-body rolls remain distinct in English and Chinese', () => {
