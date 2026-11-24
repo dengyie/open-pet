@@ -18,6 +18,19 @@ test('control center preload retains two Creator methods and retires hatch confi
   assert.equal((source.match(/HATCH_PET_AGENT_[A-Z_]+:/g) || []).length, 2)
 })
 
+test('Control Center wraps the Hatch Pet Agent settings PATCH in config', async () => {
+  const { createAiHttpApi } = await import('../../apps/control-center/src/features/ai/api.ts')
+  const calls = []
+  const api = createAiHttpApi({ request: async (input) => { calls.push(input); return {} } })
+  const config = { enabled: true, budgets: { maxEvaluatorCalls: 99 } }
+
+  await api.saveHatchPetAgentConfig(config)
+
+  assert.deepEqual(calls.map(({ method, path, body }) => ({ method, path, body })), [
+    { method: 'PATCH', path: '/ai/hatch/config', body: { config } }
+  ])
+})
+
 test('AiPane presents quality-first Hatch-pet readiness, budgets, identity checkpoint, and secret reference without secret values', () => {
   const source = read('apps/control-center/src/panes/AiPane.tsx')
   assert.match(source, /质量优先角色生成会在创建 run 前检查此模型的结构化工具能力/)
