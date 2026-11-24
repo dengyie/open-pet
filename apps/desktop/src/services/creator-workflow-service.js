@@ -4044,6 +4044,7 @@ module.exports = {
   EDITABLE_TARGET_ID,
   EDITABLE_TARGET_NAME,
   EDITABLE_TARGET_TYPE,
+  IMAGE_PREVIEW_INLINE_MAX_BYTES,
   createFullPetTask,
   readCreatorWorkflowDiagnostics: readWorkflowDiagnostics,
   createCreatorWorkflowService

@@ -5,6 +5,7 @@ const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
 const { test } = require("node:test")
+const sharp = require("sharp")
 const { createMessageHandler } = require("../../apps/desktop/src/sidecar/message-handler")
 
 async function fixture() {
@@ -115,6 +116,48 @@ test("Creator state resolves through the Shell bridge and preserves structured e
 	assert.equal(await handler.handle(sent), true)
 	assert.deepEqual(warnings, [])
 	await rejected
+})
+
+test("Creator asset preview round-trips without bypassing metadata redaction", async (t) => {
+	const [
+		{ openDatabase }, { migrate }, { createCreatorDomain }, { createShellClient },
+	] = await Promise.all([
+		import("../../services/backend/store/db.js"),
+		import("../../services/backend/store/migrate.js"),
+		import("../../services/backend/domains/creator/index.js"),
+		import("../../services/backend/bridge/shell-client.js"),
+	])
+	const db = await openDatabase({ file: ":memory:" })
+	t.after(() => db.close())
+	migrate({ db })
+	const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: "orange" } }).png({ compressionLevel: 0 }).toBuffer()
+	const dataUrl = `data:image/png;base64,${png.toString("base64")}`
+	assert.ok(dataUrl.length > 12_000)
+	const request = { runId: "run-1", relativePath: "runs/run-1/sprites.png" }
+	const response = { ok: true, previewDataUrl: dataUrl, message: "x".repeat(12_000), sourcePath: "/private/sprites.png", apiKey: "test-secret" }
+	const shell = createShellClient({ send: (envelope) => { void handler.handle(envelope) } })
+	t.after(() => shell.dispose())
+	const handler = createMessageHandler({
+		send: shell.receive,
+		onCreatorRequest: (body) => {
+			assert.deepEqual(body, { operation: "asset-preview", payload: request })
+			return response
+		},
+	})
+	const creator = createCreatorDomain({ db, shell })
+	const result = await creator.getAssetPreview(request)
+	assert.equal(result.previewDataUrl.length, dataUrl.length)
+	assert.equal(result.previewDataUrl, dataUrl)
+	assert.equal(result.message, "x".repeat(8_000))
+	assert.equal(result.sourcePath, "[path-redacted]")
+	assert.equal(result.apiKey, "[redacted]")
+
+	response.previewDataUrl = `data:image/png;base64,${Buffer.alloc(1_500_001).toString("base64")}`
+	await assert.rejects(creator.getAssetPreview(request), { code: "CONFLICT" })
+	for (const previewDataUrl of ["data:image/svg+xml;base64,PHN2Zz4=", "data:image/png;base64,not!base64"]) {
+		response.previewDataUrl = previewDataUrl
+		await assert.rejects(creator.getAssetPreview(request), { code: "INTERNAL" })
+	}
 })
 
 test("Backend Creator reads terminal state from the validated plugin run file", async (t) => {

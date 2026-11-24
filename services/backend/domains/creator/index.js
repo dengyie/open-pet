@@ -6,7 +6,7 @@ import path from "node:path"
 import { ApiError } from "../../http/middleware.js"
 
 const require = createRequire(import.meta.url)
-const { createFullPetTask, readCreatorWorkflowDiagnostics } = require("../../../../apps/desktop/src/services/creator-workflow-service.js")
+const { createFullPetTask, IMAGE_PREVIEW_INLINE_MAX_BYTES, readCreatorWorkflowDiagnostics } = require("../../../../apps/desktop/src/services/creator-workflow-service.js")
 
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$/
 const SAFE_PATH = /^[^\\/][^\0]*$/
@@ -82,6 +82,21 @@ function redact(value, key = "", options = {}) {
 	if (Array.isArray(value)) return value.map((entry) => redact(entry, "", options))
 	if (!value || typeof value !== "object") return value
 	return Object.fromEntries(Object.entries(value).map(([entryKey, entry]) => [entryKey, redact(entry, entryKey, options)]))
+}
+
+function validateShellPreviewDataUrl(dataUrl) {
+	const prefix = typeof dataUrl === "string" && /^data:image\/(?:png|jpeg|webp|gif);base64,/.exec(dataUrl)
+	if (!prefix) throw new ApiError("INTERNAL", "Shell Creator asset preview is not a supported image data URL")
+	if (dataUrl.length - prefix[0].length > Math.ceil(IMAGE_PREVIEW_INLINE_MAX_BYTES / 3) * 4) {
+		throw new ApiError("CONFLICT", "Creator asset is too large to preview")
+	}
+	const encoded = dataUrl.slice(prefix[0].length)
+	const bytes = Buffer.from(encoded, "base64")
+	if (!bytes.length || bytes.toString("base64") !== encoded) {
+		throw new ApiError("INTERNAL", "Shell Creator asset preview is not valid base64")
+	}
+	if (bytes.length > IMAGE_PREVIEW_INLINE_MAX_BYTES) throw new ApiError("CONFLICT", "Creator asset is too large to preview")
+	return dataUrl
 }
 
 function parseJson(value, fallback = {}) {
@@ -193,6 +208,10 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 			throw new ApiError("INTERNAL", "Shell Creator response is invalid")
 		}
 		if (!body.ok) throw new ApiError(body.error?.code || "INTERNAL", body.error?.message || "Creator operation failed")
+		if (operation === "asset-preview" && body.result?.ok === true) {
+			const { previewDataUrl, ...metadata } = body.result
+			return { ...redact(metadata, "", { allowReferenceTokens: true }), previewDataUrl: validateShellPreviewDataUrl(previewDataUrl) }
+		}
 		return redact(body.result, "", { allowReferenceTokens: true })
 	}
 
