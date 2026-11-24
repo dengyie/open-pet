@@ -877,7 +877,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       appendLog({ pluginId: plugin.manifest.id, commandId, level: 'info', message: 'Bridge creator.assets import-frames invoked' })
       const preflight = await actionImportService.inspectActionFrames({ sourceDir, actionId })
       assertCreatorAssetImportWithinLimits(preflight.inspection, sourceDir)
-      const result = await actionImportService.importActionFrames({ sourceDir, actionId, label })
+      if (payload.loop !== undefined && typeof payload.loop !== 'boolean') throw new Error('Invalid action loop')
+      const result = await actionImportService.importActionFrames({ sourceDir, actionId, label, loop: payload.loop })
       actionService?.reload?.()
       const { importedAction, ...actions } = result
       if (importedAction?.id) bridgeState.importedActionIds.add(String(importedAction.id))

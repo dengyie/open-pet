@@ -33,7 +33,9 @@ const isIdleTask = (task) => (
   )
 )
 
-const isDirectionalGaitTask = (task) => task.taskType !== 'character-image' && task.action?.animationType === 'locomotion_loop'
+const changesReferenceFacing = (task) => task.taskType !== 'character-image' && (
+  task.action?.facing ? task.action.facing !== 'reference' : task.action?.animationType === 'locomotion_loop'
+)
 
 const createRegionSubject = (value, fallback) => (
   `The ${String(value || fallback).trim().replace(/^the\s+/i, '')}`
@@ -71,7 +73,7 @@ const createDeliverableClause = (task) => {
 
 const createReferenceClause = (task) => {
   const reference = task.referenceInterpretation
-  if (isDirectionalGaitTask(task) && reference.type !== 'identity-and-motion') {
+  if (changesReferenceFacing(task) && reference.type !== 'identity-and-motion') {
     return createClause({
       id: `reference.${reference.type}`,
       category: 'reference',
@@ -174,15 +176,15 @@ const createChangeClause = ({ task, visualPlan }) => {
 const createPreserveClause = (task) => {
   const locks = Array.isArray(task.styleLocks) ? task.styleLocks.filter(Boolean) : []
   const actionLocks = Array.isArray(task.action?.lockedParts) ? task.action.lockedParts.filter(Boolean) : []
-  const directionalGait = isDirectionalGaitTask(task)
+  const changesFacing = changesReferenceFacing(task)
   const combined = [...new Set([...locks, ...actionLocks])].map((lock) => (
-    directionalGait && lock === 'same body proportions and silhouette' ? 'same anatomical body proportions' : lock
+    changesFacing && lock === 'same body proportions and silhouette' ? 'same anatomical body proportions' : lock
   ))
   return createClause({
     id: 'preserve.identity-locks',
     category: 'preserve',
     priority: 90,
-    text: `Keep unchanged: ${combined.join(', ')}. ${directionalGait
+    text: `Keep unchanged: ${combined.join(', ')}. ${changesFacing
       ? 'Preserve the complete anatomy and accessories while allowing their visible projection to change with the requested side view. Far-side features may be naturally hidden by the body.'
       : 'Keep every identity-bearing feature and every body part or accessory visible in the reference present, recognizable, and consistent.'} Do not invent, remove, duplicate, or redesign visible anatomy or accessories.`
   })

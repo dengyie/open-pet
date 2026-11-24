@@ -205,6 +205,23 @@ test('four-frame wave plans close the loop by returning to the start pose', () =
   assert.doesNotMatch(result.prompt, /Cell 4 .*tilts slightly outward/is)
 })
 
+test('directional one-shot gait requests a clear stop, not a seamless loop', () => {
+  const action = {
+    actionId: 'quick-jog', motionPrompt: 'Jog in place.', animationType: 'locomotion_loop', frameCount: 6,
+    actionContract: { loop: false, facing: 'viewer-left', camera: 'locked' }
+  }
+  const { prompt } = buildActionSpriteRowPrompt({ action })
+  assert.match(prompt, /face toward the left edge of the image as seen by the viewer/i)
+  assert.match(prompt, /camera motion, pan, zoom, or rotation/i)
+  assert.match(prompt, /cell 6.*supported stopping pose/i)
+  assert.match(prompt, /play once with a clear ending pose/i)
+  assert.doesNotMatch(prompt, /seamless|loop-closing/i)
+
+  const looping = { ...action, actionContract: { ...action.actionContract, loop: true, facing: 'viewer-right' } }
+  assert.match(buildActionKeyframePrompt({ action: looping, keyframeRole: 'start' }).prompt, /face toward the right edge of the image as seen by the viewer/i)
+  assert.match(buildActionSpriteRowPrompt({ action: looping }).prompt, /seamless in-place locomotion cycle/i)
+})
+
 test('official running metadata produces a complete stationary work-state cycle', () => {
   const result = buildActionSpriteRowPrompt({ action: { actionId: 'running', name: 'Running', motionPrompt: 'Active processing and scanning motion.', frameCount: 8 } })
   assert.match(result.prompt, /seamless stationary loop with a stable body root/i)

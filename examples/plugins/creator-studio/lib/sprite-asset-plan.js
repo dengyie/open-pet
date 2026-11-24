@@ -1,7 +1,7 @@
 const crypto = require('node:crypto')
 
 const { OFFICIAL_FULL_PET_ROWS } = require('./full-pet-row-contract')
-const { expandMotionPreset, getDefaultMotionPresetId } = require('./action-semantics')
+const { ACTION_CLASS_BY_ID, expandMotionPreset, getDefaultMotionPresetId, getOfficialActionClass } = require('./action-semantics')
 const { getSpriteLayout } = require('./action-sheet-layout')
 
 const CHARACTER_CLASSES = new Set([
@@ -9,17 +9,6 @@ const CHARACTER_CLASSES = new Set([
   'grounded-elongated-character',
   'floating-character'
 ])
-
-const ACTION_CLASS_BY_ID = Object.freeze({
-  idle: 'grounded-subtle-loop',
-  'running-right': 'grounded-locomotion',
-  waving: 'grounded-gesture',
-  jumping: 'airborne-arc',
-  failed: 'grounded-state-loop',
-  waiting: 'grounded-subtle-loop',
-  running: 'grounded-work-loop',
-  review: 'grounded-state-loop'
-})
 
 const deepFreeze = (value) => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
@@ -97,7 +86,7 @@ const normalizeAction = ({ input, character }) => {
     frameCount: row.frameCount
   })
   const layout = getSpriteLayout(row.frameCount)
-  const actionClass = ACTION_CLASS_BY_ID[actionId]
+  const actionClass = getOfficialActionClass(actionId)
   const planAction = {
     actionId,
     frameCount: row.frameCount,

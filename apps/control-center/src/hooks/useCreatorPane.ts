@@ -6,6 +6,7 @@ import { ensureCreatorStudioServiceReady } from '../lib/creator-studio-dashboard
 import { messageFromError } from '../lib/errors'
 import type {
   CreatorExportRecoveryBundleResult,
+  CreatorSingleActionContract,
   CreatorStateViewState,
   CreatorWorkflowResult
 } from '@openpet/shared/src/openpet-contracts.ts'
@@ -25,6 +26,7 @@ interface NewCharacterDraft extends SelectedReferenceDraft {
 interface ExistingActionDraft extends SelectedReferenceDraft {
   actionName: string
   motionPrompt: string
+  actionContract: CreatorSingleActionContract
 }
 
 const createEmptyNewCharacterDraft = (): NewCharacterDraft => ({
@@ -37,6 +39,7 @@ const createEmptyNewCharacterDraft = (): NewCharacterDraft => ({
 const createEmptyExistingActionDraft = (): ExistingActionDraft => ({
   actionName: '',
   motionPrompt: '',
+  actionContract: { loop: false, facing: 'reference', camera: 'locked' },
   referenceImageToken: '',
   referenceFileName: ''
 })
@@ -260,6 +263,7 @@ export function useCreatorPane(active: boolean) {
       const nextResult = await creatorApi.generateExistingAction({
         actionName: existingActionDraft.actionName,
         motionPrompt: existingActionDraft.motionPrompt,
+        actionContract: existingActionDraft.actionContract,
         referenceImageToken: existingActionDraft.referenceImageToken || undefined
       })
       await submitCreatorJob(nextResult, 'workflow')

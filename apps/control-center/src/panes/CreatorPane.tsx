@@ -3,6 +3,7 @@ import type {
   CreatorActionAssetViewState,
   CreatorActionAttemptViewState,
   CreatorCanonicalCandidateViewState,
+  CreatorSingleActionContract,
   CreatorStateViewState,
   CreatorWorkflowProgressViewState,
   CreatorWorkflowResult,
@@ -21,6 +22,7 @@ interface NewCharacterDraft {
 interface ExistingActionDraft {
   actionName: string
   motionPrompt: string
+  actionContract: CreatorSingleActionContract
   referenceImageToken: string
   referenceFileName: string
 }
@@ -1320,6 +1322,38 @@ export function CreatorPane({
                 onChange={(event) => onChangeExistingActionDraft({ motionPrompt: event.target.value })}
               />
               <p className="field-note">成功导入后，Host 会自动把这个动作绑定到 clickAction。</p>
+            </div>
+          </div>
+          <div className="field-row">
+            <label className="field-label" htmlFor="creator-action-playback">播放方式</label>
+            <select
+              id="creator-action-playback"
+              className="text-input"
+              value={existingActionDraft.actionContract.loop ? 'loop' : 'once'}
+              onChange={(event) => onChangeExistingActionDraft({
+                actionContract: { ...existingActionDraft.actionContract, loop: event.target.value === 'loop' }
+              })}
+            >
+              <option value="once">播放一次</option>
+              <option value="loop">无缝循环</option>
+            </select>
+          </div>
+          <div className="field-row">
+            <label className="field-label" htmlFor="creator-action-facing">角色朝向</label>
+            <div>
+              <select
+                id="creator-action-facing"
+                className="text-input"
+                value={existingActionDraft.actionContract.facing}
+                onChange={(event) => onChangeExistingActionDraft({
+                  actionContract: { ...existingActionDraft.actionContract, facing: event.target.value as CreatorSingleActionContract['facing'] }
+                })}
+              >
+                <option value="reference">保持参考图朝向</option>
+                <option value="viewer-left">面向画面左侧</option>
+                <option value="viewer-right">面向画面右侧</option>
+              </select>
+              <p className="field-note">左右以观看者为准。镜头固定，不平移、缩放或旋转。</p>
             </div>
           </div>
           <div className="creator-action-bar">

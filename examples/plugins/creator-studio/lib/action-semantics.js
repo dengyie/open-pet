@@ -1,4 +1,5 @@
 const crypto = require('node:crypto')
+const { resolveActionLoop } = require('./single-action-contract')
 
 const normalizeText = (value) => String(value || '').trim()
 
@@ -167,8 +168,24 @@ const getActionIdentityText = (action = {}) => [
 
 const getActionId = (action = {}) => normalizeText(action?.actionId).toLowerCase()
 
+const ACTION_CLASS_BY_ID = Object.freeze({
+  idle: 'grounded-subtle-loop',
+  'running-right': 'grounded-locomotion',
+  'running-left': 'grounded-locomotion',
+  waving: 'grounded-gesture',
+  jumping: 'airborne-arc',
+  failed: 'grounded-state-loop',
+  waiting: 'grounded-subtle-loop',
+  running: 'grounded-work-loop',
+  review: 'grounded-state-loop'
+})
+
+const getOfficialActionClass = (actionId) => Object.hasOwn(ACTION_CLASS_BY_ID, actionId)
+  ? ACTION_CLASS_BY_ID[actionId]
+  : undefined
+
 const isWorkStateAction = (value = '') => (
-  typeof value === 'object' && getActionId(value) === 'running'
+  typeof value === 'object' && getOfficialActionClass(getActionId(value)) === 'grounded-work-loop'
 )
 
 const isIdleAction = (value = '') => /(^|\s)(idle|idling|resting-idle)(\s|$)|待机|空闲/i.test(
@@ -181,8 +198,8 @@ const isWavingAction = (value = '') => /wave|waving|挥手|招手|挥爪|paw\s*w
 
 const isLocomotionAction = (value = '') => {
   if (typeof value === 'object') {
-    if (isWorkStateAction(value)) return false
-    if (['running-right', 'running-left'].includes(getActionId(value))) return true
+    const actionClass = getOfficialActionClass(getActionId(value))
+    if (actionClass) return actionClass === 'grounded-locomotion'
   }
   return /walk|run|running|crawl|fly|flying|走|跑|奔跑|爬行|飞/i.test(
     typeof value === 'object' ? getActionText(value) : normalizeText(value)
@@ -220,6 +237,7 @@ const inferAnimationTypeFromText = (value = '') => {
 
 const inferAnimationType = (action = {}) => {
   if (isWorkStateAction(action)) return 'stationary_loop'
+  if (getOfficialActionClass(getActionId(action)) === 'grounded-locomotion') return 'locomotion_loop'
   if (isIdleAction(action)) return 'stationary_loop'
   const explicit = normalizeText(action.animationType)
   if (explicit) return explicit
@@ -227,7 +245,7 @@ const inferAnimationType = (action = {}) => {
   if (identityType) return identityType
   const promptType = inferAnimationTypeFromText(action.motionPrompt)
   if (promptType) return promptType
-  if (action.loop) return 'stationary_loop'
+  if (resolveActionLoop(action)) return 'stationary_loop'
   return 'reaction'
 }
 
@@ -376,24 +394,38 @@ const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
         : isWavingAction(action)
           ? ACTION_PHASES.wave
           : ACTION_PHASES[animationType] || ACTION_PHASES.reaction
-  return expandPhases(phases, count).map((description, index) => `Frame ${index + 1}: ${description}.`)
+  const beats = expandPhases(phases, count)
+  if (count > 1 && resolveActionLoop(action) === false) {
+    if (animationType === 'locomotion_loop') {
+      beats[count - 1] = 'finish the in-place gait in a settled, supported stopping pose'
+    } else if (/seamless|loop.close/i.test(beats[count - 1])) {
+      beats[count - 1] = 'finish the action in a settled pose without restarting the motion'
+    }
+  } else if (count > 1 && action.actionContract?.loop && ['pose_transition', 'reaction', 'emote'].includes(animationType)) {
+    beats[count - 1] = 'recover toward the first pose in a smooth wraparound transition'
+  }
+  return beats.map((description, index) => `Frame ${index + 1}: ${description}.`)
 }
 
 const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}) => {
   const isStart = /start|first|neutral/i.test(normalizeText(keyframeRole))
   const animationType = inferAnimationType(action)
+  const requestedFacing = action.actionContract?.facing
+  const changesFacing = requestedFacing && requestedFacing !== 'reference'
   if (isWorkStateAction(action)) {
     return isStart
-      ? 'Pose: neutral focused work-state pose with the full body anchored and the canonical viewpoint preserved.'
+      ? `Pose: neutral focused work-state pose with the full body anchored and the ${changesFacing ? 'specified' : 'canonical'} viewpoint preserved.`
       : 'Pose: clearest processing, focus, or scanning moment using only a small identity-safe local motion while the body root, scale, and viewpoint remain fixed.'
   }
   if (isIdleAction(action)) {
     return isStart
-      ? 'Pose: match the canonical reference pose and viewpoint as closely as possible; do not force a new front-facing view or change limb placement merely to neutralize the pose.'
+      ? changesFacing
+        ? 'Pose: retain the quiet reference pose as seen from the specified viewpoint; do not change limb placement merely to neutralize the pose.'
+        : 'Pose: match the canonical reference pose and viewpoint as closely as possible; do not force a new front-facing view or change limb placement merely to neutralize the pose.'
       : 'Pose: preserve the canonical pose and silhouette with only one subtle identity-safe local change; no action extreme, large appendage movement, or body-root motion.'
   }
   if (isStart) {
-    if (animationType === 'locomotion_loop') return 'Pose: first contact pose of an in-place gait cycle, full body visible, in a strict side profile with both locomotion legs and feet clearly visible and separated: one foot planted under the body and the other extended forward or back.'
+    if (animationType === 'locomotion_loop') return `Pose: first contact pose of an in-place gait, full body visible, ${action.actionContract ? '' : 'in a strict side profile '}with both locomotion legs and feet clearly visible and separated: one foot planted under the body and the other extended forward or back.`
     if (animationType === 'vertical_bounce') return 'Pose: grounded anticipation pose at the original baseline, full body visible and ready to jump.'
     return 'Pose: full-body neutral pose with the body anchored and visible motion appendages at rest unless the source image clearly uses a different neutral stance.'
   }
@@ -404,6 +436,7 @@ const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}
 }
 
 module.exports = {
+  ACTION_CLASS_BY_ID,
   MOTION_PRESETS,
   buildActionFramePlan,
   expandMotionPreset,
@@ -411,6 +444,7 @@ module.exports = {
   getMotionPreset,
   getDefaultMotionPresetId,
   getDefaultLockedParts,
+  getOfficialActionClass,
   getKeyframePoseInstruction,
   inferAnimationType,
   isEmoteAction,

@@ -10,6 +10,7 @@ const {
   compileProviderImagePrompt
 } = require('./provider-image-prompt-compiler')
 const { createVisualPlan } = require('./visual-plan')
+const { describeActionFacing, resolveActionLoop } = require('./single-action-contract')
 const {
   buildActionFramePlan,
   getKeyframePoseInstruction,
@@ -25,7 +26,10 @@ const normalizeActionText = (value, fallback = '') => (
 
 const resolveLoopIntent = (action = {}) => {
   const animationType = inferAnimationType(action)
+  const loop = resolveActionLoop(action)
+  if (loop === false) return 'play once with a clear ending pose; no wraparound transition is required'
   if (animationType === 'locomotion_loop') return 'a seamless in-place locomotion cycle'
+  if (loop === true && animationType !== 'stationary_loop') return 'a seamless transition from the last pose back to the first'
   if (animationType === 'vertical_bounce') return 'a grounded jump that returns to the original baseline'
   if (animationType === 'stationary_loop') return 'a seamless stationary loop with a stable body root'
   if (animationType === 'pose_transition') return 'a readable transition from the starting pose to the ending pose'
@@ -33,9 +37,11 @@ const resolveLoopIntent = (action = {}) => {
 }
 
 const resolveViewDirection = (action = {}) => {
+  if (action.actionContract) return describeActionFacing(action.actionContract.facing)
   const explicit = normalizeActionText(action.viewDirection)
   if (explicit) return explicit
-  if (inferAnimationType(action) === 'locomotion_loop') return 'preserve the requested directional facing'
+  if (action.actionId === 'running-right') return describeActionFacing('viewer-right')
+  if (action.actionId === 'running-left') return describeActionFacing('viewer-left')
   return 'preserve the canonical viewpoint'
 }
 
@@ -50,7 +56,8 @@ const createVisualAction = ({ action = {}, keyframeRole = '', frameCount = 0 } =
     animationType: inferAnimationType(action),
     moment,
     viewDirection: resolveViewDirection(action),
-    loopType: normalizeActionText(action.loopType, resolveLoopIntent(action)),
+    ...(action.actionContract ? { facing: action.actionContract.facing } : {}),
+    loopType: resolveActionLoop(action) === undefined ? normalizeActionText(action.loopType) : '',
     movingParts: Array.isArray(action.animatedParts) && action.animatedParts.length
       ? action.animatedParts
       : [resolvePrimaryAnimatedPart(action)],
@@ -58,7 +65,10 @@ const createVisualAction = ({ action = {}, keyframeRole = '', frameCount = 0 } =
     lockedParts: Array.isArray(action.lockedParts) && action.lockedParts.length
       ? action.lockedParts
       : ['visible identity-bearing features', 'identity markings', 'body proportions', 'character scale'],
-    forbiddenMotion: Array.isArray(action.forbiddenMotion) ? action.forbiddenMotion : [],
+    forbiddenMotion: [
+      ...(Array.isArray(action.forbiddenMotion) ? action.forbiddenMotion : []),
+      ...(action.actionContract?.camera === 'locked' ? ['camera motion, pan, zoom, or rotation'] : [])
+    ],
     loopIntent: resolveLoopIntent(action),
     frameBeats: frameCount > 0 ? buildActionFramePlan({ action, frameCount }) : []
   }

@@ -230,6 +230,31 @@ test('action frame builder creates ordered transparent frames and QA evidence', 
   assert.equal(JSON.stringify(qa).includes(dataDir), false)
 })
 
+test('structured playback checks the loop seam only for loops and binds QA to the task contract', async () => {
+  const dataDir = makeDataDir()
+  const sourcePath = path.join(dataDir, 'sheet.png')
+  await createActionSheetPng({ filePath: sourcePath, frameCount: 8 })
+  for (const loop of [false, true]) {
+    const actionContract = { loop, facing: 'viewer-right', camera: 'locked' }
+    const output = await buildActionFramesFromGeneratedImage({
+      dataDir,
+      generationResult: { outputs: [{ dataRelativePath: 'sheet.png' }] },
+      action: { actionId: 'quiet-wave', motionPrompt: 'Wave in place.', frameCount: 8, loop: !loop, actionContract },
+      outputFramesDir: path.join(dataDir, `frames-${loop}`),
+      qaDir: path.join(dataDir, `qa-${loop}`)
+    })
+    const actionFrames = { ...output, qa: output.qaPath }
+    const qa = assertActionFrameQaPassed({ dataDir, actionFrames, actionContract })
+    assert.deepEqual(qa.actionContract, actionContract)
+    assert.equal(qa.playback.loop, loop)
+    assert.equal(qa.playback.holdLastFrameMs, loop ? 120 : 220)
+    assert.equal(Boolean(qa.quality.metrics.adjacentFrameDiff.loopSeam), loop)
+    assert.throws(() => assertActionFrameQaPassed({
+      dataDir, actionFrames, actionContract: { ...actionContract, facing: 'viewer-left' }
+    }), /action contract must match/)
+  }
+})
+
 test('action frame builder removes a plain opaque action-sheet background before accepting frames', async () => {
   const dataDir = makeDataDir()
   const sourceDir = path.join(dataDir, 'runs/demo/frames/base')

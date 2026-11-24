@@ -10,6 +10,7 @@ const {
   compileProviderImagePrompt
 } = require('./provider-image-prompt-compiler')
 const { createVisualPlan } = require('./visual-plan')
+const { describeActionFacing, resolveActionLoop } = require('./single-action-contract')
 const {
   buildActionFramePlan,
   inferAnimationType,
@@ -111,8 +112,11 @@ const getActionSpec = ({ action = {}, frameCount }) => {
   const motionText = `${action.name || ''} ${action.motionPrompt || ''}`
   const animationType = inferAnimationType(action)
   const waving = isWavingAction(motionText)
-  const viewDirection = sanitizeCreativeBrief(action.viewDirection || (animationType === 'locomotion_loop' ? 'preserve the requested directional facing' : 'preserve the canonical viewpoint'))
-  const loopType = sanitizeCreativeBrief(action.loopType || (action.loop ? 'looping animation' : 'one-shot animation'))
+  const viewDirection = action.actionContract
+    ? describeActionFacing(action.actionContract.facing)
+    : sanitizeCreativeBrief(action.viewDirection || 'preserve the canonical viewpoint')
+  const loop = Boolean(resolveActionLoop(action))
+  const loopType = loop ? 'looping animation' : 'one-shot animation'
   const customAnimatedParts = Array.isArray(action.animatedParts) && action.animatedParts.length > 0
     ? action.animatedParts
     : []
@@ -164,17 +168,21 @@ const getActionSpec = ({ action = {}, frameCount }) => {
   return {
     animationType,
     viewDirection,
+    loop,
     loopType,
     animatedParts,
     lockedParts,
     secondaryMotion,
-    forbiddenMotion
+    forbiddenMotion: [
+      ...forbiddenMotion,
+      ...(action.actionContract?.camera === 'locked' ? ['camera motion, pan, zoom, or rotation'] : [])
+    ]
   }
 }
 
 const createAnchorRule = (animationType) => {
   if (animationType === 'locomotion_loop') {
-    return 'Keep the character centered in each cell for an in-place looping animation. The legs, arms, wings, or locomotion parts may cycle, but the body scale, camera angle, identity, and silhouette must remain consistent. Do not draw a background path or ground.'
+    return 'Keep the character centered in each cell for in-place locomotion. The legs, arms, wings, or locomotion parts may cycle, but the body scale, camera angle, identity, and silhouette must remain consistent. Do not draw a background path or ground.'
   }
   if (animationType === 'vertical_bounce') {
     return 'The character may move vertically according to the frame plan, but must keep the same scale, same view, same proportions, and same identity. Keep the character centered horizontally in every cell. The landing frame must return to the original baseline.'
@@ -463,12 +471,13 @@ const buildOpenPetImagePrompt = ({
             animationType: actionSpec.animationType,
             moment: action?.motionPrompt || action?.name || 'the requested action',
             viewDirection: actionSpec.viewDirection,
+            ...(action.actionContract ? { facing: action.actionContract.facing } : {}),
             loopType: actionSpec.loopType,
             movingParts: actionSpec.animatedParts,
             secondaryMotion: actionSpec.secondaryMotion,
             lockedParts: actionSpec.lockedParts,
             forbiddenMotion: actionSpec.forbiddenMotion,
-            loopIntent: action?.loop
+            loopIntent: actionSpec.loop
               ? 'a seamless loop that returns to the starting pose'
               : 'a readable action with a clear ending pose',
             frameBeats: buildActionFramePlan({ action, frameCount: actionSheet.frameCount })

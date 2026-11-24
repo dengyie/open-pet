@@ -2,7 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { runCommand } = require('../lib/command-io')
 const { callBridge } = require('../lib/bridge-client')
-const { assertActionFrameQaPassed } = require('../lib/action-frame-qa')
+const { assertRunActionFrameQaPassed } = require('../lib/action-frame-qa')
 const { readRun, resolveRunId, updateRunStatus } = require('../lib/run-store')
 
 const toDataRelativePath = ({ dataDir, targetPath }) => {
@@ -59,12 +59,13 @@ runCommand(async (context) => {
   if (!actionFrames?.framesDir || !actionFrames?.actionId) {
     throw new Error('Approved run does not contain generated action frames')
   }
-  assertActionFrameQaPassed({ dataDir, actionFrames, operation: 'import' })
+  const qa = assertRunActionFrameQaPassed({ dataDir, run: current, operation: 'import' })
 
   const imported = await callBridge('/creator/assets/import-frames', {
     dataRelativePath: toDataRelativePath({ dataDir, targetPath: actionFrames.framesDir }),
     actionId: actionFrames.actionId,
-    label: actionFrames.name || actionFrames.actionId
+    label: actionFrames.name || actionFrames.actionId,
+    ...(typeof qa.loop === 'boolean' ? { loop: qa.loop } : {})
   })
   const triggerProposalSubmission = await submitTriggerProposal({ actionFrames, runId })
   const run = updateRunStatus({

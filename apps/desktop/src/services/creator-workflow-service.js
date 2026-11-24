@@ -4,7 +4,8 @@ const path = require('path')
 const { CODEX_ROWS } = require('../pet/pet-pack/codex-pet')
 const { sanitizeLogText } = require('./log-safety')
 const { writeJsonAtomic } = require('./json-file-utils')
-const { inferAnimationType } = require('../../../../examples/plugins/creator-studio/lib/action-semantics.js')
+const { inferAnimationType, isWorkStateAction } = require('../../../../examples/plugins/creator-studio/lib/action-semantics.js')
+const { normalizeSingleActionContract } = require('../../../../examples/plugins/creator-studio/lib/single-action-contract.js')
 const { getQualityFirstQualityProfile } = require('../../../../examples/plugins/creator-studio/lib/pet-generation-quality-profile.js')
 const {
   failGeneratingRunAfterCommandTermination
@@ -2145,7 +2146,7 @@ const createFullPetTask = ({ characterName, stylePrompt = '' }) => ({
     loop: Boolean(row.loop),
     frameCount: row.durations.length,
     transparentBackground: true,
-    ...(row.id === 'running'
+    ...(isWorkStateAction({ actionId: row.id })
       ? {
           animationType: 'stationary_loop',
           viewDirection: 'preserve the canonical viewpoint',
@@ -2163,12 +2164,12 @@ const createFullPetTask = ({ characterName, stylePrompt = '' }) => ({
   questions: []
 })
 
-const createExistingActionTask = ({ actionName, motionPrompt }) => {
+const createExistingActionTask = ({ actionName, motionPrompt, actionContract }) => {
   const action = {
     actionId: normalizeActionId(actionName, 'custom-action'),
     name: normalizeText(actionName),
     motionPrompt: normalizeText(motionPrompt) || normalizeText(actionName),
-    loop: false
+    actionContract
   }
   return {
   mode: 'single-action',
@@ -3029,7 +3030,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     })
   }
 
-  const generateExistingAction = async ({ actionName, motionPrompt, referenceImageToken = '' }) => {
+  const generateExistingAction = async ({ actionName, motionPrompt, actionContract, referenceImageToken = '' }) => {
     const normalizedActionName = normalizeText(actionName)
     const normalizedMotionPrompt = normalizeText(motionPrompt)
     const normalizedReferenceImageToken = normalizeText(referenceImageToken)
@@ -3045,6 +3046,16 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         state: 'missing-input',
         code: 'missing_motion_prompt',
         message: '请先输入动作描述'
+      })
+    }
+    let contract
+    try {
+      contract = normalizeSingleActionContract(actionContract)
+    } catch (error) {
+      return createWorkflowResult({
+        state: 'missing-input',
+        code: 'invalid_action_contract',
+        message: error.message
       })
     }
 
@@ -3098,7 +3109,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
 
       return runWorkflow({
         mode: 'single-action',
-        task: createExistingActionTask({ actionName: normalizedActionName, motionPrompt: normalizedMotionPrompt }),
+        task: createExistingActionTask({ actionName: normalizedActionName, motionPrompt: normalizedMotionPrompt, actionContract: contract }),
         payload: {
           petName: EDITABLE_TARGET_NAME,
           petId: EDITABLE_TARGET_ID,
