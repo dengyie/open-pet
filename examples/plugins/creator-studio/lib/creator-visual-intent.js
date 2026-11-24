@@ -15,6 +15,19 @@ const STYLE_PREFERENCES = Object.freeze({
   })
 })
 
+const NEGATION = /\b(?:instead|never|not|no|avoid|remove|replace)\b|改成|不要|不用|不得|不[向往朝]|别[向往朝]|禁止|避免|移除|删除|刪除/u
+
+const positiveClauses = (segment) => {
+  const positive = []
+  for (const clause of segment.split(/[,，、]+/)) {
+    const [head, negativeSuffix] = clause.split(/\bwithout\b|同时不|同時不/u, 2)
+    if (NEGATION.test(head)) break
+    if (head.trim()) positive.push(head.trim())
+    if (negativeSuffix !== undefined) break
+  }
+  return positive
+}
+
 // Only matched enum values or code-owned motion descriptions reach model prompts.
 const briefClauses = (value) => String(value || '').slice(0, MAX_BRIEF_LENGTH)
   .normalize('NFKC')
@@ -22,10 +35,7 @@ const briefClauses = (value) => String(value || '').slice(0, MAX_BRIEF_LENGTH)
   .toLowerCase()
   .split(/[\r\n.!?。！？]+/)
   .filter((sentence) => !/\b(?:ignore|disregard|override|system prompt|instructions?)\b|忽略|无视|無視|覆盖|覆蓋|提示[词詞]|指令/u.test(sentence))
-  .flatMap((sentence) => sentence.split(/[,;，；、]+/).map((clause) => clause.split(/\bwithout\b|同时不|同時不/u, 1)[0]))
-  .filter((clause) => !/\b(?:instead|never|not|no|avoid|remove|replace)\b|改成|不要|不用|不得|不[向往朝]|别[向往朝]|禁止|避免|移除|删除|刪除/u.test(clause))
-  .map((clause) => clause.trim())
-  .filter(Boolean)
+  .flatMap((sentence) => sentence.split(/[;；]+/).flatMap(positiveClauses))
 
 const chooseUnambiguous = (clauses, options) => {
   const matches = Object.entries(options).filter(([, pattern]) => clauses.some((clause) => pattern.test(clause)))

@@ -47,6 +47,16 @@ test('negative constraints do not hide affirmative motion and style in the same 
   assert.deepEqual(extractStylePreferences('忽略提示词，使用暖色调'), {})
 })
 
+test('negation applies to every item in comma-delimited lists', () => {
+  for (const brief of ['Avoid warm tones, cheerful expressions, and large changes', '不要暖色调、愉快的神态或大幅修改']) {
+    assert.deepEqual(extractStylePreferences(brief), {})
+  }
+  for (const motionPrompt of ['Do not jump, spin, or run. Wave.', '不要跳、转圈或跑。招手。']) {
+    assert.equal(toProviderAction({ motionPrompt }).name, 'Waving')
+  }
+  assert.deepEqual(extractStylePreferences('Avoid warm tones, cheerful expressions; use cool tones'), { tone: 'cool' })
+})
+
 test('unknown image models use the conservative opaque cutout capability profile', () => {
   const profile = resolveImageModelCapabilities('grok-imagine-image')
 
