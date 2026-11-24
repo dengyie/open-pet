@@ -420,7 +420,7 @@ test('canonical acceptance fails closed when final package artifacts are missing
   })
 })
 
-test('canonical acceptance durably publishes identity, profile, and completed actions before later failure', async () => {
+test('canonical acceptance durably publishes completed actions and finalizes a partial package after an optional throw', async () => {
   const snapshots = []
   const events = []
   const orchestrator = createQualityFirstFullPetOrchestrator({
@@ -437,27 +437,38 @@ test('canonical acceptance durably publishes identity, profile, and completed ac
       return { ok: true, actionId, selectedCandidateId: `${actionId}-candidate` }
     },
     createCharacterScaleProfile: async () => ({ hash: 'p'.repeat(64) }),
-    finalizePackage: async () => ({ artifacts: { outputDir: '/data/package' } }),
+    mirrorRunningLeft: async () => { throw Object.assign(new Error('Mirroring failed'), { code: 'mirror_failed' }) },
+    finalizePackage: async ({ actionResults }) => {
+      assert.equal(actionResults.idle.ok, true)
+      assert.equal(actionResults['running-right'].ok, true)
+      assert.equal(actionResults.waving.ok, false)
+      assert.equal(actionResults['running-left'].failureCode, 'mirror_failed')
+      return { artifacts: { outputDir: '/data/package' } }
+    },
     recordEvent: (event) => events.push(event)
   })
   const pending = await orchestrator.start({ run: { runId: 'run-1' }, plan: { hash: 'plan-hash' }, requireIdentityReviewBeforeActions: true })
 
-  await assert.rejects(() => orchestrator.acceptCanonicalIdentity({
+  const result = await orchestrator.acceptCanonicalIdentity({
     run: pending,
     candidateId: 'canonical-1',
     sha256: 'a'.repeat(64),
     plan: { hash: 'plan-hash' },
     actions: ['idle', 'running-right', 'waving'],
     persistRunState: async (value) => snapshots.push(structuredClone(value))
-  }), /waving provider failed/)
+  })
 
+  assert.equal(result.status, 'ready_for_review')
+  assert.equal(result.artifacts.outputDir, '/data/package')
+  assert.deepEqual(result.qualityFirst.omittedActionIds, ['running-left', 'waving'])
   assert.equal(snapshots[0].qualityFirst.acceptedCanonical.candidateId, 'canonical-1')
   assert.equal(snapshots.some((entry) => entry.qualityFirst.scaleProfileHash === 'p'.repeat(64)), true)
   const latest = snapshots.at(-1)
   assert.equal(latest.qualityFirst.phase, 'generating-actions')
   assert.equal(latest.qualityFirst.actionResults.idle.ok, true)
   assert.equal(latest.qualityFirst.actionResults['running-right'].ok, true)
-  assert.equal(latest.qualityFirst.nextAction, 'waving')
+  assert.equal(latest.qualityFirst.actionResults.waving.failureCode, 'action_generation_error')
+  assert.equal(latest.qualityFirst.nextAction, 'finalize-package')
   assert.deepEqual(events.at(-1), {
     scope: 'action',
     status: 'failed',

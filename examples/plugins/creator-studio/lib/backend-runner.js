@@ -461,27 +461,47 @@ const runQualityFirstIdentityStage = async ({
   sourceReference = null,
   actions = [],
   requireIdentityReviewBeforeActions = false,
+  prepareRuntime,
   now = () => new Date().toISOString()
 } = {}) => {
-  if (!orchestrator?.start) throw new Error('Quality-first identity stage requires an orchestrator')
+  if (!orchestrator?.start && typeof prepareRuntime !== 'function') throw new Error('Quality-first identity stage requires an orchestrator')
   const run = readRun({ dataDir, runId })
   assertTaskReadyForGeneration(run)
   if (run.generationTask?.mode !== 'full-pet') throw new Error('Quality-first identity stage requires a full-pet run')
   const startedAt = now()
   const lease = createGenerationLease({ commandId: 'quality-first-identity', startedAt, leaseId: `${runId}-quality-first-identity-${startedAt}` })
-  const generatingRun = {
+  let planning = typeof prepareRuntime === 'function'
+  let generatingRun = {
     ...run,
     status: 'generating',
-    currentStep: 'canonical-candidates',
+    currentStep: planning ? 'sprite-plan' : 'canonical-candidates',
     updatedAt: startedAt,
     generationLease: lease,
-    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: 'Generating canonical identity candidates', updatedAt: startedAt }),
+    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: planning ? 'Preparing the sprite generation plan' : 'Generating canonical identity candidates', updatedAt: startedAt }),
     error: ''
   }
   writeRun({ dataDir, run: generatingRun })
-  appendRunLog({ dataDir, runId, event: 'quality-first.identity.started', message: 'Canonical identity candidate generation started', now: () => startedAt })
   const stopLeaseHeartbeat = createGenerationLeaseHeartbeat({ dataDir, runId, leaseId: lease.leaseId, now })
   try {
+    if (planning) {
+      appendDiagnosticRunLog({ dataDir, runId, event: 'quality-first.planning.started', message: 'Sprite generation planning started', now })
+      const runtime = await prepareRuntime(generatingRun)
+      orchestrator = runtime.orchestrator
+      plan = runtime.plan
+      sourceReference = runtime.sourceReference
+      requireIdentityReviewBeforeActions = runtime.requireIdentityReviewBeforeActions
+      const plannedAt = now()
+      generatingRun = {
+        ...readRun({ dataDir, runId }),
+        currentStep: 'canonical-candidates',
+        updatedAt: plannedAt,
+        backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: 'Generating canonical identity candidates', updatedAt: plannedAt })
+      }
+      writeRun({ dataDir, run: generatingRun })
+      planning = false
+      appendDiagnosticRunLog({ dataDir, runId, event: 'quality-first.planning.completed', message: 'Sprite generation plan prepared', now })
+    }
+    appendRunLog({ dataDir, runId, event: 'quality-first.identity.started', message: 'Canonical identity candidate generation started', now })
     const requestedActions = Array.isArray(actions) && actions.length
       ? actions
       : (Array.isArray(plan?.actions) ? plan.actions.map((action) => action?.actionId).filter(Boolean) : [])
@@ -528,19 +548,20 @@ const runQualityFirstIdentityStage = async ({
   } catch (error) {
     const latestRun = readRun({ dataDir, runId })
     const identityWasSelected = Boolean(latestRun?.qualityFirst?.acceptedCanonical) || ['generating-idle', 'generating-actions', 'ready_for_review', 'recovery-required'].includes(String(latestRun?.qualityFirst?.phase || ''))
+    const failureCode = String(error?.code || (planning ? 'sprite_planning_failed' : identityWasSelected ? 'action_generation_error' : 'identity_generation_error')).replace(/[^A-Za-z0-9:_-]/g, '_').slice(0, 120)
     appendDiagnosticRunLog({
       dataDir,
       runId,
       level: 'error',
-      event: identityWasSelected ? 'quality-first.actions.failed' : 'quality-first.identity.failed',
-      message: identityWasSelected ? 'Quality-first action generation failed' : 'Canonical identity candidate generation failed',
-      data: { failureCode: String(error?.code || (identityWasSelected ? 'action_generation_error' : 'identity_generation_error')).replace(/[^A-Za-z0-9:_-]/g, '_').slice(0, 120) },
+      event: planning ? 'quality-first.planning.failed' : identityWasSelected ? 'quality-first.actions.failed' : 'quality-first.identity.failed',
+      message: planning ? 'Sprite generation planning failed' : identityWasSelected ? 'Quality-first action generation failed' : 'Canonical identity candidate generation failed',
+      data: { failureCode },
       now
     })
-    const canonicalPool = error?.code === 'canonical_identity_candidates_unusable' && Array.isArray(error?.canonicalPool?.candidates)
+    const canonicalPool = Array.isArray(error?.canonicalPool?.candidates)
       ? error.canonicalPool
       : null
-    updateRunStatus({
+    const failedRun = updateRunStatus({
       dataDir,
       runId,
       status: 'failed',
@@ -548,6 +569,7 @@ const runQualityFirstIdentityStage = async ({
         generationLease: undefined,
         error: error.message,
         backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'failed', message: error.message, updatedAt: now() }),
+        ...(planning ? { qualityFirst: { version: 1, phase: 'planning-failed', failureCode, nextAction: 'retry-generation' } } : {}),
         ...(canonicalPool
           ? {
               qualityFirst: {
@@ -560,7 +582,7 @@ const runQualityFirstIdentityStage = async ({
                 dispatchCount: Math.max(0, Math.min(4, Number(canonicalPool.dispatchCount) || canonicalPool.candidates.length)),
                 passingCandidateCount: Math.max(0, Number(canonicalPool.passingCandidateCount) || 0),
                 requireIdentityReviewBeforeActions: requireIdentityReviewBeforeActions === true,
-                failureCode: 'canonical_identity_candidates_unusable',
+                failureCode,
                 nextAction: 'retry-identity'
               }
             }
@@ -568,6 +590,7 @@ const runQualityFirstIdentityStage = async ({
       },
       now
     })
+    if (planning && error && typeof error === 'object') error.run = failedRun
     throw error
   } finally {
     stopLeaseHeartbeat()
@@ -1327,15 +1350,10 @@ const runGenerationStep = async ({ dataDir, runId, now = () => new Date().toISOS
     throw error
   }
   if (backend === PROVIDER_BACKEND && run.generationTask?.mode === 'full-pet' && run.generationTask?.pipeline === 'quality-first-v1') {
-    const runtime = await createQualityFirstHostRuntime({ dataDir, run })
     return runQualityFirstIdentityStage({
       dataDir,
       runId,
-      orchestrator: runtime.orchestrator,
-      plan: runtime.plan,
-      sourceReference: runtime.sourceReference,
-      actions: runtime.plan.actions.map((action) => action.actionId),
-      requireIdentityReviewBeforeActions: runtime.requireIdentityReviewBeforeActions,
+      prepareRuntime: (generatingRun) => createQualityFirstHostRuntime({ dataDir, run: generatingRun }),
       now
     })
   }

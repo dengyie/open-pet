@@ -384,7 +384,44 @@ test('action revisions use distinct candidate IDs for outputs and failed records
       processCandidate: async (candidate) => candidate,
       evaluateCandidate: async () => ({})
     })
+    assert.equal(result.failureCode, 'video_generation_failed')
+    assert.equal(result.candidates.length, 1)
     assert.ok(result.candidates.every((candidate) => candidate.candidateId.startsWith(candidateIdPrefix + '-')))
   }
   assert.equal(new Set(ids).size, ids.length)
+})
+
+test('runner stops after a repeated transient Provider failure instead of spending a quality repair', async () => {
+  let dispatches = 0
+  const result = await runQualityFirstAction({
+    context: { actionId: 'waving' }, reserveCreativeDispatch: () => {},
+    generateCandidate: async () => {
+      dispatches++
+      throw Object.assign(new Error('Provider transport failed'), { code: 'provider_transport_failed', retryable: true })
+    },
+    processCandidate: async () => assert.fail('no generated asset'),
+    evaluateCandidate: async () => assert.fail('no generated asset'),
+    archiveCandidateRevision: async () => assert.fail('not a quality failure')
+  })
+  assert.equal(result.failureCode, 'provider_transport_failed')
+  assert.equal(dispatches, 2)
+})
+
+test('an evaluator outage retains paid assets without requesting a new candidate', async () => {
+  const generated = []
+  const persisted = []
+  const result = await runQualityFirstAction({
+    context: { actionId: 'waving' }, reserveCreativeDispatch: () => {},
+    generateCandidate: async ({ candidateId, dispatchIndex }) => {
+      generated.push(candidateId)
+      return { descriptors: descriptors(dispatchIndex === 1 ? 'ffff' : '0f0f', dispatchIndex) }
+    },
+    processCandidate: async () => ({ qa: { ok: true, failures: [] } }),
+    evaluateCandidate: async () => { throw Object.assign(new Error('Evaluator unavailable'), { code: 'evaluator_unavailable' }) },
+    persistCandidate: (candidate) => persisted.push(candidate.candidateId),
+    archiveCandidateRevision: async () => assert.fail('not a quality failure')
+  })
+  assert.equal(result.failureCode, 'evaluator_unavailable')
+  assert.deepEqual(generated, ['candidate-1', 'candidate-2'])
+  assert.deepEqual(persisted, generated)
 })

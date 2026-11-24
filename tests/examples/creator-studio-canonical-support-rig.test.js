@@ -359,6 +359,49 @@ test('portable rig audit export retains enough evidence to validate without the 
   await assert.rejects(rigModule().exportCanonicalRigEvidence({ dataDir: f.dataDir, outputDir, provenance: wrong, frames: rig.processed.frames, actionId: 'jumping' }), /source hash/)
 })
 
+test('production host can repair image-sheet quality with an audited rig without video settings', async (t) => {
+  const f = await fixture()
+  const { createQualityFirstHostRuntime } = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
+  const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
+  const plan = createSpriteAssetPlan({ version: 1, revision: 1, character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId: 'review' }] })
+  const action = plan.actions.find(entry => entry.actionId === 'review')
+  const sprite = await sharp(path.join(f.dataDir, f.canonical.relativePath)).resize(100, 110).png().toBuffer()
+  const cells = Array.from({ length: action.frameCount }, (_, index) => ({
+    input: sprite,
+    left: Math.floor(((index % action.layout.columns) + 0.5) * 1024 / action.layout.columns - 50),
+    top: Math.floor((Math.floor(index / action.layout.columns) + 0.5) * 1024 / action.layout.rows - 55)
+  }))
+  const rawPath = path.join(f.dataDir, 'review-sheet.png')
+  await sharp({ create: { width: 1024, height: 1024, channels: 4, background: '#00000000' } }).composite(cells).png().toFile(rawPath)
+  const oldUrl = process.env.OPENPET_BRIDGE_URL
+  const oldToken = process.env.OPENPET_BRIDGE_TOKEN
+  process.env.OPENPET_BRIDGE_URL = 'http://127.0.0.1:1'
+  process.env.OPENPET_BRIDGE_TOKEN = 'test-only'
+  t.after(() => {
+    if (oldUrl == null) delete process.env.OPENPET_BRIDGE_URL
+    else process.env.OPENPET_BRIDGE_URL = oldUrl
+    if (oldToken == null) delete process.env.OPENPET_BRIDGE_TOKEN
+    else process.env.OPENPET_BRIDGE_TOKEN = oldToken
+  })
+  const calls = []
+  t.mock.method(global, 'fetch', async (url, request) => {
+    const route = new URL(url).pathname
+    calls.push(route)
+    if (route === '/creator/model-settings') return Response.json({ config: { model: 'gpt-image-2' } })
+    if (route === '/creator/model-image-generate') return Response.json({ result: { outputs: [{ dataRelativePath: 'review-sheet.png' }] } })
+    assert.equal(route, '/creator/hatch-pet/evaluate')
+    const passed = JSON.parse(request.body).board.relativePath.includes('/rig/')
+    return Response.json({ result: { gate: { ok: passed, outcome: passed ? 'pass' : 'repair', failures: passed ? [] : ['visual-defect-style-drift'] } } })
+  })
+  const run = { runId: 'image-sheet-rig', input: { referenceImage: { relativePath: f.canonical.relativePath } } }
+  const runtime = await createQualityFirstHostRuntime({ dataDir: f.dataDir, run, planOverride: plan })
+  const result = await runtime.runAction({ actionId: 'review', canonical: f.canonical, profile: f.profile })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.selectedCandidate.provenance.kind, 'canonical-rig')
+  assert.equal(calls.filter(route => route === '/creator/model-image-generate').length, 3)
+  assert.equal(calls.includes('/creator/model-video-generate'), false)
+})
+
 for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`production host repairs ${actionId} video drift with an audited rig, packages it and resumes without dispatch`, { skip: spawnSync('ffmpeg', ['-version']).status !== 0 || spawnSync('ffprobe', ['-version']).status !== 0 }, async () => {
   const f = actionId === 'running' ? await workingFixture() : await fixture()
   f.action = actionId === 'review' ? { actionId, anchorPolicy: 'action-relative-root-v1', frameCount: 6, layout: { columns: 3, rows: 2 } } : f.action

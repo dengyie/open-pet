@@ -3,6 +3,7 @@ const {
   createCandidateSelection,
   normalizeStoredCandidateDecision
 } = require('./candidate-decision')
+const { executionFailureCode } = require('./quality-first-action-runner')
 
 const ACTION_ORDER = Object.freeze(['idle', 'running-right', 'waving', 'jumping', 'failed', 'waiting', 'running', 'review'])
 const normalizeId = (value) => String(value || '').trim()
@@ -56,8 +57,9 @@ const assertCanonicalPool = (pool) => {
   const technicalCandidates = publicCandidates.filter((candidate) => candidate.technicalEligible === true && candidate.sha256)
   const passingCandidates = technicalCandidates.filter((candidate) => candidate.recommended === true)
   if (technicalCandidates.length === 0 || Number(pool?.dispatchCount || 0) > 4) {
-    const error = new Error('canonical_identity_candidates_unusable')
-    error.code = 'canonical_identity_candidates_unusable'
+    const failureCode = pool?.generationFailureCode || 'canonical_identity_candidates_unusable'
+    const error = new Error(failureCode)
+    error.code = failureCode
     error.canonicalPool = {
       dispatchCount: Math.max(0, Math.min(4, Number(pool?.dispatchCount) || candidates.length)),
       passingCandidateCount: 0,
@@ -155,14 +157,14 @@ const createQualityFirstFullPetOrchestrator = ({
     persistRunState = async () => {}
   } = {}) => {
     recordEvent({ scope: 'identity', status: 'started', runId: normalizeId(run?.runId) })
-    let pool
+    let selection
     try {
-      pool = await generateCanonicalCandidatePool({ run, plan, sourceReference })
+      const pool = await generateCanonicalCandidatePool({ run, plan, sourceReference })
+      selection = assertCanonicalPool(pool)
     } catch (error) {
       recordEvent({ scope: 'identity', status: 'failed', runId: normalizeId(run?.runId), failureCode: String(error?.code || 'identity_generation_error'), message: String(error?.message || error).slice(0, 240) })
       throw error
     }
-    const selection = assertCanonicalPool(pool)
     const candidates = selection.candidates
     recordEvent({ scope: 'identity', status: 'completed', runId: normalizeId(run?.runId), candidateCount: candidates.length })
     const startedAt = now()
@@ -229,6 +231,11 @@ const createQualityFirstFullPetOrchestrator = ({
       }
     }
     await persistRunState(acceptedRun)
+    const actionFailed = ({ actionId, error }) => {
+      const failureCode = executionFailureCode(error, 'action_generation_error')
+      recordEvent({ scope: 'action', status: 'failed', runId: normalizeId(run?.runId), actionId, failureCode, message: String(error?.message || error).slice(0, 240) })
+      return { ok: false, actionId, disposition: actionId === 'idle' ? 'blocked' : 'omitted', failureCode, candidates: [] }
+    }
     const runActionWithEvents = async ({ actionId, profile = null }) => {
       recordEvent({ scope: 'action', status: 'started', runId: normalizeId(run?.runId), actionId })
       try {
@@ -247,8 +254,7 @@ const createQualityFirstFullPetOrchestrator = ({
         })
         return result
       } catch (error) {
-        recordEvent({ scope: 'action', status: 'failed', runId: normalizeId(run?.runId), actionId, failureCode: String(error?.code || 'action_generation_error'), message: String(error?.message || error).slice(0, 240) })
-        throw error
+        return actionFailed({ actionId, error })
       }
     }
     const idle = await runActionWithEvents({ actionId: 'idle' })
@@ -303,7 +309,12 @@ const createQualityFirstFullPetOrchestrator = ({
       await persistActionResult({ actionId, result, canonical: selectedCandidate, profile })
       actionResults[actionId] = publicActionResult(result)
       if (actionId === 'running-right' && result?.ok && typeof mirrorRunningLeft === 'function') {
-        const mirrored = await mirrorRunningLeft({ source: result, profile, canonical: selectedCandidate })
+        let mirrored
+        try {
+          mirrored = await mirrorRunningLeft({ source: result, profile, canonical: selectedCandidate })
+        } catch (error) {
+          mirrored = actionFailed({ actionId: 'running-left', error })
+        }
         await persistActionResult({ actionId: 'running-left', result: mirrored, canonical: selectedCandidate, profile })
         actionResults['running-left'] = publicActionResult(mirrored)
       }
