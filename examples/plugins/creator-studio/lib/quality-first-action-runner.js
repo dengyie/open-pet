@@ -61,6 +61,7 @@ const runQualityFirstAction = async ({
   const failureCodes = []
   let generationFailureCode = ''
   let evaluationFailureCode = ''
+  let evaluatorUnavailable = false
   let stopDispatching = false
   const dispatch = async (attemptKind, repairCodes = []) => {
     const dispatchIndex = Math.max(0, ...dispatches.map((entry) => Number(entry.dispatchIndex) || 0)) + 1
@@ -192,6 +193,7 @@ const runQualityFirstAction = async ({
           throw error
         }
         evaluationFailureCode = executionFailureCode(error, 'candidate-evaluation-failed')
+        evaluatorUnavailable = evaluationFailureCode !== 'invalid_sprite_evaluation'
         Object.assign(candidate, withQa, { gate: { ok: false, outcome: 'cannot-evaluate', failures: [evaluationFailureCode], error: errorSummary(error) } })
         return null
       }
@@ -214,7 +216,7 @@ const runQualityFirstAction = async ({
   }
   for (const [index, candidate] of allCandidates.entries()) {
     try {
-      if (!evaluationFailureCode) await evaluateGeneratedCandidate(candidate)
+      if (!evaluatorUnavailable) await evaluateGeneratedCandidate(candidate)
     } catch (error) {
       // Retain all assets already paid for, including the unevaluated tail of
       // the initial batch, before stopping on a budget admission failure.

@@ -425,3 +425,23 @@ test('an evaluator outage retains paid assets without requesting a new candidate
   assert.deepEqual(generated, ['candidate-1', 'candidate-2'])
   assert.deepEqual(persisted, generated)
 })
+
+test('an invalid evaluation on one idle board does not discard another paid candidate', async () => {
+  const evaluated = []
+  const result = await runQualityFirstAction({
+    context: { actionId: 'idle' }, reserveCreativeDispatch: () => {},
+    generateCandidate: async ({ dispatchIndex }) => ({ descriptors: descriptors(dispatchIndex === 1 ? 'ffff' : '0f0f', dispatchIndex) }),
+    processCandidate: async () => ({ qa: { ok: true, failures: [] } }),
+    evaluateCandidate: async (candidate) => {
+      evaluated.push(candidate.candidateId)
+      if (candidate.dispatchIndex === 1) {
+        throw Object.assign(new Error('Invalid sprite evaluation'), { code: 'invalid_sprite_evaluation' })
+      }
+      return { gate: { ok: true, failures: [] } }
+    },
+    archiveCandidateRevision: async () => assert.fail('not a quality failure')
+  })
+  assert.deepEqual(evaluated, ['candidate-1', 'candidate-2'])
+  assert.equal(result.selectedCandidateId, 'candidate-2')
+  assert.deepEqual(result.candidates[0].gate.failures, ['invalid_sprite_evaluation'])
+})
