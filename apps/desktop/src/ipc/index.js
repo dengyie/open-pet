@@ -163,7 +163,7 @@ const registerIpcHandlers = ({ getPetWindow, petService, petPackService, aiServi
 
   const actionsSidecarBridge = createActionsSidecarBridge({
     actionService, actionImportService, petService, getPetWindow,
-    getActivePackId: () => petPackService.listPacks()?.activePackId || '',
+    getActivePackId: () => petPackService.getActivePackId(),
     showOpenDialogForEvent,
     createActionsViewState: (animations = null) => createActionsViewState(petService, triggerRuleRuntimeService, animations),
     reloadAndSendAnimations, refreshTriggerRuleRuntime, recordAppLog
