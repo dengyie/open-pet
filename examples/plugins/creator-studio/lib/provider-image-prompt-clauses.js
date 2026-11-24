@@ -121,7 +121,7 @@ const createStylePreferenceClause = ({ stylePreferences }) => {
     category: 'preference',
     source: 'user-style-preference',
     priority: 10,
-    text: `If compatible with the reference identity, neutral pose, and all requirements above, favor ${preferences.join(' and ')}. Keep the reference markings, base colors, facial features, anatomy, accessories, lighting style, and rendering medium unchanged. Omit any preference that would conflict.`
+    text: `As optional adjustments, favor ${preferences.join(' and ')} while keeping the neutral pose. Change only overall color balance within the existing palette or the expression of existing facial features, as requested here. Preserve the reference markings, base colors, facial features, anatomy, accessories, lighting style, and rendering medium. Skip any preference that conflicts with reference identity or output requirements.`
   })
 }
 
@@ -181,7 +181,7 @@ const createChangeClause = ({ task, visualPlan }) => {
     priority: 80,
     text: changes.length || styleIntent.length
       ? [
-          changes.length ? `Apply only these visible adjustments: ${changes.join('; ')}.` : '',
+          changes.length ? `Apply only these visible adjustments: ${changes.join('; ')}.${task.stylePreferences ? ' The optional style preferences below are also allowed within their stated limits.' : ''}` : '',
           styleIntent.length ? `Apply these visible style details only when they agree with the attached identity: ${styleIntent.join('; ')}.` : ''
         ].filter(Boolean).join(' ')
       : 'Do not redesign the character.'

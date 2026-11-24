@@ -92,6 +92,8 @@ test('quality-first full-pet dispatch applies bounded Chinese style preferences 
       assert.match(variant.prompt, /No text, labels, logo, watermark, border, panel, grid/)
       assert.match(variant.prompt, /warmer color balance.*approachable expression/)
       assert.match(coolVariant.prompt, /cooler color balance.*relaxed expression/)
+      assert.match(unchangedContract(variant.prompt), /optional style preferences below are also allowed within their stated limits/)
+      assert.match(variant.prompt, /Skip any preference that conflicts with reference identity or output requirements/)
       assert.doesNotMatch(variant.prompt + coolVariant.prompt, /忽略|九格|override|nine panels|remove the markings/i)
     }
   }
