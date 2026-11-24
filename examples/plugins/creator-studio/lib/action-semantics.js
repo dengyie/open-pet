@@ -368,6 +368,16 @@ const ACTION_LOOP_ENDINGS = Object.freeze({
 
 const stripFramePrefix = (value) => normalizeText(value).replace(/^Frame\s+\d+\s*:\s*/i, '').replace(/[.。]+$/, '')
 
+const getCustomFramePoses = (action) => Array.isArray(action.framePlan)
+  ? action.framePlan.map(stripFramePrefix).filter(Boolean)
+  : []
+
+const describeCustomOneShotPlayback = ({ action, frameCount }) => (
+  frameCount > 0 && resolveActionLoop(action) === false && getCustomFramePoses(action).length >= frameCount
+    ? 'use each cell description as a visual pose only; hold the last requested pose as the settled ending, without restarting the motion'
+    : ''
+)
+
 const hasExplicitFacing = (action) => ['viewer-left', 'viewer-right'].includes(action.actionContract?.facing)
 
 const getIdlePhases = (action) => hasExplicitFacing(action)
@@ -396,21 +406,14 @@ const expandPhases = (phases, count) => {
 }
 
 const expandOneShotCustomPhases = (poses, count, ending) => {
+  if (poses.length >= count) return expandPhases(poses, count)
   const describePose = (pose) => `visual pose only, no restart: "${pose}"`
-  if (count === 1) return [`${ending}; ${describePose(poses.join('; '))}`]
-  const motionCount = count - 1
-  const motion = poses.length <= motionCount
-    ? expandPhases(poses, motionCount)
-    : Array.from({ length: motionCount }, (_, index) => poses.slice(
-      Math.floor(index * poses.length / motionCount),
-      Math.floor((index + 1) * poses.length / motionCount)
-    ).join('; '))
-  return [...motion.map(describePose), ending]
+  return [...expandPhases(poses, count - 1).map(describePose), ending]
 }
 
 const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
   const count = Math.max(1, Number(frameCount) || 1)
-  const custom = Array.isArray(action.framePlan) ? action.framePlan.map(stripFramePrefix).filter(Boolean) : []
+  const custom = getCustomFramePoses(action)
   const animationType = inferAnimationType(action)
   const oneShot = resolveActionLoop(action) === false
   const phaseType = isWorkStateAction(action) ? 'work_state'
@@ -465,6 +468,7 @@ module.exports = {
   ACTION_CLASS_BY_ID,
   MOTION_PRESETS,
   buildActionFramePlan,
+  describeCustomOneShotPlayback,
   expandMotionPreset,
   getActionText,
   getMotionPreset,

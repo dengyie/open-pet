@@ -246,6 +246,16 @@ test('one-shot plans keep custom poses that happen to use loop-related words', (
   assert.match(prompt.split('\n').find((line) => /cell 6\b/i.test(line)), /settled pose without restarting the motion/i)
 })
 
+test('a full custom one-shot plan keeps one pose per cell and settles in its requested last pose', () => {
+  const framePlan = ['paw planted', 'paw lifting', 'paw raised beside the face', 'paw lowered with eyes open']
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: { name: 'Lift a paw', frameCount: framePlan.length, loop: false, framePlan }
+  })
+  const cells = prompt.split('\n').filter((line) => /^cell \d+\b/i.test(line))
+  assert.deepEqual(cells.map((line) => line.split(' — ')[1]), framePlan.map((pose) => `${pose}.`))
+  assert.match(prompt, /hold the last requested pose as the settled ending/i)
+})
+
 test('a custom one-shot gait uses custom text as pose reference, not as playback instructions', () => {
   const pose = 'start the next stride by raising the left foot'
   const { prompt } = buildActionSpriteRowPrompt({

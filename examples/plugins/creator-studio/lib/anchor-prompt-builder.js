@@ -13,6 +13,7 @@ const { createVisualPlan } = require('./visual-plan')
 const { describeActionFacing, resolveActionLoop } = require('./single-action-contract')
 const {
   buildActionFramePlan,
+  describeCustomOneShotPlayback,
   getKeyframePoseInstruction,
   inferAnimationType,
   resolvePrimaryAnimatedPart
@@ -69,7 +70,7 @@ const createVisualAction = ({ action = {}, keyframeRole = '', frameCount = 0 } =
       ...(Array.isArray(action.forbiddenMotion) ? action.forbiddenMotion : []),
       ...(action.actionContract?.camera === 'locked' ? ['camera motion, pan, zoom, or rotation'] : [])
     ],
-    loopIntent: resolveLoopIntent(action),
+    loopIntent: [resolveLoopIntent(action), describeCustomOneShotPlayback({ action, frameCount })].filter(Boolean).join('; '),
     frameBeats: frameCount > 0 ? buildActionFramePlan({ action, frameCount }) : []
   }
 }

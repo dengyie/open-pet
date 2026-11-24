@@ -13,6 +13,7 @@ const { createVisualPlan } = require('./visual-plan')
 const { describeActionFacing, resolveActionLoop } = require('./single-action-contract')
 const {
   buildActionFramePlan,
+  describeCustomOneShotPlayback,
   inferAnimationType,
   isEmoteAction,
   isLocomotionAction,
@@ -367,7 +368,8 @@ const buildSections = ({ task, action, creativeBrief, backend, model, currentPet
       mode === 'single-action' ? `Per-frame plan: ${framePlan.join(' ')}` : 'Key pose plan: neutral source pose suitable for future animation.',
       action?.loop
         ? 'For looping actions, start and end pose should be compatible, motion should not drift across the canvas, and body center should remain stable.'
-        : 'For one-shot actions, start from neutral, perform the action clearly, then return to neutral or end in a clear final pose.'
+        : 'For one-shot actions, start from neutral, perform the action clearly, then return to neutral or end in a clear final pose.',
+      mode === 'single-action' ? describeCustomOneShotPlayback({ action, frameCount: actionSheet.frameCount }) : ''
     ],
     'Root And Anchor Rules': [
       'Use a stable root anchor at the lower center of the character in every frame.',
@@ -479,7 +481,7 @@ const buildOpenPetImagePrompt = ({
             forbiddenMotion: actionSpec.forbiddenMotion,
             loopIntent: actionSpec.loop
               ? 'a seamless loop that returns to the starting pose'
-              : 'a readable action with a clear ending pose',
+              : ['a readable action with a clear ending pose', describeCustomOneShotPlayback({ action, frameCount: actionSheet.frameCount })].filter(Boolean).join('; '),
             frameBeats: buildActionFramePlan({ action, frameCount: actionSheet.frameCount })
           }
         }
