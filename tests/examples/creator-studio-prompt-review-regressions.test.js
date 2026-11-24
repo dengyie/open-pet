@@ -74,6 +74,15 @@ test('background posture does not replace the requested expression or action', (
   }
   assert.equal(toProviderAction({ motionPrompt: 'Wave while standing still' }).name, 'Waving')
   assert.equal(toProviderAction({ motionPrompt: 'While standing still, wave' }).name, 'Waving')
+  assert.equal(toProviderAction({ name: 'Greeting', motionPrompt: 'Wait a while then wave' }).name, 'Waving')
+})
+
+test('locomotion keeps explicit facing qualifiers without treating them as waving limbs', () => {
+  for (const motionPrompt of ['Run in place while facing viewer-left', '原地跑，同时面向屏幕左侧']) {
+    assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-left side profile')
+  }
+  assert.equal(toProviderAction({ motionPrompt: 'Run left while facing viewer-right' }).viewDirection, undefined)
+  assert.deepEqual(toProviderAction({ motionPrompt: 'Wave while facing viewer-left' }).animatedParts, ['selected visible waving appendage'])
 })
 
 test('eye rolls and whole-body rolls remain distinct in English and Chinese', () => {

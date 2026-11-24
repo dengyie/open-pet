@@ -93,9 +93,16 @@ const MOTIONS = [
 
 const GENERIC_EMOTE = ['Emote', /\b(?:emote|emoji|expression|sparkle)\b|表情/u, 'emote', 'show the expression using existing facial features only', 'visible expressive features required by the emote']
 
-const primaryMotionClauses = (value) => briefClauses(value)
-  .map((clause) => clause.split(/\bwhile\b|同时|同時/u, 1)[0].trim())
-  .filter(Boolean)
+const parseMotionBrief = (value) => {
+  const primary = []
+  const facing = []
+  for (const clause of briefClauses(value)) {
+    const [main, context] = clause.replace(/\s+/g, ' ').split(/(?<!\ba )\bwhile\b|同时|同時/u, 2)
+    if (main.trim()) primary.push(main.trim())
+    if (/^\s*(?:facing\b|面向|朝向|面朝)/u.test(context || '')) facing.push(context.trim())
+  }
+  return { primary, facing }
+}
 
 const findMotion = (clauses) => {
   for (const clause of clauses) {
@@ -108,13 +115,15 @@ const findMotion = (clauses) => {
 }
 
 const toProviderAction = (action = {}) => {
-  const clauses = primaryMotionClauses(action.motionPrompt)
-  const titleClauses = primaryMotionClauses(action.name)
-  const [name, , animationType, moment, movingPart] = findMotion(clauses) || findMotion(titleClauses) ||
+  const descriptionBrief = parseMotionBrief(action.motionPrompt)
+  const titleBrief = parseMotionBrief(action.name)
+  const [name, , animationType, moment, movingPart] = findMotion(descriptionBrief.primary) || findMotion(titleBrief.primary) ||
     ['Custom action', null, action.loop ? 'stationary_loop' : 'reaction', 'show a small anchored reaction', 'visible expressive features']
-  const hasSideInDescription = Object.values(SIDE_TERMS).some((pattern) => clauses.some((clause) => pattern.test(clause)))
-  const side = chooseUnambiguous(hasSideInDescription ? clauses : titleClauses, SIDE_TERMS)
-  const speed = chooseUnambiguous(clauses, {
+  const sideClauses = ({ primary, facing }) => animationType === 'locomotion_loop' ? [...primary, ...facing] : primary
+  const descriptionSides = sideClauses(descriptionBrief)
+  const hasSideInDescription = Object.values(SIDE_TERMS).some((pattern) => descriptionSides.some((clause) => pattern.test(clause)))
+  const side = chooseUnambiguous(hasSideInDescription ? descriptionSides : sideClauses(titleBrief), SIDE_TERMS)
+  const speed = chooseUnambiguous(descriptionBrief.primary, {
     slowly: /\b(?:slowly|slow|gently|gentle)\b|缓慢|緩慢|慢慢|轻轻|輕輕/u,
     quickly: /\b(?:quickly|quick|fast|rapidly)\b|快速|迅速/u
   })
