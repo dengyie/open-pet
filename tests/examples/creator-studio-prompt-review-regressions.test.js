@@ -57,6 +57,13 @@ test('negation applies to every item in comma-delimited lists', () => {
   assert.deepEqual(extractStylePreferences('Avoid warm tones, cheerful expressions; use cool tones'), { tone: 'cool' })
 })
 
+test('specific motion wins over a generic expression label', () => {
+  for (const motionPrompt of ['Expression: smile', '表情：微笑']) {
+    assert.equal(toProviderAction({ motionPrompt }).providerMotionDescription, 'form a readable smile')
+  }
+  assert.equal(toProviderAction({ motionPrompt: 'An expressive emote' }).name, 'Emote')
+})
+
 test('unknown image models use the conservative opaque cutout capability profile', () => {
   const profile = resolveImageModelCapabilities('grok-imagine-image')
 

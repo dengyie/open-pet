@@ -84,9 +84,10 @@ const MOTIONS = [
   ['Tail wag', /\b(?:wag(?:s|ging)?|(?:swish(?:es|ing)?|flick(?:s|ing)?) (?:its |the )?tail)\b|摇尾|搖尾|甩尾/u, 'stationary_loop', 'wag the existing visible tail', 'visible tail'],
   ['Smile', /\b(?:smil(?:e|es|ing)|grin(?:s|ning)?|laugh(?:s|ing)?)\b|笑/u, 'emote', 'form a readable smile', 'visible expressive features required by the emote'],
   ['Surprised reaction', /\b(?:surpris(?:e|ed)|startl(?:e|ed)|flinch(?:es|ing)?)\b|惊讶|驚訝|吓|嚇/u, 'reaction', 'show a brief startled reaction', 'visible parts required to communicate the reaction'],
-  ['Emote', /\b(?:emote|emoji|expression|sparkle)\b|表情/u, 'emote', 'show the expression using existing facial features only', 'visible expressive features required by the emote'],
   ['Idle', /\b(?:idle|rest(?:s|ing)?)\b|待机|待機|空闲|空閒/u, 'stationary_loop', 'stay in the canonical resting pose', 'eyelids']
 ]
+
+const GENERIC_EMOTE = ['Emote', /\b(?:emote|emoji|expression|sparkle)\b|表情/u, 'emote', 'show the expression using existing facial features only', 'visible expressive features required by the emote']
 
 const findMotion = (clauses) => {
   for (const clause of clauses) {
@@ -95,7 +96,7 @@ const findMotion = (clauses) => {
       .sort((left, right) => left.index - right.index)[0]
     if (match) return match.motion
   }
-  return null
+  return clauses.some((clause) => GENERIC_EMOTE[1].test(clause)) ? GENERIC_EMOTE : null
 }
 
 const toProviderAction = (action = {}) => {
