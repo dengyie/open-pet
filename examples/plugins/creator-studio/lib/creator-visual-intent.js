@@ -71,20 +71,26 @@ const SIDE_TERMS = Object.freeze({
   'viewer-right': /\b(?:right|rightward)\b|右/u
 })
 
+const LOCOMOTION_VERB = /\b(?:walk(?:s|ing)?|running|runs?|sprint(?:s|ing)?|trot(?:s|ting)?|crawl(?:s|ing)?|fly(?:ing)?)\b/u
+const FACING_PREFIX = /^(?:fac(?:e|es|ing)\b|面向|面朝|朝)/u
 const LOCOMOTION_SIDES = Object.fromEntries(VIEWER_SIDES.map((direction) => {
   const side = direction.slice('viewer-'.length)
   const hanSide = side === 'left' ? '左' : '右'
+  const motion = String.raw`${LOCOMOTION_VERB.source}(?:\s+(?:in place|on the spot|slowly|quickly|gently|fast|rapidly))*`
+  const heading = String.raw`(?:\b(?:fac(?:e|es|ing)|${motion})\s+(?:(?:to|towards?)\s+)?|^towards?\s+)`
+  const viewerSide = String.raw`(?:the\s+)?(?:(?:viewer|screen)(?:[ -]|['’]s\s+))?${side}(?:wards?)?\b`
+  const anatomy = String.raw`\s+(?:(?:front|rear|hind)\s+)?(?:paws?|limbs?|legs?|arms?|eyes?|ears?|now)\b`
   return [direction, new RegExp([
-    String.raw`\b(?:fac(?:e|es|ing)|towards?|run(?:s|ning)?|walk(?:s|ing)?|sprint(?:s|ing)?|trot(?:s|ting)?|crawl(?:s|ing)?|fly(?:ing)?)\s+(?:the\s+)?(?:(?:viewer|screen)[ -])?${side}(?:wards?)?\b(?!\s+(?:(?:front|rear|hind)\s+)?(?:paws?|limbs?|legs?|arms?|eyes?|ears?|now)\b)`,
+    `${heading}${viewerSide}(?!${anatomy})`,
     String.raw`\b${side}[- ]facing\b`,
-    `(?:向|往|朝)(?:屏幕|螢幕|画面|畫面)?${hanSide}(?:侧|側|边|邊)?(?![前后後]?[爪手脚腳眼耳])`
+    String.raw`(?:向|往|朝)[着著]?\s*(?:屏幕|螢幕|画面|畫面)?\s*${hanSide}(?:侧|側|边|邊)?(?![侧側边邊前后後]*[爪手脚腳眼耳腿])`
   ].join('|'), 'u')]
 }))
 
 const MOTIONS = [
   ['Waving', /\bwav(?:e|es|ed|ing)\b|挥手|揮手|挥爪|揮爪|招手/u, 'stationary_loop', 'wave one visible appendage in greeting', 'selected visible waving appendage'],
   ['Blinking', /\bblink(?:s|ed|ing)?\b|眨眼/u, 'stationary_loop', 'close and reopen the eyes once', 'eyelids'],
-  ['Locomotion', /\b(?:walk(?:s|ing)?|running|runs?|sprint(?:s|ing)?|trot(?:s|ting)?|crawl(?:s|ing)?|fly(?:ing)?)\b|走路|行走|跑|爬行|飞|飛/u, 'locomotion_loop', 'take successive strides in place', 'visible locomotion appendages'],
+  ['Locomotion', new RegExp(`${LOCOMOTION_VERB.source}|走路|行走|跑|爬行|飞|飛`, 'u'), 'locomotion_loop', 'take successive strides in place', 'visible locomotion appendages'],
   ['Jumping', /\b(?:jump(?:s|ing)?|hops?|hopping|bounc(?:e|ing))\b|跳|蹦/u, 'vertical_bounce', 'jump and land on the original baseline', 'whole body'],
   ['Spinning', /\b(?:spin(?:s|ning)?|twirl(?:s|ing)?|turn(?:s|ing)? around)\b|转圈|轉圈|旋转|旋轉/u, 'reaction', 'turn in place around the fixed body root', 'whole-body turn'],
   ['Eye roll', /\b(?:roll(?:s|ed|ing)? (?:(?:its|their|the) )?eyes|eye[ -]roll(?:s|ing)?)\b|翻白眼|翻眼睛/u, 'emote', 'briefly roll the visible eyes upward while keeping the body still', 'visible eyes'],
@@ -109,7 +115,7 @@ const parseMotionBrief = (value) => {
   for (const clause of briefClauses(value)) {
     const [main, context] = clause.replace(/\s+/g, ' ').split(/(?<!\ba )\bwhile\b|同时|同時/u, 2)
     if (main.trim()) primary.push(main.trim())
-    if (/^\s*(?:facing\b|面向|朝向|面朝)/u.test(context || '')) facing.push(context.trim())
+    if (context && FACING_PREFIX.test(context.trim())) facing.push(context.trim())
   }
   return { primary, facing }
 }

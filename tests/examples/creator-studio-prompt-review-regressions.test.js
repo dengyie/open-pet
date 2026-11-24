@@ -36,6 +36,18 @@ test('English and Chinese motion directions use the same viewer-side values', ()
   assert.equal(toProviderAction({ motionPrompt: '向右跑', viewDirection: 'strict left-facing side view' }).viewDirection, 'strict left-facing side view')
 })
 
+test('localized movement phrases override a conflicting side in the action title', () => {
+  for (const motionPrompt of [
+    'Run slowly to the left',
+    'Run in place toward the viewer’s left',
+    '朝着屏幕左边跑',
+    '原地跑，同時朝著畫面左邊'
+  ]) {
+    const action = toProviderAction({ name: 'Run right', motionPrompt })
+    assert.equal(action.viewDirection, 'strict viewer-left side profile', motionPrompt)
+  }
+})
+
 test('negative constraints do not hide affirmative motion and style in the same sentence', () => {
   for (const brief of ['Warm tones, no smile', '暖色调，不要笑']) {
     assert.deepEqual(extractStylePreferences(brief), { tone: 'warm' })
