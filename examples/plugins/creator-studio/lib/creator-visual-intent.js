@@ -64,6 +64,7 @@ const MOTIONS = [
   ['Locomotion', /\b(?:walk(?:s|ing)?|running|runs?|sprint(?:s|ing)?|trot(?:s|ting)?|crawl(?:s|ing)?|fly(?:ing)?)\b|走路|行走|跑|爬行|飞|飛/u, 'locomotion_loop', 'take successive strides in place', 'visible locomotion appendages'],
   ['Jumping', /\b(?:jump(?:s|ing)?|hops?|hopping|bounc(?:e|ing))\b|跳|蹦/u, 'vertical_bounce', 'jump and land on the original baseline', 'whole body'],
   ['Spinning', /\b(?:spin(?:s|ning)?|twirl(?:s|ing)?|turn(?:s|ing)? around)\b|转圈|轉圈|旋转|旋轉/u, 'reaction', 'turn in place around the fixed body root', 'whole-body turn'],
+  ['Roll in place', /\broll(?:s|ing)?(?: over| around| in place)?\b|打滚|打滾|翻滚|翻滾/u, 'reaction', 'roll in place and recover without drifting', 'whole-body roll'],
   ['Nodding', /\bnod(?:s|ding)?\b|点头|點頭/u, 'reaction', 'dip and lift the head in a nod', 'head tilt'],
   ['Head shake', /\bshak(?:e|es|ing) (?:its |the )?head\b|摇头|搖頭/u, 'reaction', 'shake the head gently from side to side', 'head tilt'],
   ['Stretching', /\bstretch(?:es|ing)?\b|伸懒腰|伸懶腰|伸展/u, 'pose_transition', 'stretch the visible limbs without changing body size', 'visible limbs'],
@@ -71,8 +72,9 @@ const MOTIONS = [
   ['Lying down', /\b(?:lie[ -]down|lying[ -]down|sleep(?:s|ing)?)\b|躺下|趴下|睡觉|睡覺/u, 'pose_transition', 'settle into a low resting pose', 'visible support limbs and body'],
   ['Standing', /\b(?:stand(?:s|ing)?|wak(?:e|es|ing))\b|站起|起身|醒/u, 'pose_transition', 'rise to the normal standing pose', 'visible support limbs and body'],
   ['Tail wag', /\b(?:wag(?:s|ging)?|(?:swish(?:es|ing)?|flick(?:s|ing)?) (?:its |the )?tail)\b|摇尾|搖尾|甩尾/u, 'stationary_loop', 'wag the existing visible tail', 'visible tail'],
-  ['Smile', /\b(?:smil(?:e|es|ing)|grin(?:s|ning)?|laugh(?:s|ing)?)\b|笑/u, 'emote', 'form a readable smile', 'visible expressive features'],
-  ['Surprised reaction', /\b(?:surpris(?:e|ed)|startl(?:e|ed)|flinch(?:es|ing)?)\b|惊讶|驚訝|吓|嚇/u, 'reaction', 'show a brief startled reaction', 'visible expressive features'],
+  ['Smile', /\b(?:smil(?:e|es|ing)|grin(?:s|ning)?|laugh(?:s|ing)?)\b|笑/u, 'emote', 'form a readable smile', 'visible expressive features required by the emote'],
+  ['Surprised reaction', /\b(?:surpris(?:e|ed)|startl(?:e|ed)|flinch(?:es|ing)?)\b|惊讶|驚訝|吓|嚇/u, 'reaction', 'show a brief startled reaction', 'visible parts required to communicate the reaction'],
+  ['Emote', /\b(?:emote|emoji|expression|sparkle)\b|表情/u, 'emote', 'show the expression using existing facial features only', 'visible expressive features required by the emote'],
   ['Idle', /\b(?:idle|rest(?:s|ing)?)\b|待机|待機|空闲|空閒/u, 'stationary_loop', 'stay in the canonical resting pose', 'eyelids']
 ]
 
