@@ -761,6 +761,18 @@ export const shellToBackendSchema = z.discriminatedUnion("type", [
     if (!value.ok && value.result !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["result"], message: "failed result cannot include result" })
   }),
   z.object({
+    type: z.literal("creator.result"),
+    operation: z.enum(CREATOR_BRIDGE_OPERATIONS),
+    ok: z.boolean(),
+    result: z.unknown().optional(),
+    error: z.object({ code: z.enum(ERROR_CODES), message: z.string().min(1) }).strict().optional(),
+  }).strict().superRefine((value, ctx) => {
+    if (value.ok && value.error !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["error"], message: "successful result cannot include error" })
+    if (value.ok && value.result === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["result"], message: "successful result requires result" })
+    if (!value.ok && value.error === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["error"], message: "failed result requires error" })
+    if (!value.ok && value.result !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["result"], message: "failed result cannot include result" })
+  }),
+  z.object({
     type: z.literal("ai.host.result"),
     operation: z.enum(["context", "present"]),
     ok: z.boolean(),

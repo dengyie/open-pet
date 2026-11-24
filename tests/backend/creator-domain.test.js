@@ -5,6 +5,7 @@ const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
 const { test } = require("node:test")
+const { createMessageHandler } = require("../../apps/desktop/src/sidecar/message-handler")
 
 async function fixture() {
 	const [{ openDatabase }, { migrate }, { createCreatorDomain }] = await Promise.all([
@@ -69,6 +70,51 @@ test("Creator result serialization strips absolute paths from public run state",
 	t.after(() => ctx.db.close())
 	const state = await ctx.creator.getState()
 	assert.equal(JSON.stringify(state).includes("/private/secret.png"), false)
+})
+
+test("Creator state resolves through the Shell bridge and preserves structured errors", async (t) => {
+	const [
+		{ openDatabase }, { migrate }, { createCreatorDomain }, { createShellClient },
+	] = await Promise.all([
+		import("../../services/backend/store/db.js"),
+		import("../../services/backend/store/migrate.js"),
+		import("../../services/backend/domains/creator/index.js"),
+		import("../../services/backend/bridge/shell-client.js"),
+	])
+	const db = await openDatabase({ file: ":memory:" })
+	t.after(() => db.close())
+	migrate({ db })
+
+	const warnings = []
+	const state = { ok: true, lastRun: null, dashboard: { available: true } }
+	let sent
+	let unavailable = false
+	const shell = createShellClient({
+		send: (envelope) => { sent = envelope },
+		logger: { warn: (_message, details) => warnings.push(details) },
+	})
+	t.after(() => shell.dispose())
+	const handler = createMessageHandler({
+		send: shell.receive,
+		onCreatorRequest: (request) => {
+			assert.deepEqual(request, { operation: "get-state", payload: {} })
+			if (unavailable) throw Object.assign(new Error("Creator unavailable"), { code: "BACKEND_UNAVAILABLE" })
+			return state
+		},
+	})
+	const creator = createCreatorDomain({ db, shell })
+
+	const pending = creator.getState()
+	void pending.catch(() => {})
+	assert.equal(await handler.handle(sent), true)
+	assert.deepEqual(warnings, [])
+	assert.deepEqual(await pending, state)
+
+	unavailable = true
+	const rejected = assert.rejects(creator.getState(), { code: "BACKEND_UNAVAILABLE", message: "Creator unavailable" })
+	assert.equal(await handler.handle(sent), true)
+	assert.deepEqual(warnings, [])
+	await rejected
 })
 
 test("Backend Creator reads terminal state from the validated plugin run file", async (t) => {
