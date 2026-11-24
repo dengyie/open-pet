@@ -9,6 +9,8 @@ const { registerPluginIpc } = require('../../apps/desktop/src/ipc/register-plugi
 const { registerServiceIpc } = require('../../apps/desktop/src/ipc/register-service-ipc')
 const { registerSettingsIpc } = require('../../apps/desktop/src/ipc/register-settings-ipc')
 const { registerSystemIpc } = require('../../apps/desktop/src/ipc/register-system-ipc')
+const { createPetMovementPolicy } = require('../../apps/desktop/src/pet/pet-movement-policy')
+const { createSettingsSidecarBridge } = require('../../apps/desktop/src/services/settings-sidecar-bridge')
 
 const createIpcMainStub = () => {
   const handlers = new Map()
@@ -84,6 +86,55 @@ test('registerSettingsIpc wires settings preview and close flows', () => {
   assert.deepEqual(sentMessages, [{ channel: IPC.SETTINGS_CHANGED, payload: { scale: 1.25, scalePreview: true } }])
   assert.equal(settingsWindow.closeCalled, 1)
   assert.equal(petWindow.settingsWindow, null)
+})
+
+test('a drag-end anchor persists through the trusted settings path and survives hydration', async () => {
+  const ipcMain = createIpcMainStub()
+  const initialSettings = {
+    petBehavior: { grounded: true, home: { enabled: true, radius: 'small', anchor: { displayId: '1', x: 200, y: 760 } } }
+  }
+  let settings = structuredClone(initialSettings)
+  let backendSettings = structuredClone(initialSettings)
+  let version = 1
+  const trustedRequests = []
+  const petService = {
+    getSettings: () => structuredClone(settings),
+    applySettings: (next) => { settings = next; return structuredClone(next) },
+    saveSettings: () => assert.fail('must not write the legacy settings file')
+  }
+  const bridge = createSettingsSidecarBridge({
+    getBackend: () => ({ baseUrl: 'http://unused', sessionToken: 'fixture' }),
+    fetchImpl: async (_url, options) => {
+      assert.notEqual(options.method, 'PATCH')
+      return { ok: true, json: async () => ({ version, values: backendSettings }) }
+    },
+    requestBackend: async (request) => {
+      trustedRequests.push(request)
+      backendSettings.petBehavior.home.anchor = request.patch['petBehavior.home.anchor']
+      return { body: { ok: true, version: ++version, changedPaths: Object.keys(request.patch) } }
+    },
+    petService
+  })
+  const win = { getBounds: () => ({ x: 400, y: 660, width: 100, height: 100 }) }
+  registerPetRuntimeIpc({
+    ipcMainService: ipcMain,
+    browserWindowService: { fromWebContents: () => win },
+    petService,
+    petMovementPolicy: createPetMovementPolicy({ screen: {
+      getDisplayMatching: () => ({ id: 1, workArea: { x: 0, y: 0, width: 1000, height: 800 } })
+    } }),
+    persistCanonicalSettings: (input) => bridge.persistCanonicalSettings(input),
+    createPetRendererSettings: (value) => value,
+    sendToPetWindow() {}
+  })
+
+  await ipcMain.listeners.get(IPC.PET_DRAG_ENDED)({ sender: {} })
+  const anchor = { displayId: '1', x: 450, y: 760 }
+  assert.deepEqual(settings.petBehavior.home.anchor, anchor)
+  assert.deepEqual(trustedRequests, [{ type: 'settings.persist.request', ifVersion: 1, patch: { 'petBehavior.home.anchor': anchor } }])
+  settings = structuredClone(initialSettings)
+  await bridge.hydrate()
+  assert.deepEqual(settings.petBehavior.home.anchor, anchor)
 })
 
 test('registerPetRuntimeIpc wires pet movement and focus handlers', () => {
