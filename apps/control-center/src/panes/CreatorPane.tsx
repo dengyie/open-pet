@@ -1217,10 +1217,10 @@ export function CreatorPane({
                 id="creator-style-prompt"
                 className="text-input textarea"
                 value={newCharacterDraft.stylePrompt}
-                placeholder="Soft orange helper cat with warm idle energy."
+                placeholder="偏暖色调，亲切的神态 / Warm tones, friendly expression"
                 onChange={(event) => onChangeNewCharacterDraft({ stylePrompt: event.target.value })}
               />
-              <p className="field-note">可选。补充角色气质、色彩和身份提示。</p>
+              <p className="field-note">可选。支持中英文冷暖色调与神态偏好；角色身份、主色、材质和画风以参考图为准。</p>
             </div>
           </div>
           <div className="creator-action-bar">
@@ -1318,10 +1318,10 @@ export function CreatorPane({
                 id="creator-motion-prompt"
                 className="text-input textarea"
                 value={existingActionDraft.motionPrompt}
-                placeholder="Curl up, then spin gently once after the user clicks."
+                placeholder="用屏幕右侧的爪子轻轻招手 / Gently wave with the viewer-right paw"
                 onChange={(event) => onChangeExistingActionDraft({ motionPrompt: event.target.value })}
               />
-              <p className="field-note">成功导入后，Host 会自动把这个动作绑定到 clickAction。</p>
+              <p className="field-note">请描述一个动作，例如招手、跳跃或转圈。左右以观看者为准；未识别的描述会使用通用反应。导入后会绑定到 clickAction。</p>
             </div>
           </div>
           <div className="field-row">

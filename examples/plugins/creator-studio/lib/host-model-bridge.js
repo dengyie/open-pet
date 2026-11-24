@@ -34,6 +34,7 @@ const {
   buildCharacterAnchorPrompt
 } = require('./anchor-prompt-builder')
 const { buildOpenPetImagePrompt, sanitizeCreativeBrief } = require('./openpet-prompt-builder')
+const { extractStylePreferences, toProviderAction } = require('./creator-visual-intent')
 const { FIXTURE_BACKEND, PROVIDER_BACKEND, normalizeCreatorBackend } = require('./backend-mode')
 const {
   averageIdentityDescriptors,
@@ -1492,6 +1493,7 @@ const resolveAnchorCharacterBrief = (run = {}) => sanitizeCreativeBrief(
 )
 
 const resolveProviderAppearanceIntent = (run = {}) => {
+  if (isSingleActionRun(run)) return []
   const characterBrief = String(
     run?.generationTask?.characterBrief ||
     run?.input?.generationTask?.characterBrief ||
@@ -1501,9 +1503,11 @@ const resolveProviderAppearanceIntent = (run = {}) => {
 }
 
 const getRunActions = (run = {}) => {
-  if (Array.isArray(run?.generationTask?.actions)) return run.generationTask.actions
-  if (Array.isArray(run?.input?.generationTask?.actions)) return run.input.generationTask.actions
-  return []
+  const actions = Array.isArray(run?.generationTask?.actions)
+    ? run.generationTask.actions
+    : run?.input?.generationTask?.actions
+  if (!Array.isArray(actions)) return []
+  return isSingleActionRun(run) ? actions.map(toProviderAction) : actions
 }
 
 const shouldGenerateActionAnchors = (run = {}) => {
@@ -3245,6 +3249,10 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
     runId: run.runId,
     userIntent: run.input?.originalPrompt || run.input?.prompt || ''
   })
+  const stylePreferences = extractStylePreferences(
+    run.generationTask?.characterBrief || run.input?.generationTask?.characterBrief ||
+    run.input?.originalPrompt || run.input?.prompt
+  )
   const plannerActions = Array.isArray(planResult.proposal?.actions) ? planResult.proposal.actions : []
   const backendFullPetActions = run?.creatorExecution === 'backend' &&
     run?.generationTask?.mode === 'full-pet' &&
@@ -3299,6 +3307,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       // padding that leaves room for horns, wings, tails, and antialiasing.
       subject: { count: 1, framing: 'full-body', targetOccupancyPercent: 64, safePaddingPercent: 16, rootAnchor: 'lower-center' },
       strategyId: diversityProfileId,
+      stylePreferences,
       requestedChanges: createCanonicalRequestedChanges(diversityProfileId)
     })
     const buildPromptForModel = (model) => {
@@ -4099,11 +4108,7 @@ const generateViaHostModelBridge = async ({ backend, run, dataDir }) => {
     )
   }
   assertExactlyOneProviderReferenceImage(originalReferenceImages)
-  const firstActionForReference = Array.isArray(run?.generationTask?.actions)
-    ? run.generationTask.actions[0]
-    : Array.isArray(run?.input?.generationTask?.actions)
-      ? run.input.generationTask.actions[0]
-      : null
+  const firstActionForReference = getRunActions(run)[0] || null
   const canonicalSingleAction = isSingleActionRun(run) && Boolean(firstActionForReference)
   const useCanonicalProviderKeyframePath = Boolean(
     canonicalSingleAction &&

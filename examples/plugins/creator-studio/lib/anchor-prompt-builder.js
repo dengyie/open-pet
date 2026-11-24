@@ -50,7 +50,12 @@ const createVisualAction = ({ action = {}, keyframeRole = '', frameCount = 0 } =
   const normalizedRole = String(keyframeRole || '').trim().toLowerCase()
   const name = normalizeActionText(action.name, action.motionPrompt || 'the requested action')
   const moment = normalizedRole
-    ? getKeyframePoseInstruction({ action, keyframeRole: normalizedRole })
+    ? [
+        getKeyframePoseInstruction({ action, keyframeRole: normalizedRole }),
+        normalizedRole === 'peak' && action.providerMotionDescription
+          ? `Show the peak of this motion: ${action.providerMotionDescription}.`
+          : ''
+      ].filter(Boolean).join(' ')
     : normalizeActionText(action.motionPrompt, name)
   return {
     name,

@@ -69,6 +69,7 @@ const normalizeCompilerTask = (task = {}) => createProviderImageTask({
   action: task.action,
   styleLocks: task.styleLocks,
   appearanceIntent: task.appearanceIntent,
+  stylePreferences: task.stylePreferences,
   strategyId: task.strategyId,
   requestedChanges: task.requestedChanges,
   ...(task.actionClass ? { actionClass: task.actionClass } : {}),
