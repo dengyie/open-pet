@@ -92,10 +92,15 @@ test('background posture does not replace the requested expression or action', (
 })
 
 test('locomotion keeps explicit facing qualifiers without treating them as waving limbs', () => {
-  for (const motionPrompt of ['Run in place while facing viewer-left', '原地跑，同时面向屏幕左侧']) {
+  for (const motionPrompt of [
+    'Run in place while facing viewer-left',
+    'Run in place while the body faces left and the head faces right',
+    '原地跑，同时面向屏幕左侧'
+  ]) {
     assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-left side profile')
   }
   assert.equal(toProviderAction({ motionPrompt: 'Run left while facing viewer-right' }).viewDirection, undefined)
+  assert.equal(toProviderAction({ motionPrompt: 'Run left facing viewer-right' }).viewDirection, undefined)
   assert.deepEqual(toProviderAction({ motionPrompt: 'Wave while facing viewer-left' }).animatedParts, ['selected visible waving appendage'])
   for (const motionPrompt of [
     'Run in place while facing forward with the right paw raised',
@@ -113,6 +118,14 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
     '原地跑步，同时身體朝螢幕左側'
   ]) {
     assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-left side profile', motionPrompt)
+  }
+  for (const motionPrompt of [
+    'Run right while the body faces right and the head faces left',
+    'Run right with the head facing viewer-left',
+    '向右跑，同时身体朝左边倾斜',
+    '向右跑，同时身体面向右边而头部面向左边'
+  ]) {
+    assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-right side profile', motionPrompt)
   }
 })
 
