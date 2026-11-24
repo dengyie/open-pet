@@ -1240,3 +1240,28 @@ test('Creator video reports provider rate limiting without retrying job submissi
   }), { code: 'video_provider_rate_limited' })
   assert.equal(posts, 1)
 })
+
+test('Creator video retries rate-limited reads of the same paid job, not submission', async () => {
+  const { createGrokVideoProvider } = require('../../examples/plugins/creator-studio/lib/grok-video-provider')
+  const calls = []
+  const provider = createGrokVideoProvider({
+    baseUrl: 'https://api.mangoqwq.com/v1', apiKey: 'runtime-only-key', sleepImpl: async () => {},
+    fetchImpl: async (url, { method }) => {
+      const route = new URL(url).pathname
+      calls.push([method, route])
+      if (method === 'POST') return Response.json({ id: 'paid-task', status: 'queued' })
+      if (calls.filter(([, path]) => path === route).length === 1) return Response.json({}, { status: 429 })
+      if (route.endsWith('/content')) return new Response('fixture-video', { headers: { 'content-type': 'video/mp4' } })
+      return Response.json({ id: 'paid-task', status: 'completed' })
+    }
+  })
+  const result = await provider.generateVideo({ model: 'grok-imagine-video', prompt: 'wave once', outputDir: fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-read-rate-limit-')) })
+  assert.equal(result.taskId, 'paid-task')
+  assert.deepEqual(calls, [
+    ['POST', '/v1/videos'],
+    ['GET', '/v1/videos/paid-task'],
+    ['GET', '/v1/videos/paid-task'],
+    ['GET', '/v1/videos/paid-task/content'],
+    ['GET', '/v1/videos/paid-task/content']
+  ])
+})
