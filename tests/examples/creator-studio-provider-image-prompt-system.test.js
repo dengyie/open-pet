@@ -356,17 +356,44 @@ test('opaque-output image models reject explicit transparent-output requests in 
     'cat with transparent alpha',
     'the background must be fully transparent',
     'cat with no background',
+    'no background',
     '透明背景上的猫',
     '猫，背景透明',
     '猫，透明底',
     '猫，去背景',
-    '猫，无背景'
+    '猫，无背景',
+    '无背景',
+    'Avoid an opaque background. Use a transparent background',
+    'Avoid a transparent background for the preview. Return a transparent PNG',
+    '不要透明背景。最后用透明背景'
   ]) {
     assert.throws(
       () => buildCharacterAnchorPrompt({ model: 'gpt-image-2', appearanceIntent: [brief] }),
       { code: 'image_prompt_capability_conflict' },
       brief
     )
+  }
+})
+
+test('opaque-output image models accept briefs that rule out transparency', () => {
+  for (const brief of [
+    'not a transparent background',
+    'no transparent background',
+    'non-transparent background',
+    'without a transparent background',
+    'never use a transparent background',
+    'avoid using a transparent background',
+    "don't use a transparent background",
+    '不要透明背景',
+    '不需要透明背景',
+    '无需透明背景',
+    '不用透明背景',
+    '别用透明底',
+    '非透明背景',
+    '避免背景透明'
+  ]) {
+    const { prompt } = buildCharacterAnchorPrompt({ model: 'gpt-image-2', appearanceIntent: [brief] })
+    assert.ok(prompt.includes(brief), brief)
   }
 })
 

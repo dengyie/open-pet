@@ -13,11 +13,17 @@ const CATEGORY_ORDER = Object.freeze([
 ])
 
 const TRANSPARENT_OUTPUT_DIRECTIVES = [
-  /(?<!\b(?:no |non[- ]|not ))\btransparent\s+(?:background|backdrop|bg|png|alpha|output)\b/i,
-  /\b(?:background|backdrop|bg|output)(?:\s*:\s*|\s+(?:(?:must|should)\s+be|is|becomes?)\s+)(?:(?:fully|completely)\s+)?transparent\b/i,
-  /\bno\s+background(?:\s+(?:at all|whatsoever))?(?=\s*(?:$|[.,;:!?，。；！？])|\s+(?:and|or|with)\b)/i,
-  /透明背景|背景透明|透明底|去背景|无背景/
+  /\btransparent\s+(?:background|backdrop|bg|png|alpha|output)\b/gi,
+  /\b(?:background|backdrop|bg|output)(?:\s*:\s*|\s+(?:(?:must|should)\s+be|is|becomes?)\s+)(?:(?:fully|completely)\s+)?transparent\b/gi,
+  /\bno\s+background(?:\s+(?:at all|whatsoever))?(?=\s*(?:$|[.,;:!?，。；！？])|\s+(?:and|or|with)\b)/gi,
+  /透明背景|背景透明|透明底|去背景|无背景/g
 ]
+
+const TRANSPARENT_OUTPUT_NEGATION = /(?:\b(?:not|no|non|without|never|avoid|don['’]t)(?:-|(?:\s+(?:a|an|the|any|use|using|need|require|want|make|generat(?:e|ing)|output|fully|completely)){0,3}\s+)|(?:不要|不需要|无需|不用|别|非|避免)\s*(?:使用|用)?\s*)$/i
+
+const requestsTransparentOutput = (text) => TRANSPARENT_OUTPUT_DIRECTIVES.some((pattern) => (
+  Array.from(text.matchAll(pattern)).some(({ index }) => !TRANSPARENT_OUTPUT_NEGATION.test(text.slice(0, index)))
+))
 
 const categoryRank = (category) => {
   const index = CATEGORY_ORDER.indexOf(category)
@@ -296,7 +302,7 @@ const validateClauses = ({ task, clauses, capabilities }) => {
   if (!capabilities.supportsDirectTransparency && clauses.some((clause) => (
     clause.category === 'background'
       ? /\btransparent\b/i.test(clause.text)
-      : clause.category === 'change' && TRANSPARENT_OUTPUT_DIRECTIVES.some((pattern) => pattern.test(clause.text))
+      : clause.category === 'change' && requestsTransparentOutput(clause.text)
   ))) {
     throw createTaskError('image_prompt_capability_conflict', 'Selected image model prompt cannot request transparency')
   }
