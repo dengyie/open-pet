@@ -175,7 +175,8 @@ test('video evaluator receives detail and runtime region coordinates without cha
   })
   const payload = JSON.parse(request.messages[1].content.find(part => part.type === 'text').text)
   assert.deepEqual(payload.regions, regions)
-  assert.deepEqual(payload.minimumScores, profile.visual.groundedAction)
+  assert.equal('minimumScores' in payload, false)
+  assert.equal('minimumConfidence' in payload, false)
   assert.match(request.messages[0].content, /actual 128-pixel output without enlargement/)
   assert.match(request.messages[0].content, /Report actual defects in either set of regions/)
 })
@@ -192,7 +193,7 @@ test('work-state evaluator resolves the running identifier as stationary task pr
   assert.match(request.messages[0].content, /running.*stationary task.processing/i)
   assert.match(request.messages[0].content, /locomotion.*running-right.*running-left/i)
   const payload = JSON.parse(request.messages[1].content.find(part => part.type === 'text').text)
-  assert.deepEqual(payload.minimumScores, profile.visual.groundedAction)
+  assert.equal('minimumScores' in payload, false)
   assert.equal(payload.actionIntent.actionId, 'running')
 })
 
@@ -206,10 +207,10 @@ test('review-state evaluator uses inspection semantics while retaining the regis
   const request = await createSpriteEvaluatorRequest({ scope: 'grounded-action', board: { path: boardPath, regions: REGIONS }, profile, qa: { actionIntent } })
   assert.match(request.messages[0].content, /review.*inspection.*comparison/i)
   assert.match(request.messages[0].content, /head.*observation.*acknowledgement/i)
-  assert.match(request.messages[0].content, /Keep all quality thresholds in force/)
+  assert.match(request.messages[0].content, /score anchors/i)
   const payload = JSON.parse(request.messages[1].content.find(part => part.type === 'text').text)
   assert.deepEqual(payload.actionIntent, actionIntent)
-  assert.deepEqual(payload.minimumScores, profile.visual.groundedAction)
+  assert.equal('minimumScores' in payload, false)
 })
 
 test('evaluation evidence is atomically stored under dataDir with a relative path', () => {
@@ -316,6 +317,59 @@ test('canonical comparison propagates cannot-evaluate and reject instead of alwa
   assert.equal(mixed.outcome, 'repair', 'a repairable candidate still keeps the board in the repair loop')
 })
 
+test('calibration prompts omit host cutoffs; frozen scores have identical verdicts in shuffled boards and bilingual intent', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-frozen-score-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const boardPath = path.join(dir, 'board.png')
+  await sharp({ create: { width: 128, height: 128, channels: 4, background: '#eee' } }).png().toFile(boardPath)
+  const profile = getQualityFirstQualityProfile()
+  const regions = [...REGIONS, { regionId: 'candidate-2', role: 'canonical-candidate' }]
+  const scoreEvidence = (scores, regionId) => Object.fromEntries(Object.keys(scores).map(name => [
+    name, Object.freeze({ regionId, observation: 'The original outline and ear shape remain visible.' })
+  ]))
+  const candidates = Object.freeze(regions.slice(1).map(({ regionId }, index) => {
+    const scores = Object.freeze({ ...profile.visual.canonical, identity: profile.visual.canonical.identity - index * 0.01 })
+    return Object.freeze({ candidateId: regionId, confidence: profile.visual.confidence, scores, defects: Object.freeze([]), scoreEvidence: Object.freeze(scoreEvidence(scores, regionId)) })
+  }))
+  const comparisonRequest = await createSpriteEvaluatorRequest({ scope: 'canonical-comparison', board: { path: boardPath, regions }, profile })
+  const [{ content: rubric }, { content: [{ text: payload }] }] = comparisonRequest.messages
+  assert.match(rubric, /0–24.*25–49.*50–74.*75–91.*92–100/)
+  assert.match(rubric, /Reference identity checklist:.*silhouette.*ears.*markings.*appendages.*shading/)
+  assert.match(rubric, /Evaluate each candidate independently/)
+  assert.match(rubric, /scoreEvidence for every score/)
+  assert.doesNotMatch(payload, /minimumScores|minimumConfidence/)
+  for (const cutoff of Object.values(profile.visual.canonical)) assert.doesNotMatch(rubric, new RegExp(`\\b${cutoff}\\b`))
+  const gateFor = (records, boardRegions) => evaluateCanonicalComparisonGate({
+    evaluation: validateCanonicalComparisonEvaluation({ schemaVersion: 1, recommendation: 'reject', candidates: records }, { regions: boardRegions, requireScoreEvidence: true }),
+    profile,
+    regions: boardRegions
+  })
+  const gate = gateFor(candidates, regions)
+  assert.deepEqual(gateFor(candidates.slice().reverse(), [regions[0], regions[2], regions[1]]), gate)
+  assert.equal(gate.candidateGates['candidate-1'].outcome, 'pass')
+  assert.equal(gate.candidateGates['candidate-2'].outcome, 'repair')
+  assert.throws(() => gateFor([{ ...candidates[0], scoreEvidence: candidates[1].scoreEvidence }, candidates[1]], regions), /own canonical candidate/)
+  assert.throws(() => gateFor([{ ...candidates[0], scoreEvidence: undefined }, candidates[1]], regions), /candidate fields/)
+
+  const scope = 'grounded-action'
+  const board = { path: boardPath, regions: [{ regionId: 'frame-1', role: 'candidate-frame' }] }
+  for (const framePlan of [['The pet blinks without moving its body.'], ['宠物眨眼，身体保持不动。']]) {
+    const actionIntent = { actionId: 'idle', loop: true, frameCount: 1, framePlan }
+    const request = await createSpriteEvaluatorRequest({ scope, board, qa: { actionIntent }, profile })
+    const actionPayload = JSON.parse(request.messages[1].content[0].text)
+    assert.deepEqual(actionPayload.actionIntent, actionIntent)
+    const scores = profile.visual.groundedAction
+    const evaluation = validateSpriteEvaluation({
+      ...canonicalEvaluation({ scores, confidence: profile.visual.confidence, recommendation: 'reject' }),
+      scoreEvidence: scoreEvidence(scores, 'frame-1')
+    }, { scope, regions: board.regions, requireScoreEvidence: true })
+    assert.equal(evaluateVisualGate({ ...evaluation, scope, profile, regions: board.regions }).outcome, 'pass')
+    assert.equal(evaluateVisualGate({
+      ...evaluation, scores: { ...scores, identity: scores.identity - 0.01 }, scope, profile, regions: board.regions
+    }).outcome, 'repair')
+  }
+})
+
 test('canonical evaluator tool schema requires exactly the candidate regions on the attached board', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-canonical-tool-schema-'))
   const boardPath = path.join(dataDir, 'board.png')
@@ -372,7 +426,7 @@ test('final evaluator maps every visible sequence to its registered intent and r
   const request = await createSpriteEvaluatorRequest({ ...input, qa: { ok: true, actionIntents } })
   const payload = JSON.parse(request.messages[1].content.find(part => part.type === 'text').text)
   assert.deepEqual(payload.actionIntents, actionIntents)
-  assert.deepEqual(payload.minimumScores, profile.visual.finalPackage)
+  assert.equal('minimumScores' in payload, false)
   assert.match(request.messages[0].content, /running.*stationary task.processing/i)
   assert.match(request.messages[0].content, /review.*inspection/i)
   await assert.rejects(createSpriteEvaluatorRequest({ ...input, qa: { actionIntents: actionIntents.slice(0, 1) } }), /intent.*sequence|sequence.*intent/i)

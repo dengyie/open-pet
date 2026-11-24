@@ -13,6 +13,7 @@ const { readActionCheckpoints, resolveReusableActionResult, writeActionCheckpoin
 const { getQualityFirstQualityProfile } = require('../../examples/plugins/creator-studio/lib/pet-generation-quality-profile')
 const { compileProviderImagePrompt } = require('../../examples/plugins/creator-studio/lib/provider-image-prompt-compiler')
 const { writeCandidateRecord } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
+const { createCandidateSelection } = require('../../examples/plugins/creator-studio/lib/candidate-decision')
 const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
 const hostModelBridgeModule = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
 
@@ -889,19 +890,49 @@ test('quality-first final package requires a passing code-owned visual gate over
   assert.equal(accepted.gate.ok, true)
   assert.match(accepted.boardRelativePath, /final-package-review-board\.png$/)
 
-  const warned = await evaluateQualityFirstFinalPackage({
+  const packageInputs = {
     dataDir,
     runId,
     sourcePath: paths.source,
     canonicalPath: paths.canonical,
     spritesheetPath: paths.atlas,
-    atlasQaPath,
-    allowVisualQualityWarnings: true,
-    requestEvaluation: async () => ({ gate: { ok: false, outcome: 'repair', failures: ['visual-score-overall-below-minimum'] }, evidenceRelativePath: `runs/${runId}/evaluations/final-package.json` })
+    atlasQaPath
+  }
+  const defectCode = 'visual-defect-cross-action-inconsistent'
+  const requestEvaluation = async (regionId = 'atlas') => ({
+    gate: { ok: false, outcome: 'repair', failures: [defectCode] },
+    evaluation: { defects: [{ regionId, severity: 'major', code: 'cross-action-inconsistent' }] },
+    evidenceRelativePath: `runs/${runId}/evaluations/final-package.json`
+  })
+  const candidate = { candidateId: 'idle-a', sha256: 'a'.repeat(64), technicalEligible: true, qualityWarningCodes: [defectCode] }
+  const rowSelection = createCandidateSelection({
+    candidate, expectedHash: candidate.sha256, actionId: 'idle', authority: 'human-override',
+    qualityOverride: true, acknowledgedWarningCodes: [defectCode]
+  })
+  let confirmation
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    ...packageInputs,
+    finalVisualConfirmation: rowSelection,
+    requestEvaluation: () => requestEvaluation()
+  }), error => {
+    confirmation = error.confirmationEvidence
+    return error.code === 'final_package_visual_gate_failed'
+  })
+  assert.match(confirmation.evidenceSha256, /^[a-f0-9]{64}$/)
+  assert.notEqual(confirmation.evidenceSha256, rowSelection.evidenceSha256)
+  const warned = await evaluateQualityFirstFinalPackage({
+    ...packageInputs, finalVisualConfirmation: confirmation, requestEvaluation: () => requestEvaluation()
   })
   assert.equal(warned.recommended, false)
-  assert.deepEqual(warned.qualityWarningCodes, ['visual-score-overall-below-minimum'])
+  assert.deepEqual(warned.qualityWarningCodes, [defectCode])
   assert.equal(warned.gate.ok, false)
+  assert.deepEqual(warned.confirmation, confirmation)
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    ...packageInputs, finalVisualConfirmation: confirmation, requestEvaluation: () => requestEvaluation('action-review')
+  }), error => error.code === 'final_package_visual_gate_failed')
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    ...packageInputs, finalVisualConfirmation: { ...confirmation, acknowledgedWarningCodes: [] }, requestEvaluation: () => requestEvaluation()
+  }), error => error.code === 'final_package_visual_gate_failed')
 
   await assert.rejects(() => evaluateQualityFirstFinalPackage({
     dataDir,
@@ -910,7 +941,7 @@ test('quality-first final package requires a passing code-owned visual gate over
     canonicalPath: paths.canonical,
     spritesheetPath: paths.atlas,
     atlasQaPath,
-    allowVisualQualityWarnings: true,
+    finalVisualConfirmation: confirmation,
     requestEvaluation: async () => ({ gate: { ok: false, outcome: 'cannot-evaluate', failures: ['final-package-evaluation-unavailable'] }, evidenceRelativePath: `runs/${runId}/evaluations/final-package.json` })
   }), (error) => error?.code === 'final_package_visual_gate_failed')
 
@@ -1000,24 +1031,6 @@ test('video action review uses original normalized detail and retains runtime ev
   assert.deepEqual(options[0].runtimeFrames, runtimeFrames)
 })
 
-test('final package quality stays advisory after any explicit human candidate selection', () => {
-  const { hasHumanCandidateSelection } = hostModelBridgeModule.__testInternals
-  assert.equal(hasHumanCandidateSelection({
-    canonical: { selection: { selectionAuthority: 'human-override', qualityOverride: false } },
-    actionResults: {}
-  }), true)
-  assert.equal(hasHumanCandidateSelection({
-    canonical: { selection: { selectionAuthority: 'automatic', qualityOverride: false } },
-    actionResults: {
-      waving: { selectedCandidate: { selection: { selectionAuthority: 'human-override', qualityOverride: false } } }
-    }
-  }), true)
-  assert.equal(hasHumanCandidateSelection({
-    canonical: { selection: { selectionAuthority: 'automatic', qualityOverride: false } },
-    actionResults: {}
-  }), false)
-})
-
 test('host model bridge no longer exports the removed legacy full-pet repair entry point', () => {
   assert.equal(Object.hasOwn(hostModelBridgeModule, 'regenerateFullPetActionsViaHostModelBridge'), false)
 })
@@ -1048,4 +1061,21 @@ test('final package host passes all visible motion intents, including the mirror
   assert.match(captured.qa.actionIntents.find(intent => intent.actionId === 'running-left').framePlan[0], /left-facing/)
   assert.match(captured.qa.actionIntents.find(intent => intent.actionId === 'running').framePlan[2], /work/)
   assert.match(captured.qa.actionIntents.find(intent => intent.actionId === 'review').framePlan[2], /inspection/)
+
+  const rowCandidate = { candidateId: 'running-a', sha256: 'a'.repeat(64), technicalEligible: true, qualityWarningCodes: ['visual-defect-action-unreadable'] }
+  const rowSelection = createCandidateSelection({
+    candidate: rowCandidate, expectedHash: rowCandidate.sha256, actionId: 'running', authority: 'human-override',
+    qualityOverride: true, acknowledgedWarningCodes: rowCandidate.qualityWarningCodes
+  })
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    dataDir, runId, sourcePath: atlas, canonicalPath: atlas, spritesheetPath: atlas, atlasQaPath, actions: plan.actions,
+    finalVisualConfirmation: rowSelection,
+    requestEvaluation: async request => {
+      assert.ok(request.board.regions.some(region => region.regionId === 'sequence-review'))
+      return {
+        gate: { ok: false, outcome: 'reject', failures: ['visual-defect-identity-drift'] },
+        evaluation: { defects: [{ code: 'identity-drift', severity: 'blocking', regionId: 'sequence-review' }] }
+      }
+    }
+  }), error => error.code === 'final_package_visual_gate_failed')
 })

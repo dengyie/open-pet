@@ -908,6 +908,7 @@ const acceptQualityFirstActionCandidate = async ({
     candidate,
     expectedHash,
     authority: 'human-override',
+    actionId: normalizedActionId,
     qualityOverride,
     acknowledgedWarningCodes,
     now

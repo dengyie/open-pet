@@ -129,6 +129,8 @@ test('canonical quality failures pause for human choice and allow an explicit wa
   assert.equal(accepted.qualityFirst.acceptedCanonical.recommended, false)
   assert.equal(accepted.qualityFirst.acceptedCanonical.selection.selectionAuthority, 'human-override')
   assert.equal(accepted.qualityFirst.acceptedCanonical.selection.qualityOverride, true)
+  assert.equal(accepted.qualityFirst.acceptedCanonical.selection.actionId, 'canonical')
+  assert.match(accepted.qualityFirst.acceptedCanonical.selection.evidenceSha256, /^[a-f0-9]{64}$/)
   assert.deepEqual(actionCanonicals, ['canonical-4'])
 })
 

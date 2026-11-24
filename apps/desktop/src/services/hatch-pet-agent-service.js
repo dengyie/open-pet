@@ -752,9 +752,10 @@ const createHatchPetAgentService = ({
           configOverride: completionConfig,
           signal
         })
+        const validationOptions = { regions: board?.regions || [], requireScoreEvidence: true }
         const evaluation = String(scope || '').trim() === CANONICAL_COMPARISON_SCOPE
-          ? validateCanonicalComparisonEvaluation(completion.arguments, { regions: board?.regions || [] })
-          : validateSpriteEvaluation(completion.arguments, { scope, regions: board?.regions || [] })
+          ? validateCanonicalComparisonEvaluation(completion.arguments, validationOptions)
+          : validateSpriteEvaluation(completion.arguments, { scope, ...validationOptions })
         const normalizedScope = String(scope || '').trim()
         const hasUnreadableEvaluation = normalizedScope === CANONICAL_COMPARISON_SCOPE
           ? evaluation.candidates.some((candidate) => isBoardUnreadableEvaluation(candidate))

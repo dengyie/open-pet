@@ -11,6 +11,18 @@ const { getQualityFirstQualityProfile } = require('../../examples/plugins/creato
 
 const validDecision = (decision = 'generate-identity') => ({ schemaVersion: 1, decision, scope: {}, reasonCodes: ['ready'], confidence: 0.8 })
 
+const withFixtureScoreEvidence = (completion, request) => {
+  if (request.tool.function.name !== 'hatch_pet_sprite_evaluation' || !completion?.arguments) return completion
+  const withEvidence = (record) => ({
+    ...record,
+    scoreEvidence: record.scoreEvidence === undefined ? Object.fromEntries(Object.keys(record.scores || {}).map(name => [
+      name, { regionId: record.candidateId || 'source', observation: 'Frozen fixture observation' }
+    ])) : record.scoreEvidence
+  })
+  const args = completion.arguments
+  return { ...completion, arguments: args.candidates ? { ...args, candidates: args.candidates.map(withEvidence) } : withEvidence(args) }
+}
+
 const createHarness = ({ enabled = true, configMode = 'follow-chat', requireIdentityReviewBeforeActions = false, completions = [], completeStructuredTool = null, completeStructuredVisionTool = null, secret = 'sk-host-owned', dataDir: suppliedDataDir = '', budgets = {} } = {}) => {
   let settings = { ai: { provider: 'openai-compatible', baseUrl: 'https://chat.test/v1', model: 'chat-model', apiKeyRef: 'ai.default', conversations: { untouched: [{ role: 'user', content: 'keep' }] }, memory: { enabled: true }, behavior: { enabled: true }, hatchPet: { enabled, configMode, provider: 'openai-compatible', baseUrl: 'https://dedicated.test/v1', model: 'planner', apiKeyRef: 'wrong-ref', requireIdentityReviewBeforeActions, budgets } } }
   const calls = []
@@ -19,10 +31,13 @@ const createHarness = ({ enabled = true, configMode = 'follow-chat', requireIden
   const queue = [...completions]
   let secretReads = 0
   const aiService = {
-    completeStructuredTool: async (request) => { calls.push(request); if (completeStructuredTool) return completeStructuredTool(request); const next = queue.shift(); if (next instanceof Error) throw next; return next }
+    completeStructuredTool: async (request) => { calls.push(request); if (completeStructuredTool) return completeStructuredTool(request); const next = queue.shift(); if (next instanceof Error) throw next; return withFixtureScoreEvidence(next, request) }
   }
   if (completeStructuredVisionTool) {
-    aiService.completeStructuredVisionTool = async (request) => { calls.push(request); return completeStructuredVisionTool(request) }
+    aiService.completeStructuredVisionTool = async (request) => {
+      calls.push(request)
+      return withFixtureScoreEvidence(await completeStructuredVisionTool(request), request)
+    }
   }
   const service = createHatchPetAgentService({
     aiService,
