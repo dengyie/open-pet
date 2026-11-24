@@ -373,12 +373,8 @@ const getCustomFramePoses = (action) => Array.isArray(action.framePlan)
   : []
 
 const describeCustomOneShotPlayback = ({ action, frameCount }) => {
-  if (frameCount <= 0 || resolveActionLoop(action) !== false) return ''
-  const poseCount = getCustomFramePoses(action).length
-  if (!poseCount) return ''
-  return poseCount >= frameCount
-    ? 'use each cell description as a visual pose only; hold the last requested pose as the settled ending, without restarting the motion'
-    : 'use each cell description as a visual pose only; finish in the final cell without restarting the motion'
+  if (frameCount <= 0 || resolveActionLoop(action) !== false || !getCustomFramePoses(action).length) return ''
+  return 'use each cell description as a visual pose only; hold the last requested pose as the settled ending, without restarting the motion'
 }
 
 const hasExplicitFacing = (action) => ['viewer-left', 'viewer-right'].includes(action.actionContract?.facing)
@@ -408,15 +404,33 @@ const expandPhases = (phases, count) => {
   })
 }
 
-const expandOneShotCustomPhases = (poses, count, ending) => poses.length >= count
-  ? expandPhases(poses, count)
-  : [...expandPhases(poses, count - 1), ending]
+const groupOneShotCustomPoses = (poses, count) => {
+  const groups = Array.from({ length: count }, () => [])
+  if (poses.length >= count) {
+    return groups.map((_, index) => poses.slice(
+      Math.floor(index * poses.length / count),
+      Math.floor((index + 1) * poses.length / count)
+    ))
+  }
+  poses.forEach((pose, index) => {
+    const cell = poses.length === 1 ? count - 1 : Math.floor(index * (count - 1) / (poses.length - 1))
+    groups[cell].push(pose)
+  })
+  return groups
+}
 
-const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
-  const count = Math.max(1, Number(frameCount) || 1)
+const describeFramePoseGroup = (poses) => `progress through these poses in order and show the last one: ${poses.join('; ')}`
+
+const buildActionFrameBeats = ({ action = {}, frameCount = 6 } = {}) => {
+  const count = Math.max(1, Math.floor(Number(frameCount)) || 1)
   const custom = getCustomFramePoses(action)
-  const animationType = inferAnimationType(action)
   const oneShot = resolveActionLoop(action) === false
+  if (oneShot && custom.length) {
+    return groupOneShotCustomPoses(custom, count).map((poses, index) => poses.length > 1
+      ? { frame: index + 1, poses }
+      : { frame: index + 1, beat: poses[0] || 'controlled in-between pose approaching the next specified pose' })
+  }
+  const animationType = inferAnimationType(action)
   const phaseType = isWorkStateAction(action) ? 'work_state'
     : isIdleAction(action) ? 'idle'
       : isWavingAction(action) ? 'wave'
@@ -429,14 +443,15 @@ const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
     ? 'finish the in-place gait in a settled, supported stopping pose'
     : 'finish the action in a settled pose without restarting the motion'
   const ending = oneShot && loopEnding ? oneShotEnding : loopEnding
-  const beats = oneShot && custom.length
-    ? expandOneShotCustomPhases(custom, count, oneShotEnding)
-    : expandPhases(custom.length >= 2 ? custom : ending ? [...phases, ending] : phases, count)
+  const beats = expandPhases(custom.length >= 2 ? custom : ending ? [...phases, ending] : phases, count)
   if (count > 1 && action.actionContract?.loop && ['pose_transition', 'reaction', 'emote'].includes(animationType)) {
     beats[count - 1] = 'recover toward the first pose in a smooth wraparound transition'
   }
-  return beats.map((description, index) => `Frame ${index + 1}: ${description}.`)
+  return beats.map((beat, index) => ({ frame: index + 1, beat }))
 }
+
+const buildActionFramePlan = (options) => buildActionFrameBeats(options).map(({ frame, beat, poses }) =>
+  `Frame ${frame}: ${poses ? describeFramePoseGroup(poses) : beat}.`)
 
 const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}) => {
   const isStart = /start|first|neutral/i.test(normalizeText(keyframeRole))
@@ -468,8 +483,10 @@ const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}
 module.exports = {
   ACTION_CLASS_BY_ID,
   MOTION_PRESETS,
+  buildActionFrameBeats,
   buildActionFramePlan,
   describeCustomOneShotPlayback,
+  describeFramePoseGroup,
   expandMotionPreset,
   getActionText,
   getMotionPreset,

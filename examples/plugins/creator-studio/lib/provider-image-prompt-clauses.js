@@ -1,4 +1,5 @@
 const { createTaskError, sanitizeVisualDirective } = require('./provider-image-task')
+const { describeFramePoseGroup } = require('./action-semantics')
 
 const CATEGORY_ORDER = Object.freeze([
   'deliverable',
@@ -17,14 +18,14 @@ const categoryRank = (category) => {
   return index === -1 ? CATEGORY_ORDER.length : index
 }
 
-const createClause = ({ id, category, text, source = 'task', scope = 'request', priority = 50 }) => Object.freeze({
+const createClause = ({ id, category, text, source = 'task', scope = 'request', priority = 50, maxLength = 1600 }) => Object.freeze({
   id,
   category,
   source,
   scope,
   priority,
   enabled: true,
-  text: String(text || '').replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1600)
+  text: String(text || '').replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
 })
 
 const isIdleTask = (task) => (
@@ -227,12 +228,14 @@ const createActionClauses = (task) => {
   })]
   if (task.taskType === 'action-frame-sheet') {
     for (const beat of action.frameBeats || []) {
+      const description = beat.poses ? describeFramePoseGroup(beat.poses) : beat.beat
       clauses.push(createClause({
         id: `frame-beat.${beat.frame}`,
         category: 'frame-beat',
         scope: `frame:${beat.frame}`,
         priority: 70,
-        text: `Cell ${beat.frame} (${beat.cell}) — ${String(beat.beat || '').replace(/[.!?]+$/g, '')}.`
+        text: `Cell ${beat.frame} (${beat.cell}) — ${description.replace(/[.!?]+$/g, '')}.`,
+        ...(beat.poses ? { maxLength: Infinity } : {})
       }))
     }
   }

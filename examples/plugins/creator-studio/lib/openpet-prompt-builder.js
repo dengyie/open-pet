@@ -12,6 +12,7 @@ const {
 const { createVisualPlan } = require('./visual-plan')
 const { describeActionFacing, resolveActionLoop } = require('./single-action-contract')
 const {
+  buildActionFrameBeats,
   buildActionFramePlan,
   describeCustomOneShotPlayback,
   inferAnimationType,
@@ -485,7 +486,7 @@ const buildOpenPetImagePrompt = ({
             loopIntent: actionSpec.loop
               ? 'a seamless loop that returns to the starting pose'
               : ['a readable action with a clear ending pose', describeCustomOneShotPlayback({ action, frameCount: actionSheet.frameCount })].filter(Boolean).join('; '),
-            frameBeats: buildActionFramePlan({ action, frameCount: actionSheet.frameCount })
+            frameBeats: buildActionFrameBeats({ action, frameCount: actionSheet.frameCount })
           }
         }
       : {}),

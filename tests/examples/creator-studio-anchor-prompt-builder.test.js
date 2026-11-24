@@ -243,7 +243,8 @@ test('one-shot plans keep custom poses that happen to use loop-related words', (
     }
   })
   assert.match(prompt, new RegExp(pose))
-  assert.match(prompt.split('\n').find((line) => /cell 6\b/i.test(line)), /settled pose without restarting the motion/i)
+  assert.match(prompt.split('\n').find((line) => /cell 6\b/i.test(line)), new RegExp(pose))
+  assert.match(prompt, /hold the last requested pose as the settled ending, without restarting the motion/i)
 })
 
 test('a full custom one-shot plan keeps one pose per cell and settles in its requested last pose', () => {
@@ -256,13 +257,33 @@ test('a full custom one-shot plan keeps one pose per cell and settles in its req
   assert.match(prompt, /hold the last requested pose as the settled ending/i)
 })
 
+test('every custom one-shot pose occurs in exactly one cell, in order, including the final pose', () => {
+  for (let poseCount = 1; poseCount <= 6; poseCount++) {
+    const framePlan = Array.from({ length: poseCount }, (_, index) =>
+      `pose marker ${index + 1} with open eyes, relaxed shoulders, and the front paw in view, end marker ${index + 1}`)
+    for (let frameCount = 1; frameCount <= 6; frameCount++) {
+      const context = `${poseCount} poses, ${frameCount} cells`
+      const { prompt } = buildActionSpriteRowPrompt({
+        action: { name: 'Lift a paw', frameCount, loop: false, framePlan }
+      })
+      const cells = prompt.split('\n').filter((line) => /^cell \d+\b/i.test(line)).map((line) => line.split(' — ')[1])
+      assert.equal(cells.length, frameCount, context)
+      assert.ok(cells.every(Boolean), context)
+      const poses = cells.flatMap((cell) => [...cell.matchAll(/pose marker \d+[^;]+?end marker \d+/g)].map(([pose]) => pose))
+      assert.deepEqual(poses, framePlan, context)
+      assert.ok(cells.at(-1).endsWith(`${framePlan.at(-1)}.`), context)
+      assert.match(prompt, /hold the last requested pose as the settled ending/i, context)
+    }
+  }
+})
+
 test('one-shot playback wording does not consume the custom pose length budget', () => {
   const pose = 'Raise the left paw beside the face, with the wrist bent slightly inward and the elbow relaxed. Keep the shoulders level, the gaze straight ahead, both feet flat on the ground, and the tail lowered. Keep the three paw pads clearly visible'
   assert.ok(pose.length > 220 && pose.length < 240)
   const { prompt } = buildActionSpriteRowPrompt({
     action: { name: 'Lift a paw', frameCount: 4, loop: false, framePlan: ['neutral stance', pose] }
   })
-  const cell = prompt.split('\n').find((line) => /^Cell 3\b/.test(line))
+  const cell = prompt.split('\n').find((line) => /^Cell 4\b/.test(line))
   assert.equal(cell.split(' — ')[1], `${pose}.`)
   assert.match(prompt, /^.*Loop requirement:.*use each cell description as a visual pose only.*without restarting the motion.*$/im)
 })
@@ -279,8 +300,8 @@ test('a custom one-shot gait uses custom text as pose reference, not as playback
   assert.equal(cells.length, 6)
   assert.match(prompt, /^.*Loop requirement:.*use each cell description as a visual pose only.*without restarting the motion.*$/im)
   assert.ok(cells.some((line) => line.includes(pose)))
-  assert.match(cells.at(-1), /supported stopping pose/i)
-  assert.doesNotMatch(cells.at(-1), /start the next stride/i)
+  assert.match(cells.at(-1), new RegExp(pose))
+  assert.match(prompt, /hold the last requested pose as the settled ending/i)
 })
 
 test('idle blink uses the specified facing for its start, peak, and loop return', () => {
