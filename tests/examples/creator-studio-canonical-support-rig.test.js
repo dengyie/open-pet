@@ -400,6 +400,10 @@ test('production host can repair image-sheet quality with an audited rig without
   assert.equal(result.selectedCandidate.provenance.kind, 'canonical-rig')
   assert.equal(calls.filter(route => route === '/creator/model-image-generate').length, 3)
   assert.equal(calls.includes('/creator/model-video-generate'), false)
+  const regenerated = await runtime.runAction({ actionId: 'review', canonical: f.canonical, profile: f.profile })
+  assert.equal(regenerated.ok, true, JSON.stringify(regenerated))
+  assert.equal(regenerated.selectedCandidate.provenance.kind, 'canonical-rig')
+  assert.notEqual(regenerated.selectedCandidate.candidateId, result.selectedCandidate.candidateId)
 })
 
 for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`production host repairs ${actionId} video drift with an audited rig, packages it and resumes without dispatch`, { skip: spawnSync('ffmpeg', ['-version']).status !== 0 || spawnSync('ffprobe', ['-version']).status !== 0 }, async () => {

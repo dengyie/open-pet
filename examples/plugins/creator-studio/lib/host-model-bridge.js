@@ -3596,6 +3596,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
     const runner = await generateSelectedFullPetAction({
       context: {
         actionId,
+        candidateIdPrefix: `image-${crypto.randomUUID()}`,
         provider: String(settings.provider || ''),
         model: String(settings.model || ''),
         duplicateThresholds: { perceptualHashDistance: 4, identityDescriptorDistance: 0.08, alphaMaskDistance: 0.08 }
