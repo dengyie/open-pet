@@ -221,6 +221,17 @@ const removeImportDirectory = (dirPath) => {
   }
 }
 
+const makeStagedPackWritable = (entryPath) => {
+  const stats = fs.lstatSync(entryPath)
+  if (!stats.isDirectory() && !stats.isFile()) return
+  if (!(stats.mode & 0o200)) fs.chmodSync(entryPath, stats.mode | 0o200)
+  if (stats.isDirectory()) {
+    for (const name of fs.readdirSync(entryPath)) {
+      makeStagedPackWritable(path.join(entryPath, name))
+    }
+  }
+}
+
 const writePackManifest = (rootPath, pack) => {
   const manifestPath = path.join(rootPath, 'pet.json')
   const manifest = {
@@ -556,6 +567,7 @@ const createPetPackService = ({
     try {
       fs.cpSync(selection.sourceDir, stagedDir, { recursive: true })
       assertNoSymlinks(stagedDir)
+      makeStagedPackWritable(stagedDir)
       const stagedPack = loadPetPackFromDirectory(stagedDir)
       if (stagedPack.manifest.id !== packId) throw new Error('Pet pack id changed during import')
       validatePackFiles(stagedPack)

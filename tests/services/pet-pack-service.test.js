@@ -344,6 +344,32 @@ test('pet pack service reports deterministic version conflict decisions during i
   assert.equal(nextInspection.pack.conflict.requiresReview, true)
 })
 
+test('pet pack service imports read-only source folders as writable installed packs', {
+  skip: process.platform === 'win32' || process.getuid?.() === 0
+}, (t) => {
+  const root = createTempDir('pet-pack-read-only')
+  const sourceDir = path.join(root, 'source')
+  const userPacksDir = path.join(root, 'installed')
+  const directories = ['', 'sprites']
+  const files = ['pet.json', 'sprites/idle.png', 'sprites/wave.png']
+  createPetPackDirectory(sourceDir)
+  t.after(() => {
+    for (const dir of directories) fs.chmodSync(path.join(sourceDir, dir), 0o755)
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+  for (const file of files) fs.chmodSync(path.join(sourceDir, file), 0o444)
+  for (const dir of directories) fs.chmodSync(path.join(sourceDir, dir), 0o555)
+  const service = createPetPackService({ settingsService: createSettingsService(), userPacksDir })
+  const inspection = service.inspectPackDirectory(sourceDir)
+
+  assert.equal(inspection.valid, true)
+  const { pack } = service.importPack(inspection.selectionId)
+  for (const entry of [...directories, ...files]) {
+    assert.equal(fs.statSync(path.join(pack.rootPath, entry)).mode & 0o200, 0o200, entry)
+    assert.equal(fs.statSync(path.join(sourceDir, entry)).mode & 0o200, 0, entry)
+  }
+})
+
 test('pet pack service leaves an active pack untouched if staging its upgrade fails', (t) => {
   const firstSource = createTempDir('pet-pack-rollback-first')
   const nextSource = createTempDir('pet-pack-rollback-next')
