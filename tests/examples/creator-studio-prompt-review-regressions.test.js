@@ -64,6 +64,19 @@ test('specific motion wins over a generic expression label', () => {
   assert.equal(toProviderAction({ motionPrompt: 'An expressive emote' }).name, 'Emote')
 })
 
+test('eye rolls and whole-body rolls remain distinct in English and Chinese', () => {
+  for (const motionPrompt of ['Roll its eyes', 'An eye roll', '翻白眼']) {
+    const action = toProviderAction({ motionPrompt })
+    assert.equal(action.name, 'Eye roll')
+    assert.deepEqual(action.animatedParts, ['visible eyes'])
+  }
+  for (const motionPrompt of ['Roll over', '原地打滚']) {
+    const action = toProviderAction({ motionPrompt })
+    assert.equal(action.name, 'Roll in place')
+    assert.deepEqual(action.animatedParts, ['whole-body roll'])
+  }
+})
+
 test('unknown image models use the conservative opaque cutout capability profile', () => {
   const profile = resolveImageModelCapabilities('grok-imagine-image')
 
