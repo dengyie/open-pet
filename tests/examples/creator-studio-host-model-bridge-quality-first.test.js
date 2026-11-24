@@ -185,6 +185,19 @@ test('failed canonical candidates preserve Provider, model, and exact transport 
   assert.deepEqual(candidate.modelAttempts, error.modelAttempts)
 })
 
+test('canonical dispatch stops and retains the actual failure code after a non-retryable Provider error', async () => {
+  const persisted = []
+  const pool = await generateCanonicalCandidatePool({
+    generateCandidate: async ({ candidateId }) => hostModelBridgeModule.__testInternals.createFailedCanonicalCandidate({
+      candidateId, error: Object.assign(new Error('Provider credentials rejected'), { code: 'provider_auth_failed', retryable: false })
+    }),
+    persistCandidate: (candidate) => persisted.push(candidate)
+  })
+  assert.equal(pool.dispatchCount, 1)
+  assert.equal(pool.generationFailureCode, 'provider_auth_failed')
+  assert.deepEqual(persisted, pool.candidates)
+})
+
 test('identity-safe canonical replacement requests visible neutral variation without weakening identity locks', () => {
   assert.equal(typeof hostModelBridgeModule.__testInternals.createCanonicalRequestedChanges, 'function')
   const requestedChanges = hostModelBridgeModule.__testInternals.createCanonicalRequestedChanges('identity-safe-alternate-neutral-v1')
@@ -624,7 +637,7 @@ test('quality-first host runtime reuses a five-way-bound action checkpoint witho
     })
     const failed = await corruptedRuntime.runAction({ actionId: 'idle', canonical })
     assert.equal(failed.ok, false)
-    assert.equal(failed.failureCode, 'action_quality_gate_failed')
+    assert.equal(failed.failureCode, 'provider-generation-failed')
     assert.equal(failed.diversityStatus, 'degraded')
     assert.deepEqual(failed.warningCodes, ['action_candidate_diversity_insufficient'])
   } finally {

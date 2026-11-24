@@ -1,7 +1,7 @@
 const { callBridge } = require('./bridge-client')
 const { appendRunLog } = require('./run-store')
 const { FULL_PET_WORKFLOW_MAX_DURATION_MS } = require('./full-pet-workflow-contract')
-const { areSpriteCandidatesDuplicates, isHatchPetBudgetError, runQualityFirstAction } = require('./quality-first-action-runner')
+const { areSpriteCandidatesDuplicates, executionFailureCode, isHatchPetBudgetError, isRetryableGenerationError, runQualityFirstAction } = require('./quality-first-action-runner')
 const { createMotionDriver } = require('./motion-driver-registry')
 const { archiveCandidateRevision, writeCandidateRecord } = require('./sprite-candidate-store')
 const { createQualityFirstFullPetOrchestrator } = require('./quality-first-full-pet-orchestrator')
@@ -9,7 +9,7 @@ const { createProviderImageTask } = require('./provider-image-task')
 const { createVideoCandidateArtifacts, isVideoTechnicalFailure, runVideoAction } = require('./video-action-runner')
 const { isGrokVideoModel } = require('./video-provider-capabilities')
 const { renderCanonicalSupportRig, validateCanonicalRigRow, restoreCanonicalRigCandidate, exportCanonicalRigEvidence } = require('./canonical-support-rig')
-const { createActionCandidateRenderer } = require('./action-candidate-renderer')
+const { createActionCandidateRenderer, shouldUseCanonicalRig } = require('./action-candidate-renderer')
 const { compileProviderImagePrompt } = require('./provider-image-prompt-compiler')
 const { createSpriteAssetPlan } = require('./sprite-asset-plan')
 const { createCharacterAnchorGrid } = require('./character-anchor-grid')
@@ -2999,9 +2999,7 @@ const createFailedCanonicalCandidate = ({
   traceContext
 } = {}) => {
   const modelAttempts = Array.isArray(error?.modelAttempts) ? error.modelAttempts.slice(0, 16) : []
-  const failureCode = String(error?.code || 'canonical-generation-failed')
-    .replace(/[^A-Za-z0-9:_-]/g, '_')
-    .slice(0, 120)
+  const failureCode = executionFailureCode(error, 'canonical-generation-failed')
   const model = String(modelAttempts.at(-1)?.model || settings.model || '')
   return {
     candidateId,
@@ -3018,6 +3016,8 @@ const createFailedCanonicalCandidate = ({
     traceContext,
     modelAttempts,
     technicalFailureCodes: [failureCode],
+    generationFailureCode: failureCode,
+    generationRetryable: isRetryableGenerationError(error),
     qualityWarningCodes: [],
     failureCodes: [failureCode]
   }
@@ -3031,6 +3031,7 @@ const generateCanonicalCandidatePool = async ({
   if (typeof generateCandidate !== 'function') throw new Error('Canonical candidate pool requires a generation callback')
   const candidates = []
   const distinctCandidates = []
+  let generationFailureCode = ''
   const limit = Math.min(4, Math.max(3, Number(maxDispatches) || 4))
   for (let dispatchIndex = 1; dispatchIndex <= limit && distinctCandidates.length < 3; dispatchIndex += 1) {
     const diversityProfileId = CANONICAL_DIVERSITY_PROFILES[Math.min(dispatchIndex - 1, CANONICAL_DIVERSITY_PROFILES.length - 1)]
@@ -3078,8 +3079,19 @@ const generateCanonicalCandidatePool = async ({
     candidates.push(candidate)
     if (candidate.technicalEligible && !duplicate && sha256) distinctCandidates.push(candidate)
     await persistCandidate(candidate)
+    if (candidate.generationFailureCode) {
+      const shouldStop = Boolean(generationFailureCode) || !candidate.generationRetryable
+      generationFailureCode = candidate.generationFailureCode
+      if (shouldStop) break
+    }
   }
-  return { version: 1, dispatchCount: candidates.length, distinctEligibleCount: distinctCandidates.length, candidates }
+  return {
+    version: 1,
+    dispatchCount: candidates.length,
+    distinctEligibleCount: distinctCandidates.length,
+    candidates,
+    ...(generationFailureCode ? { generationFailureCode } : {})
+  }
 }
 
 const evaluateCanonicalCandidatePool = async ({
@@ -3191,7 +3203,9 @@ const createVideoStartReferenceResolver = ({ dataDir, run, settings, action, can
     }).then((result) => {
       if (!result.ok || !result.referenceImage || !result.keyframe?.sha256) {
         throw Object.assign(new Error('Running video requires a quality-approved action start frame'), {
-          code: 'video_start_frame_rejected', modelAttempts: result.modelAttempts || []
+          code: result.modelAttempts?.at(-1)?.errorCode || 'video_start_frame_rejected',
+          startFrameRejected: true,
+          modelAttempts: result.modelAttempts || []
         })
       }
       return { ...result.referenceImage, sha256: result.keyframe.sha256 }
@@ -3382,11 +3396,11 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       persistCandidate: persistCanonicalCandidate
     })
   }
-  const runAction = async ({ actionId, canonical, profile }) => {
+  const runAction = async ({ actionId, canonical, profile, reuseCheckpoint = true }) => {
     const action = plan.actions.find((entry) => entry.actionId === actionId)
     if (!action) return { ok: false, actionId, disposition: 'omitted', failureCode: 'action_not_in_plan', candidates: [] }
     const actionProfile = profile || readPersistedScaleProfile()
-    let reusable = resolveReusableActionResult({
+    let reusable = reuseCheckpoint ? resolveReusableActionResult({
       dataDir,
       runId: run.runId,
       actionId,
@@ -3396,7 +3410,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       processorVersion: processorVersionForAction(actionId),
       qualityProfileHash: qualityProfile.hash,
       requireBindings: true
-    })
+    }) : null
     if (reusable?.row?.quality === 'approved-rig') {
       try {
         await validateCanonicalRigRow({ dataDir, provenance: reusable.row.provenance, frames: reusable.row.frames, actionId, canonicalSha256: canonical.sha256 })
@@ -3433,8 +3447,60 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       }
     }
     const canonicalPath = path.join(dataDir, canonical.relativePath)
+    const resolveStartReference = createVideoStartReferenceResolver({ dataDir, run, settings, action, canonical })
+    const generateRig = async ({ candidateId }) => {
+      const poseReference = actionId === 'running-right' ? await resolveStartReference() : null
+      const rig = await renderCanonicalSupportRig({
+        dataDir, canonical, poseReference, action, characterClass: plan.character.assetClass,
+        profile: actionProfile,
+        outputRelativeDir: `runs/${run.runId}/candidates/${actionId}/${candidateId}/rig`
+      })
+      const processed = rig.processed
+      return {
+        candidateId,
+        strategyId: 'canonical-support-rig-v1',
+        provenance: rig.provenance,
+        provider: 'canonical-rig',
+        model: rig.provenance.renderer,
+        requestId: '',
+        traceContext: { runId: run.runId, actionId, stage: 'action-rig-candidate', candidateId },
+        sha256: processed.rawSheet.sha256,
+        rawPath: processed.rawSheet.path,
+        descriptors: await createSpriteImageDescriptors({ imagePath: processed.processedSheet.path }),
+        outputDir: path.dirname(processed.processedSheet.path),
+        processed,
+        videoTemporalQuality: rig.temporalQuality,
+        artifacts: [
+          { role: 'rig-manifest', path: rig.manifestPath, sha256: rig.provenance.manifest.sha256 },
+          { role: 'rig-source', path: canonicalPath, sha256: canonical.sha256 },
+          ...(rig.poseReference ? [{ role: 'rig-pose-source', path: path.join(dataDir, rig.poseReference.relativePath), sha256: rig.poseReference.sha256 }] : []),
+          { role: 'raw-sheet', path: processed.rawSheet.path, sha256: processed.rawSheet.sha256 },
+          { role: 'processed-sheet', path: processed.processedSheet.path, sha256: processed.processedSheet.sha256 },
+          { role: 'contact-sheet', path: processed.contactSheet.path, sha256: processed.contactSheet.sha256 },
+          { role: 'gif', path: processed.gif.path, sha256: processed.gif.sha256 }
+        ]
+      }
+    }
+    const processMotionCandidate = async (candidate) => {
+      const temporal = candidate.videoTemporalQuality || {}
+      const spriteQa = analyzeSpriteCandidate({ actionId, rawMetrics: candidate.processed.metrics, profile: actionProfile, actionPolicy: action })
+      const failures = [...new Set([...(spriteQa.failures || []), ...(Array.isArray(temporal.failures) ? temporal.failures : [])])]
+      const technicalFailureCodes = failures.filter(isVideoTechnicalFailure)
+      return {
+        ...candidate,
+        technicalEligible: technicalFailureCodes.length === 0,
+        technicalFailureCodes,
+        qa: { ...spriteQa, ok: failures.length === 0, failures, temporalQuality: temporal }
+      }
+    }
+    const renderCandidate = (generateCreative) => createActionCandidateRenderer({
+      action,
+      characterClass: plan.character.assetClass,
+      generateVideo: generateCreative,
+      generateRig
+    })
     if (useVideoActionPipeline) {
-      const resolveStartReference = createVideoStartReferenceResolver({ dataDir, run, settings, action, canonical })
+      const startFrame = await resolveStartReference()
       const runner = await generateSelectedFullPetAction({
         context: {
           actionId,
@@ -3445,105 +3511,56 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
         },
         existingCandidates: [],
         reserveCreativeDispatch: async () => {},
-        generateCandidate: createActionCandidateRenderer({
-          action,
-          characterClass: plan.character.assetClass,
-          generateRig: async ({ candidateId }) => {
-            const poseReference = actionId === 'running-right' ? await resolveStartReference() : null
-            const rig = await renderCanonicalSupportRig({
-              dataDir, canonical, poseReference, action, characterClass: plan.character.assetClass,
-              profile: actionProfile,
-              outputRelativeDir: `runs/${run.runId}/candidates/${actionId}/${candidateId}/rig`
-            })
-            const processed = rig.processed
-            return {
-              candidateId,
-              strategyId: 'canonical-support-rig-v1',
-              provenance: rig.provenance,
-              provider: 'canonical-rig',
-              model: rig.provenance.renderer,
-              requestId: '',
-              traceContext: { runId: run.runId, actionId, stage: 'action-rig-candidate', candidateId },
-              sha256: processed.rawSheet.sha256,
-              rawPath: processed.rawSheet.path,
-              descriptors: await createSpriteImageDescriptors({ imagePath: processed.processedSheet.path }),
-              outputDir: path.dirname(processed.processedSheet.path),
-              processed,
-              videoTemporalQuality: rig.temporalQuality,
-              artifacts: [
-                { role: 'rig-manifest', path: rig.manifestPath, sha256: rig.provenance.manifest.sha256 },
-                { role: 'rig-source', path: canonicalPath, sha256: canonical.sha256 },
-                ...(rig.poseReference ? [{ role: 'rig-pose-source', path: path.join(dataDir, rig.poseReference.relativePath), sha256: rig.poseReference.sha256 }] : []),
-                { role: 'raw-sheet', path: processed.rawSheet.path, sha256: processed.rawSheet.sha256 },
-                { role: 'processed-sheet', path: processed.processedSheet.path, sha256: processed.processedSheet.sha256 },
-                { role: 'contact-sheet', path: processed.contactSheet.path, sha256: processed.contactSheet.sha256 },
-                { role: 'gif', path: processed.gif.path, sha256: processed.gif.sha256 }
-              ]
-            }
-          },
-          generateVideo: async ({ candidateId, attemptKind, failureCodes }) => {
-            const videoResult = await runVideoAction({
-              dataDir,
-              run,
-              action,
-              canonical,
-              startFrame: await resolveStartReference(),
-              model: videoModel,
-              scaleProfile: actionProfile,
-              attemptKind,
-              failureCodes,
-              outputRelativeDir: `runs/${run.runId}/candidates/${actionId}/${candidateId}/video`
-            })
-            const processed = await createVideoCandidateArtifacts({
-              processed: videoResult.processed,
-              outputDir: path.join(dataDir, `runs/${run.runId}/candidates/${actionId}/${candidateId}/processed`),
-              layout: action.layout,
-              expectedFrameCount: action.frameCount,
-              characterClass: plan.character.assetClass
-            })
-            const descriptors = await createSpriteImageDescriptors({ imagePath: processed.processedSheet.path })
-            const rawVideoPath = path.resolve(dataDir, videoResult.rawVideo.relativePath)
-            return {
-              candidateId,
-              strategyId: `video-${videoModel}`,
-              rawPath: processed.rawSheet.path,
-              rawVideoPath,
-              promptRelativePath: '',
-              provider: 'mango-api',
-              model: videoModel,
-              requestId: String(videoResult.rawVideo.taskId || ''),
-              traceContext: { runId: run.runId, actionId, stage: 'action-video-candidate', candidateId },
-              sha256: processed.rawSheet.sha256,
-              descriptors,
-              actionPolicy: { anchorPolicy: action.anchorPolicy },
-              outputDir: path.join(dataDir, `runs/${run.runId}/candidates/${actionId}/${candidateId}/processed`),
-              processed,
-              videoTemporalQuality: videoResult.temporalQuality,
-              videoRawTemporalQuality: videoResult.rawTemporalQuality,
-              artifacts: [
-                { role: 'video-first-frame', path: path.join(dataDir, videoResult.providerReference.relativePath), sha256: videoResult.providerReference.sha256 },
-                { role: 'raw-video', path: rawVideoPath, sha256: String(videoResult.rawVideo.sha256 || sha256File(rawVideoPath)) },
-                { role: 'raw-sheet', path: processed.rawSheet.path, sha256: processed.rawSheet.sha256 },
-                { role: 'processed-sheet', path: processed.processedSheet.path, sha256: processed.processedSheet.sha256 },
-                { role: 'contact-sheet', path: processed.contactSheet.path, sha256: processed.contactSheet.sha256 },
-                { role: 'gif', path: processed.gif.path, sha256: processed.gif.sha256 }
-              ]
-            }
+        generateCandidate: renderCandidate(async ({ candidateId, attemptKind, failureCodes }) => {
+          const videoResult = await runVideoAction({
+            dataDir,
+            run,
+            action,
+            canonical,
+            startFrame,
+            model: videoModel,
+            scaleProfile: actionProfile,
+            attemptKind,
+            failureCodes,
+            outputRelativeDir: `runs/${run.runId}/candidates/${actionId}/${candidateId}/video`
+          })
+          const processed = await createVideoCandidateArtifacts({
+            processed: videoResult.processed,
+            outputDir: path.join(dataDir, `runs/${run.runId}/candidates/${actionId}/${candidateId}/processed`),
+            layout: action.layout,
+            expectedFrameCount: action.frameCount,
+            characterClass: plan.character.assetClass
+          })
+          const descriptors = await createSpriteImageDescriptors({ imagePath: processed.processedSheet.path })
+          const rawVideoPath = path.resolve(dataDir, videoResult.rawVideo.relativePath)
+          return {
+            candidateId,
+            strategyId: `video-${videoModel}`,
+            rawPath: processed.rawSheet.path,
+            rawVideoPath,
+            promptRelativePath: '',
+            provider: 'mango-api',
+            model: videoModel,
+            requestId: String(videoResult.rawVideo.taskId || ''),
+            traceContext: { runId: run.runId, actionId, stage: 'action-video-candidate', candidateId },
+            sha256: processed.rawSheet.sha256,
+            descriptors,
+            actionPolicy: { anchorPolicy: action.anchorPolicy },
+            outputDir: path.join(dataDir, `runs/${run.runId}/candidates/${actionId}/${candidateId}/processed`),
+            processed,
+            videoTemporalQuality: videoResult.temporalQuality,
+            videoRawTemporalQuality: videoResult.rawTemporalQuality,
+            artifacts: [
+              { role: 'video-first-frame', path: path.join(dataDir, videoResult.providerReference.relativePath), sha256: videoResult.providerReference.sha256 },
+              { role: 'raw-video', path: rawVideoPath, sha256: String(videoResult.rawVideo.sha256 || sha256File(rawVideoPath)) },
+              { role: 'raw-sheet', path: processed.rawSheet.path, sha256: processed.rawSheet.sha256 },
+              { role: 'processed-sheet', path: processed.processedSheet.path, sha256: processed.processedSheet.sha256 },
+              { role: 'contact-sheet', path: processed.contactSheet.path, sha256: processed.contactSheet.sha256 },
+              { role: 'gif', path: processed.gif.path, sha256: processed.gif.sha256 }
+            ]
           }
         }),
-        processCandidate: async (candidate) => {
-          const temporal = candidate.videoTemporalQuality || {}
-          const spriteQa = analyzeSpriteCandidate({ actionId, rawMetrics: candidate.processed.metrics, profile: actionProfile, actionPolicy: action })
-          const failures = [...new Set([...(spriteQa.failures || []), ...(Array.isArray(temporal.failures) ? temporal.failures : [])])]
-          const technicalFailureCodes = failures.filter(isVideoTechnicalFailure)
-          return {
-            ...candidate,
-            technicalEligible: technicalFailureCodes.length === 0,
-            technicalFailureCodes,
-            qa: { ...spriteQa, ok: failures.length === 0, failures, temporalQuality: temporal },
-            processed: candidate.processed
-          }
-        },
+        processCandidate: processMotionCandidate,
         evaluateCandidate: (candidate) => evaluateQualityFirstActionCandidate({ dataDir, runId: run.runId, actionId, action, sourcePath: sourceReference.path, canonicalPath, candidate }),
         persistCandidate: async (candidate) => {
           const record = writeCandidateRecord({
@@ -3582,13 +3599,19 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
     const runner = await generateSelectedFullPetAction({
       context: {
         actionId,
+        candidateIdPrefix: `image-${crypto.randomUUID()}`,
         provider: String(settings.provider || ''),
         model: String(settings.model || ''),
         duplicateThresholds: { perceptualHashDistance: 4, identityDescriptorDistance: 0.08, alphaMaskDistance: 0.08 }
       },
       existingCandidates: retainedCandidates,
       reserveCreativeDispatch: async () => {},
-      generateCandidate: async ({ candidateId, attemptKind, dispatchIndex, failureCodes }) => {
+      prepareRepair: async (request) => {
+        if (actionId === 'running-right' && shouldUseCanonicalRig({ ...request, characterClass: plan.character.assetClass })) {
+          await resolveStartReference()
+        }
+      },
+      generateCandidate: renderCandidate(async ({ candidateId, attemptKind, dispatchIndex, failureCodes }) => {
         const task = createQualityFirstActionCandidateTask({
           action: { ...action, actionId },
           attemptKind,
@@ -3609,8 +3632,9 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
         const rawPath = path.join(dataDir, output.dataRelativePath)
         const outputDir = path.join(dataDir, `runs/${run.runId}/candidates/${actionId}/${candidateId}/processed`)
         return { candidateId, strategyId: task.strategyId, rawPath, promptRelativePath, provider: generated.response?.provider || settings.provider, model: generated.selectedModel, requestId: generated.response?.result?.requestId || generated.attempts?.at(-1)?.requestId || '', traceContext: generated.response?.result?.traceContext || { runId: run.runId, actionId, stage: 'action-candidate', candidateId }, modelAttempts: generated.attempts, sha256: sha256File(rawPath), descriptors: await createSpriteImageDescriptors({ imagePath: rawPath }), actionPolicy: { anchorPolicy: action.anchorPolicy }, outputDir }
-      },
+      }),
       processCandidate: async (candidate) => {
+        if (candidate.provenance?.kind === 'canonical-rig') return processMotionCandidate(candidate)
         const processed = await processSpriteSheet({ inputPath: candidate.rawPath, outputDir: candidate.outputDir, layout: action.layout, profile: actionProfile, actionPolicy: { ...action, actionId } })
         const qa = analyzeSpriteCandidate({ actionId, rawMetrics: processed.metrics, profile: actionProfile, actionPolicy: action })
         return { ...candidate, processed, qa, artifacts: [{ role: 'raw-sheet', path: candidate.rawPath, sha256: candidate.sha256 }, { role: 'processed-sheet', path: processed.processedSheet.path, sha256: processed.processedSheet.sha256 }, { role: 'contact-sheet', path: processed.contactSheet.path, sha256: processed.contactSheet.sha256 }, { role: 'gif', path: processed.gif.path, sha256: processed.gif.sha256 }] }
@@ -3799,21 +3823,33 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
     }
     return writeActionCheckpoint({ dataDir, runId: run.runId, result: checkpointResult })
   }
-  const finalizePackage = async ({ canonical, actionResults = {} }) => {
+  const finalizePackage = async ({ canonical, profile, actionResults = {} }) => {
     const checkpoints = readActionCheckpoints({ dataDir, runId: run.runId })
-    const officialRows = Object.values(checkpoints.actions || {})
-      .filter((entry) => entry?.ok === true && entry.row?.frames?.length)
-      .map((entry) => ({
+    const completedActionIds = Object.keys(actionResults).length
+      ? Object.keys(actionResults).filter((actionId) => actionResults[actionId]?.ok === true)
+      : Object.keys(checkpoints.actions || {}).filter((actionId) => checkpoints.actions[actionId]?.ok === true)
+    const officialRows = completedActionIds.map((actionId) => {
+      const entry = resolveReusableActionResult({
+        dataDir, runId: run.runId, actionId,
+        planHash: plan.hash, canonicalHash: canonical?.sha256, profileHash: profile?.hash,
+        processorVersion: actionResults[actionId]?.processorVersion ?? processorVersionForAction(actionId),
+        qualityProfileHash: qualityProfile.hash, requireBindings: true
+      })
+      if (!entry?.row?.frames?.length) {
+        throw Object.assign(new Error(`Invalid package checkpoint for ${actionId}`), { code: 'action_checkpoint_invalid' })
+      }
+      return {
         actionId: entry.actionId,
         quality: entry.row.quality,
         ...(entry.row.provenance ? { provenance: entry.row.provenance } : {}),
         sourceRelativePath: entry.row.frames[0].relativePath,
         frames: entry.row.frames.map((frame) => ({
-          path: path.resolve(dataDir, frame.relativePath),
+          path: frame.path,
           index: frame.frameIndex,
           durationMs: frame.durationMs
         }))
-      }))
+      }
+    })
     if (!officialRows.some((row) => row.actionId === 'idle')) return null
     const atlasGenerationResult = {
       outputs: [{ dataRelativePath: canonical.relativePath }]

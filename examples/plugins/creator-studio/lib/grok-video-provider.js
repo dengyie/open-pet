@@ -263,7 +263,7 @@ const createGrokVideoProvider = ({ baseUrl, apiKey, fetchImpl = globalThis.fetch
           return await read()
         } catch (error) {
           throwIfAborted(signal)
-          if (attempt === 0 && error.retryable === true && !signal?.aborted) {
+          if (attempt === 0 && (error.retryable === true || error.code === 'video_provider_rate_limited') && !signal?.aborted) {
             await sleepImpl(normalizedPollInterval, signal)
             throwIfAborted(signal)
             continue

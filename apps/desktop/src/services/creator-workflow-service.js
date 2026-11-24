@@ -2011,12 +2011,14 @@ const createWorkflowProgressView = ({
   const runningAction = actions.find((action) => action.status === 'running')
 
   let summary = ''
-  if (qualityFirst?.phase === 'awaiting_identity_review') {
+  if (qualityFirst?.phase === 'planning-failed') {
+    summary = `动作规划失败（${qualityFirst.failureCode}）；可在恢复规划服务后重试生成`
+  } else if (qualityFirst?.phase === 'awaiting_identity_review') {
     summary = `等待人工确认 canonical identity（${qualityFirst.eligibleCandidateCount}/${qualityFirst.candidateCount} 个候选可用）`
   } else if (qualityFirst?.phase === 'identity-generation-failed') {
     summary = failureReason || '身份候选生成失败：没有候选通过完整质量门，全部付费资产已保留'
   } else if (qualityFirst?.phase === 'recovery-required') {
-    summary = 'idle 未通过质量门，已保留资产并生成恢复包；请导出恢复包或重新生成身份'
+    summary = '无法安全完成打包，已保留资产并生成恢复包；请导出恢复包或重新生成身份'
   } else if (failureReason && runStatus === 'failed') {
     const failedList = failedActions
       .slice(0, 4)
@@ -2058,13 +2060,15 @@ const createWorkflowProgressView = ({
 
   return {
     phase: qualityFirst?.phase || normalizeText(activeStage?.id) || 'generate',
-    phaseLabel: qualityFirst?.phase === 'awaiting_identity_review'
-      ? '身份候选审查'
-      : qualityFirst?.phase === 'identity-generation-failed'
-        ? '身份候选生成失败'
-        : qualityFirst?.phase === 'recovery-required'
-          ? '资产恢复'
-          : normalizeText(activeStage?.label) || '生成资源',
+    phaseLabel: qualityFirst?.phase === 'planning' || qualityFirst?.phase === 'planning-failed'
+      ? '动作规划'
+      : qualityFirst?.phase === 'awaiting_identity_review'
+        ? '身份候选审查'
+        : qualityFirst?.phase === 'identity-generation-failed'
+          ? '身份候选生成失败'
+          : qualityFirst?.phase === 'recovery-required'
+            ? '资产恢复'
+            : normalizeText(activeStage?.label) || '生成资源',
     summary: sanitizeProgressReason(summary) || '生成进度更新中',
     stages,
     actions,

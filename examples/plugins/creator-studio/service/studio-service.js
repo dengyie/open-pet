@@ -294,7 +294,8 @@ const createPublicRecovery = ({ dataDir, run }) => {
     ? generatedImage.conditioning
     : null
   const outputCount = Array.isArray(generatedImage.outputs) ? generatedImage.outputs.length : 0
-  const canRetryGeneration = run.status === 'failed' && run.taskStatus === 'confirmed' && run.currentStep === 'generate'
+  const canRetryGeneration = run.status === 'failed' && run.taskStatus === 'confirmed' &&
+    (run.currentStep === 'generate' || run.qualityFirst?.phase === 'planning-failed')
   const isFullPet = run.generationTask?.mode === 'full-pet'
   const failureReason = createPublicText({ dataDir, value: run.error || backendStatus.message || '' })
   const classified = classifyRecoveryFailure(failureReason)

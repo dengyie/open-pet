@@ -23,6 +23,7 @@ const { buildRealAtlasFromGeneratedImage } = require('./real-atlas-builder')
 const { loadPetGenerationGovernance } = require('./pet-generation-governance')
 const { getQualityFirstQualityProfile } = require('./pet-generation-quality-profile')
 const { FIXTURE_BACKEND, PROVIDER_BACKEND, normalizeCreatorBackend } = require('./backend-mode')
+const { executionFailureCode } = require('./quality-first-action-runner')
 const { GENERATED_FULL_PET_ACTION_IDS } = require('./full-pet-basic-actions')
 const { OFFICIAL_FULL_PET_ACTION_IDS } = require('./full-pet-row-contract')
 const {
@@ -462,27 +463,48 @@ const runQualityFirstIdentityStage = async ({
   sourceReference = null,
   actions = [],
   requireIdentityReviewBeforeActions = false,
+  prepareRuntime,
   now = () => new Date().toISOString()
 } = {}) => {
-  if (!orchestrator?.start) throw new Error('Quality-first identity stage requires an orchestrator')
+  if (!orchestrator?.start && typeof prepareRuntime !== 'function') throw new Error('Quality-first identity stage requires an orchestrator')
   const run = readRun({ dataDir, runId })
   assertTaskReadyForGeneration(run)
   if (run.generationTask?.mode !== 'full-pet') throw new Error('Quality-first identity stage requires a full-pet run')
   const startedAt = now()
   const lease = createGenerationLease({ commandId: 'quality-first-identity', startedAt, leaseId: `${runId}-quality-first-identity-${startedAt}` })
-  const generatingRun = {
+  let planning = typeof prepareRuntime === 'function'
+  let generatingRun = {
     ...run,
     status: 'generating',
-    currentStep: 'canonical-candidates',
+    currentStep: planning ? 'sprite-plan' : 'canonical-candidates',
     updatedAt: startedAt,
     generationLease: lease,
-    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: 'Generating canonical identity candidates', updatedAt: startedAt }),
+    ...(planning ? { qualityFirst: { version: 1, phase: 'planning', nextAction: 'plan-sprites' } } : {}),
+    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: planning ? 'Preparing the sprite generation plan' : 'Generating canonical identity candidates', updatedAt: startedAt }),
     error: ''
   }
   writeRun({ dataDir, run: generatingRun })
-  appendRunLog({ dataDir, runId, event: 'quality-first.identity.started', message: 'Canonical identity candidate generation started', now: () => startedAt })
   const stopLeaseHeartbeat = createGenerationLeaseHeartbeat({ dataDir, runId, leaseId: lease.leaseId, now })
   try {
+    if (planning) {
+      appendDiagnosticRunLog({ dataDir, runId, event: 'quality-first.planning.started', message: 'Sprite generation planning started', now })
+      const runtime = await prepareRuntime(generatingRun)
+      orchestrator = runtime.orchestrator
+      plan = runtime.plan
+      sourceReference = runtime.sourceReference
+      requireIdentityReviewBeforeActions = runtime.requireIdentityReviewBeforeActions
+      const plannedAt = now()
+      generatingRun = {
+        ...readRun({ dataDir, runId }),
+        currentStep: 'canonical-candidates',
+        updatedAt: plannedAt,
+        backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: 'Generating canonical identity candidates', updatedAt: plannedAt })
+      }
+      writeRun({ dataDir, run: generatingRun })
+      planning = false
+      appendDiagnosticRunLog({ dataDir, runId, event: 'quality-first.planning.completed', message: 'Sprite generation plan prepared', now })
+    }
+    appendRunLog({ dataDir, runId, event: 'quality-first.identity.started', message: 'Canonical identity candidate generation started', now })
     const requestedActions = Array.isArray(actions) && actions.length
       ? actions
       : (Array.isArray(plan?.actions) ? plan.actions.map((action) => action?.actionId).filter(Boolean) : [])
@@ -529,19 +551,20 @@ const runQualityFirstIdentityStage = async ({
   } catch (error) {
     const latestRun = readRun({ dataDir, runId })
     const identityWasSelected = Boolean(latestRun?.qualityFirst?.acceptedCanonical) || ['generating-idle', 'generating-actions', 'ready_for_review', 'recovery-required'].includes(String(latestRun?.qualityFirst?.phase || ''))
+    const failureCode = String(error?.code || (planning ? 'sprite_planning_failed' : identityWasSelected ? 'action_generation_error' : 'identity_generation_error')).replace(/[^A-Za-z0-9:_-]/g, '_').slice(0, 120)
     appendDiagnosticRunLog({
       dataDir,
       runId,
       level: 'error',
-      event: identityWasSelected ? 'quality-first.actions.failed' : 'quality-first.identity.failed',
-      message: identityWasSelected ? 'Quality-first action generation failed' : 'Canonical identity candidate generation failed',
-      data: { failureCode: String(error?.code || (identityWasSelected ? 'action_generation_error' : 'identity_generation_error')).replace(/[^A-Za-z0-9:_-]/g, '_').slice(0, 120) },
+      event: planning ? 'quality-first.planning.failed' : identityWasSelected ? 'quality-first.actions.failed' : 'quality-first.identity.failed',
+      message: planning ? 'Sprite generation planning failed' : identityWasSelected ? 'Quality-first action generation failed' : 'Canonical identity candidate generation failed',
+      data: { failureCode },
       now
     })
-    const canonicalPool = error?.code === 'canonical_identity_candidates_unusable' && Array.isArray(error?.canonicalPool?.candidates)
+    const canonicalPool = Array.isArray(error?.canonicalPool?.candidates)
       ? error.canonicalPool
       : null
-    updateRunStatus({
+    const failedRun = updateRunStatus({
       dataDir,
       runId,
       status: 'failed',
@@ -549,6 +572,7 @@ const runQualityFirstIdentityStage = async ({
         generationLease: undefined,
         error: error.message,
         backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'failed', message: error.message, updatedAt: now() }),
+        ...(planning ? { qualityFirst: { version: 1, phase: 'planning-failed', failureCode, nextAction: 'retry-generation' } } : {}),
         ...(canonicalPool
           ? {
               qualityFirst: {
@@ -561,7 +585,7 @@ const runQualityFirstIdentityStage = async ({
                 dispatchCount: Math.max(0, Math.min(4, Number(canonicalPool.dispatchCount) || canonicalPool.candidates.length)),
                 passingCandidateCount: Math.max(0, Number(canonicalPool.passingCandidateCount) || 0),
                 requireIdentityReviewBeforeActions: requireIdentityReviewBeforeActions === true,
-                failureCode: 'canonical_identity_candidates_unusable',
+                failureCode,
                 nextAction: 'retry-identity'
               }
             }
@@ -569,6 +593,7 @@ const runQualityFirstIdentityStage = async ({
       },
       now
     })
+    if (planning && error && typeof error === 'object') error.run = failedRun
     throw error
   } finally {
     stopLeaseHeartbeat()
@@ -1121,11 +1146,9 @@ const runQualityFirstActionRepair = async ({
   // stale checkpoints still fall through to normal generation.
   const unreportedCheckpoint = run.qualityFirst?.actionResults?.[normalizedActionId]?.ok !== true &&
     readActionCheckpoints({ dataDir, runId }).actions?.[normalizedActionId]?.ok === true
-  if (!unreportedCheckpoint) {
+  const runningRight = normalizedActionId === 'running-right'
+  if (!unreportedCheckpoint && !runningRight) {
     invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
-  }
-  if (normalizedActionId === 'running-right') {
-    invalidateActionCheckpoint({ dataDir, runId, actionId: 'running-left', reason: 'quality-first-running-mirror-repair', now })
   }
   const lease = createGenerationLease({ commandId: 'retry-action', startedAt, leaseId: `${runId}-retry-action-${startedAt}` })
   const generatingRun = {
@@ -1145,7 +1168,45 @@ const runQualityFirstActionRepair = async ({
   appendDiagnosticRunLog({ dataDir, runId, event: 'quality-first.action.repair-started', message: `Quality-first action ${normalizedActionId} repair started`, data: { actionId: normalizedActionId }, now })
   try {
     let effectiveProfile = profile
-    const result = await runtime.runAction({ actionId: normalizedActionId, canonical, profile: effectiveProfile, plan })
+    let result
+    try {
+      result = await runtime.runAction({
+        actionId: normalizedActionId, canonical, profile: effectiveProfile, plan,
+        ...(runningRight && !unreportedCheckpoint ? { reuseCheckpoint: false } : {})
+      })
+    } catch (error) {
+      if (!runningRight || error?.startFrameRejected !== true) throw error
+      const failureCode = executionFailureCode(error, 'video_start_frame_rejected')
+      const previous = run.qualityFirst?.actionResults?.[normalizedActionId]
+      const retainedRun = {
+        ...run,
+        generationLease: undefined,
+        qualityFirst: {
+          ...run.qualityFirst,
+          actionResults: {
+            ...run.qualityFirst?.actionResults,
+            [normalizedActionId]: previous?.ok === true ? previous : {
+              ...createQualityFirstActionResultView({ actionId: normalizedActionId, disposition: 'omitted' }),
+              ...previous,
+              failureCode
+            }
+          }
+        }
+      }
+      writeRun({ dataDir, run: retainedRun })
+      appendDiagnosticRunLog({
+        dataDir, runId, level: 'warn', event: 'quality-first.action.repair-rejected',
+        message: 'Running-right start frame was rejected before replacement',
+        data: { actionId: normalizedActionId, failureCode, evidenceArchive }, now
+      })
+      return { outputDir: '', bundlePath: '', sha256: '', run: retainedRun, repair: { scope: 'action', actionId: normalizedActionId, evidenceArchive } }
+    }
+    if (runningRight) {
+      if (!unreportedCheckpoint) {
+        invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
+      }
+      invalidateActionCheckpoint({ dataDir, runId, actionId: 'running-left', reason: 'quality-first-running-mirror-repair', now })
+    }
     if (normalizedActionId === 'idle' && result?.ok === true && !effectiveProfile?.hash) {
       effectiveProfile = await runtime.createCharacterScaleProfile({ canonical, idle: result })
       if (!effectiveProfile?.hash) throw new Error('Quality-first idle recovery produced an invalid scale profile')
@@ -1328,15 +1389,10 @@ const runGenerationStep = async ({ dataDir, runId, now = () => new Date().toISOS
     throw error
   }
   if (backend === PROVIDER_BACKEND && run.generationTask?.mode === 'full-pet' && run.generationTask?.pipeline === 'quality-first-v1') {
-    const runtime = await createQualityFirstHostRuntime({ dataDir, run })
     return runQualityFirstIdentityStage({
       dataDir,
       runId,
-      orchestrator: runtime.orchestrator,
-      plan: runtime.plan,
-      sourceReference: runtime.sourceReference,
-      actions: runtime.plan.actions.map((action) => action.actionId),
-      requireIdentityReviewBeforeActions: runtime.requireIdentityReviewBeforeActions,
+      prepareRuntime: (generatingRun) => createQualityFirstHostRuntime({ dataDir, run: generatingRun }),
       now
     })
   }

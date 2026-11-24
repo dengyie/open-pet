@@ -359,12 +359,134 @@ test('portable rig audit export retains enough evidence to validate without the 
   await assert.rejects(rigModule().exportCanonicalRigEvidence({ dataDir: f.dataDir, outputDir, provenance: wrong, frames: rig.processed.frames, actionId: 'jumping' }), /source hash/)
 })
 
+test('production host can repair image-sheet quality with an audited rig without video settings', async (t) => {
+  const f = await fixture()
+  const { createQualityFirstHostRuntime } = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
+  const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
+  const plan = createSpriteAssetPlan({ version: 1, revision: 1, character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId: 'review' }] })
+  const action = plan.actions.find(entry => entry.actionId === 'review')
+  const sprite = await sharp(path.join(f.dataDir, f.canonical.relativePath)).resize(100, 110).png().toBuffer()
+  const cells = Array.from({ length: action.frameCount }, (_, index) => ({
+    input: sprite,
+    left: Math.floor(((index % action.layout.columns) + 0.5) * 1024 / action.layout.columns - 50),
+    top: Math.floor((Math.floor(index / action.layout.columns) + 0.5) * 1024 / action.layout.rows - 55)
+  }))
+  const rawPath = path.join(f.dataDir, 'review-sheet.png')
+  await sharp({ create: { width: 1024, height: 1024, channels: 4, background: '#00000000' } }).composite(cells).png().toFile(rawPath)
+  const oldUrl = process.env.OPENPET_BRIDGE_URL
+  const oldToken = process.env.OPENPET_BRIDGE_TOKEN
+  process.env.OPENPET_BRIDGE_URL = 'http://127.0.0.1:1'
+  process.env.OPENPET_BRIDGE_TOKEN = 'test-only'
+  t.after(() => {
+    if (oldUrl == null) delete process.env.OPENPET_BRIDGE_URL
+    else process.env.OPENPET_BRIDGE_URL = oldUrl
+    if (oldToken == null) delete process.env.OPENPET_BRIDGE_TOKEN
+    else process.env.OPENPET_BRIDGE_TOKEN = oldToken
+  })
+  const calls = []
+  t.mock.method(global, 'fetch', async (url, request) => {
+    const route = new URL(url).pathname
+    calls.push(route)
+    if (route === '/creator/model-settings') return Response.json({ config: { model: 'gpt-image-2' } })
+    if (route === '/creator/model-image-generate') return Response.json({ result: { outputs: [{ dataRelativePath: 'review-sheet.png' }] } })
+    assert.equal(route, '/creator/hatch-pet/evaluate')
+    const passed = JSON.parse(request.body).board.relativePath.includes('/rig/')
+    return Response.json({ result: { gate: { ok: passed, outcome: passed ? 'pass' : 'repair', failures: passed ? [] : ['visual-defect-style-drift'] } } })
+  })
+  const run = { runId: 'image-sheet-rig', input: { referenceImage: { relativePath: f.canonical.relativePath } } }
+  const runtime = await createQualityFirstHostRuntime({ dataDir: f.dataDir, run, planOverride: plan })
+  const result = await runtime.runAction({ actionId: 'review', canonical: f.canonical, profile: f.profile })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.selectedCandidate.provenance.kind, 'canonical-rig')
+  assert.equal(calls.filter(route => route === '/creator/model-image-generate').length, 3)
+  assert.equal(calls.includes('/creator/model-video-generate'), false)
+  const regenerated = await runtime.runAction({ actionId: 'review', canonical: f.canonical, profile: f.profile })
+  assert.equal(regenerated.ok, true, JSON.stringify(regenerated))
+  assert.equal(regenerated.selectedCandidate.provenance.kind, 'canonical-rig')
+  assert.notEqual(regenerated.selectedCandidate.candidateId, result.selectedCandidate.candidateId)
+})
+
+test('video running-right reports a rejected start pose before creating candidates', async (t) => {
+  const f = await fixture()
+  const { createQualityFirstHostRuntime } = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
+  const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
+  const plan = createSpriteAssetPlan({ character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId: 'running-right' }] })
+  const oldUrl = process.env.OPENPET_BRIDGE_URL
+  const oldToken = process.env.OPENPET_BRIDGE_TOKEN
+  process.env.OPENPET_BRIDGE_URL = 'http://127.0.0.1:1'
+  process.env.OPENPET_BRIDGE_TOKEN = 'test-only'
+  t.after(() => {
+    if (oldUrl == null) delete process.env.OPENPET_BRIDGE_URL
+    else process.env.OPENPET_BRIDGE_URL = oldUrl
+    if (oldToken == null) delete process.env.OPENPET_BRIDGE_TOKEN
+    else process.env.OPENPET_BRIDGE_TOKEN = oldToken
+  })
+  const calls = []
+  t.mock.method(global, 'fetch', async (url) => {
+    const route = new URL(url).pathname
+    calls.push(route)
+    if (route === '/creator/model-settings') return Response.json({ config: { model: 'gpt-image-2', videoGeneration: { hasApiKey: true, model: 'grok-imagine-video-1.5' } } })
+    assert.equal(route, '/creator/model-image-generate')
+    return Response.json({ result: { outputs: [] } })
+  })
+  const run = { runId: 'rig-preflight', input: { referenceImage: { relativePath: f.canonical.relativePath } } }
+  const runtime = await createQualityFirstHostRuntime({ dataDir: f.dataDir, run, planOverride: plan })
+  await assert.rejects(() => runtime.runAction({ actionId: 'running-right', canonical: f.canonical, profile: f.profile }), { code: 'video_start_frame_rejected' })
+  assert.deepEqual(calls, ['/creator/model-settings', '/creator/model-image-generate'])
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'runs', run.runId, 'candidates', 'running-right')), false)
+
+  const { runQualityFirstActionRepair } = require('../../examples/plugins/creator-studio/lib/backend-runner')
+  const { readRun, writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+  const { readActionCheckpoints, writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
+  const { writeCandidateRecord } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
+  const packageDir = `runs/${run.runId}/quality-first/package`
+  fs.mkdirSync(path.join(f.dataDir, packageDir), { recursive: true })
+  const spritesheet = `${packageDir}/spritesheet.webp`
+  const bundle = `${packageDir}/pet.zip`
+  fs.writeFileSync(path.join(f.dataDir, spritesheet), 'unchanged sheet')
+  fs.writeFileSync(path.join(f.dataDir, bundle), 'unchanged bundle')
+  const retainedPackage = {
+    spritesheetRelativePath: spritesheet, spritesheetSha256: hash('unchanged sheet'),
+    bundleRelativePath: bundle, bundleSha256: hash('unchanged bundle'),
+    basicActions: { availableActionIds: ['idle'], omittedActionIds: ['running-right', 'running-left'] },
+    visualEvaluation: { gate: { ok: true } }
+  }
+  const rawPath = path.join(f.dataDir, 'runs', run.runId, 'retained-sheet.png')
+  fs.copyFileSync(path.join(f.dataDir, f.canonical.relativePath), rawPath)
+  const stored = writeCandidateRecord({
+    dataDir: f.dataDir, runId: run.runId, scope: 'action-running-right',
+    candidate: { candidateId: 'retained-right', sha256: f.canonical.sha256, technicalEligible: true, artifacts: [{ role: 'raw-sheet', path: rawPath, sha256: f.canonical.sha256 }] }
+  })
+  const savedCandidate = { candidateId: 'retained-right', candidateRecordRelativePath: stored.relativePath }
+  const candidatePath = path.join(f.dataDir, savedCandidate.candidateRecordRelativePath)
+  const candidateRecord = fs.readFileSync(candidatePath)
+  writeRun({ dataDir: f.dataDir, run: {
+    ...run, status: 'ready_for_review',
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
+    qualityFirst: {
+      acceptedCanonical: { ...f.canonical, candidateId: 'canonical-1' },
+      actionResults: { idle: { ok: true }, 'running-right': { ok: false, candidates: [savedCandidate] } },
+      package: retainedPackage
+    }
+  } })
+  writeActionCheckpoint({ dataDir: f.dataDir, runId: run.runId, result: { actionId: 'running-right', ok: false } })
+  const priorCheckpoints = readActionCheckpoints({ dataDir: f.dataDir, runId: run.runId })
+  const repair = await runQualityFirstActionRepair({ dataDir: f.dataDir, runId: run.runId, actionId: 'running-right', runtime, plan, profile: { ...f.profile, hash: 'profile' } })
+  assert.equal(repair.run.status, 'ready_for_review')
+  assert.equal(repair.run.qualityFirst.actionResults['running-right'].failureCode, 'video_start_frame_rejected')
+  assert.deepEqual(repair.run.qualityFirst.package, retainedPackage)
+  assert.deepEqual(readRun({ dataDir: f.dataDir, runId: run.runId }).qualityFirst.actionResults['running-right'].candidates, [savedCandidate])
+  assert.deepEqual(fs.readFileSync(candidatePath), candidateRecord)
+  assert.deepEqual(readActionCheckpoints({ dataDir: f.dataDir, runId: run.runId }), priorCheckpoints)
+  assert.deepEqual(calls, ['/creator/model-settings', '/creator/model-image-generate', '/creator/model-image-generate'])
+})
+
 for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`production host repairs ${actionId} video drift with an audited rig, packages it and resumes without dispatch`, { skip: spawnSync('ffmpeg', ['-version']).status !== 0 || spawnSync('ffprobe', ['-version']).status !== 0 }, async () => {
   const f = actionId === 'running' ? await workingFixture() : await fixture()
   f.action = actionId === 'review' ? { actionId, anchorPolicy: 'action-relative-root-v1', frameCount: 6, layout: { columns: 3, rows: 2 } } : f.action
   const { createQualityFirstHostRuntime } = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
   const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
-  const { writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
+  const { readActionCheckpoints, writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
   const { archiveCandidateRevision } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
   const runId = `host-rig-repair-${actionId}`
   const plan = createSpriteAssetPlan({ version: 1, revision: 1, character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId }] })
@@ -459,8 +581,24 @@ for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`
       await sharp(Buffer.from(`<svg width="192" height="208"><ellipse cx="96" cy="115" rx="35" ry="42" fill="#ffcc42"/><rect x="105" y="${80 + index * 2}" width="13" height="20" fill="#391a10"/></svg>`)).png().toFile(target)
       idle.push({ path: target, frameIndex: index })
     }
-    writeActionCheckpoint({ dataDir: f.dataDir, runId, result: { actionId: 'idle', ok: true, row: { quality: 'row-real', frames: idle } } })
-    const packaged = await runtime.finalizePackage({ canonical: f.canonical })
+    const idleProcessorVersion = actionId === 'review' ? 4 : runtime.processorVersionForAction('idle')
+    const bindings = { ...readActionCheckpoints({ dataDir: f.dataDir, runId }).actions[actionId].bindings, processorVersion: idleProcessorVersion }
+    writeActionCheckpoint({ dataDir: f.dataDir, runId, result: { actionId: 'idle', ok: true, bindings, row: { quality: 'row-real', frames: idle } } })
+    const actionResults = actionId === 'review' ? {
+      idle: { ok: true, processorVersion: idleProcessorVersion },
+      review: { ok: true, processorVersion: result.processorVersion }
+    } : {}
+    if (actionId === 'review') {
+      assert.notEqual(runtime.processorVersionForAction('idle'), idleProcessorVersion)
+      const pixels = fs.readFileSync(idle[0].path)
+      fs.writeFileSync(idle[0].path, 'corrupted after checkpoint')
+      try {
+        await assert.rejects(runtime.finalizePackage({ canonical: f.canonical, profile, actionResults }), { code: 'action_checkpoint_invalid' })
+      } finally {
+        fs.writeFileSync(idle[0].path, pixels)
+      }
+    }
+    const packaged = await runtime.finalizePackage({ canonical: f.canonical, profile, actionResults })
     const metadata = JSON.parse(fs.readFileSync(path.join(f.dataDir, packaged.petJsonRelativePath)))
     assert.equal(metadata.actionGeneration[actionId].quality, 'approved-rig')
     const auditRoot = path.join(path.dirname(path.join(f.dataDir, packaged.petJsonRelativePath)), metadata.actionGeneration[actionId].evidenceRoot)
