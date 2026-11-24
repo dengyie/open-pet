@@ -1,4 +1,5 @@
 const crypto = require('node:crypto')
+const { resolveActionLoop } = require('./single-action-contract')
 
 const normalizeText = (value) => String(value || '').trim()
 
@@ -167,8 +168,24 @@ const getActionIdentityText = (action = {}) => [
 
 const getActionId = (action = {}) => normalizeText(action?.actionId).toLowerCase()
 
+const ACTION_CLASS_BY_ID = Object.freeze({
+  idle: 'grounded-subtle-loop',
+  'running-right': 'grounded-locomotion',
+  'running-left': 'grounded-locomotion',
+  waving: 'grounded-gesture',
+  jumping: 'airborne-arc',
+  failed: 'grounded-state-loop',
+  waiting: 'grounded-subtle-loop',
+  running: 'grounded-work-loop',
+  review: 'grounded-state-loop'
+})
+
+const getOfficialActionClass = (actionId) => Object.hasOwn(ACTION_CLASS_BY_ID, actionId)
+  ? ACTION_CLASS_BY_ID[actionId]
+  : undefined
+
 const isWorkStateAction = (value = '') => (
-  typeof value === 'object' && getActionId(value) === 'running'
+  typeof value === 'object' && getOfficialActionClass(getActionId(value)) === 'grounded-work-loop'
 )
 
 const isIdleAction = (value = '') => /(^|\s)(idle|idling|resting-idle)(\s|$)|待机|空闲/i.test(
@@ -181,8 +198,8 @@ const isWavingAction = (value = '') => /wave|waving|挥手|招手|挥爪|paw\s*w
 
 const isLocomotionAction = (value = '') => {
   if (typeof value === 'object') {
-    if (isWorkStateAction(value)) return false
-    if (['running-right', 'running-left'].includes(getActionId(value))) return true
+    const actionClass = getOfficialActionClass(getActionId(value))
+    if (actionClass) return actionClass === 'grounded-locomotion'
   }
   return /walk|run|running|crawl|fly|flying|走|跑|奔跑|爬行|飞/i.test(
     typeof value === 'object' ? getActionText(value) : normalizeText(value)
@@ -220,6 +237,7 @@ const inferAnimationTypeFromText = (value = '') => {
 
 const inferAnimationType = (action = {}) => {
   if (isWorkStateAction(action)) return 'stationary_loop'
+  if (getOfficialActionClass(getActionId(action)) === 'grounded-locomotion') return 'locomotion_loop'
   if (isIdleAction(action)) return 'stationary_loop'
   const explicit = normalizeText(action.animationType)
   if (explicit) return explicit
@@ -227,7 +245,7 @@ const inferAnimationType = (action = {}) => {
   if (identityType) return identityType
   const promptType = inferAnimationTypeFromText(action.motionPrompt)
   if (promptType) return promptType
-  if (action.loop) return 'stationary_loop'
+  if (resolveActionLoop(action)) return 'stationary_loop'
   return 'reaction'
 }
 
@@ -281,8 +299,7 @@ const ACTION_PHASES = Object.freeze({
     'match the canonical identity pose, viewpoint, silhouette, scale, markings, accessories, and lower-center root',
     'begin closing the eyelids while the body remains still',
     'close the eyelids for one blink while preserving the canonical silhouette',
-    'reopen the eyes without changing scale or viewpoint',
-    'settle back into the canonical starting pose for a seamless quiet loop'
+    'reopen the eyes without changing scale or viewpoint'
   ]),
   wave: Object.freeze([
     'neutral anchored pose with the selected waving appendage at rest',
@@ -297,8 +314,7 @@ const ACTION_PHASES = Object.freeze({
     'begin one small readable processing or scanning motion using visible attention features',
     'reach the clearest focused work-state moment without changing viewpoint or body root',
     'shift the small processing or scanning motion to its complementary position',
-    'return toward the neutral focused pose while preserving identity and scale',
-    'settle into the starting focused pose for a seamless stationary loop'
+    'return toward the neutral focused pose while preserving identity and scale'
   ]),
   locomotion_loop: Object.freeze([
     'first in-place contact pose with opposing visible locomotion appendages clearly separated',
@@ -307,8 +323,7 @@ const ACTION_PHASES = Object.freeze({
     'first up pose with a small body rise before the next contact',
     'opposite contact pose with the visible appendage pattern reversed',
     'opposite down pose with readable weight transfer',
-    'opposite passing pose with supporting and moving appendages exchanged',
-    'loop-closing up-to-contact transition that returns smoothly to the first pose'
+    'opposite passing pose with supporting and moving appendages exchanged'
   ]),
   vertical_bounce: Object.freeze([
     'grounded neutral pose at the original baseline',
@@ -332,20 +347,46 @@ const ACTION_PHASES = Object.freeze({
     'expression begins using only the permitted visible expressive features',
     'expression rises toward the requested emotion',
     'clearest expression peak',
-    'expression begins to recover while identity remains stable',
-    'loop-compatible return toward the neutral expression'
+    'expression begins to recover while identity remains stable'
   ]),
   reaction: Object.freeze([
     'neutral or anticipation pose with the character fully visible and anchored',
     'reaction begins in the permitted visible parts',
     'reaction rises toward the requested state',
     'clearest readable reaction peak',
-    'controlled recovery with the same root anchor and scale',
-    'settled ending pose compatible with the requested loop or stop'
+    'controlled recovery with the same root anchor and scale'
   ])
 })
 
+const ACTION_LOOP_ENDINGS = Object.freeze({
+  idle: 'settle back into the canonical starting pose for a seamless quiet loop',
+  work_state: 'settle into the starting focused pose for a seamless stationary loop',
+  locomotion_loop: 'loop-closing up-to-contact transition that returns smoothly to the first pose',
+  emote: 'loop-compatible return toward the neutral expression',
+  reaction: 'settled ending pose compatible with the requested loop or stop'
+})
+
 const stripFramePrefix = (value) => normalizeText(value).replace(/^Frame\s+\d+\s*:\s*/i, '').replace(/[.。]+$/, '')
+
+const getCustomFramePoses = (action) => Array.isArray(action.framePlan)
+  ? action.framePlan.map(stripFramePrefix).filter(Boolean)
+  : []
+
+const describeCustomOneShotPlayback = ({ action, frameCount }) => {
+  if (frameCount <= 0 || resolveActionLoop(action) !== false || !getCustomFramePoses(action).length) return ''
+  return 'use each cell description as a visual pose only; hold the last requested pose as the settled ending, without restarting the motion'
+}
+
+const hasExplicitFacing = (action) => ['viewer-left', 'viewer-right'].includes(action.actionContract?.facing)
+
+const getIdlePhases = (action) => hasExplicitFacing(action)
+  ? [
+      'match the quiet reference pose from the specified facing, with the same scale, markings, accessories, and lower-center root',
+      ACTION_PHASES.idle[1],
+      'close the eyelids for one blink while preserving the silhouette in the specified facing',
+      ACTION_PHASES.idle[3]
+    ]
+  : ACTION_PHASES.idle
 
 const expandPhases = (phases, count) => {
   const normalized = phases.map(stripFramePrefix).filter(Boolean)
@@ -363,37 +404,73 @@ const expandPhases = (phases, count) => {
   })
 }
 
-const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
-  const count = Math.max(1, Number(frameCount) || 1)
-  const custom = Array.isArray(action.framePlan) ? action.framePlan.map(stripFramePrefix).filter(Boolean) : []
-  const animationType = inferAnimationType(action)
-  const phases = custom.length >= 2
-    ? custom
-    : isWorkStateAction(action)
-      ? ACTION_PHASES.work_state
-      : isIdleAction(action)
-        ? ACTION_PHASES.idle
-        : isWavingAction(action)
-          ? ACTION_PHASES.wave
-          : ACTION_PHASES[animationType] || ACTION_PHASES.reaction
-  return expandPhases(phases, count).map((description, index) => `Frame ${index + 1}: ${description}.`)
+const groupOneShotCustomPoses = (poses, count) => {
+  const groups = Array.from({ length: count }, () => [])
+  if (poses.length >= count) {
+    return groups.map((_, index) => poses.slice(
+      Math.floor(index * poses.length / count),
+      Math.floor((index + 1) * poses.length / count)
+    ))
+  }
+  poses.forEach((pose, index) => {
+    const cell = poses.length === 1 ? count - 1 : Math.floor(index * (count - 1) / (poses.length - 1))
+    groups[cell].push(pose)
+  })
+  return groups
 }
+
+const describeFramePoseGroup = (poses) => `progress through these poses in order and show the last one: ${poses.join('; ')}`
+
+const buildActionFrameBeats = ({ action = {}, frameCount = 6 } = {}) => {
+  const count = Math.max(1, Math.floor(Number(frameCount)) || 1)
+  const custom = getCustomFramePoses(action)
+  const oneShot = resolveActionLoop(action) === false
+  if (oneShot && custom.length) {
+    return groupOneShotCustomPoses(custom, count).map((poses, index) => poses.length > 1
+      ? { frame: index + 1, poses }
+      : { frame: index + 1, beat: poses[0] || 'controlled in-between pose approaching the next specified pose' })
+  }
+  const animationType = inferAnimationType(action)
+  const phaseType = isWorkStateAction(action) ? 'work_state'
+    : isIdleAction(action) ? 'idle'
+      : isWavingAction(action) ? 'wave'
+        : Object.hasOwn(ACTION_PHASES, animationType) ? animationType : 'reaction'
+  const phases = phaseType === 'idle' ? getIdlePhases(action) : ACTION_PHASES[phaseType]
+  const loopEnding = phaseType === 'idle' && hasExplicitFacing(action)
+    ? 'settle back into the starting pose in the specified facing for a seamless quiet loop'
+    : ACTION_LOOP_ENDINGS[phaseType]
+  const oneShotEnding = animationType === 'locomotion_loop'
+    ? 'finish the in-place gait in a settled, supported stopping pose'
+    : 'finish the action in a settled pose without restarting the motion'
+  const ending = oneShot && loopEnding ? oneShotEnding : loopEnding
+  const beats = expandPhases(custom.length >= 2 ? custom : ending ? [...phases, ending] : phases, count)
+  if (count > 1 && action.actionContract?.loop && ['pose_transition', 'reaction', 'emote'].includes(animationType)) {
+    beats[count - 1] = 'recover toward the first pose in a smooth wraparound transition'
+  }
+  return beats.map((beat, index) => ({ frame: index + 1, beat }))
+}
+
+const buildActionFramePlan = (options) => buildActionFrameBeats(options).map(({ frame, beat, poses }) =>
+  `Frame ${frame}: ${poses ? describeFramePoseGroup(poses) : beat}.`)
 
 const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}) => {
   const isStart = /start|first|neutral/i.test(normalizeText(keyframeRole))
   const animationType = inferAnimationType(action)
+  const changesFacing = hasExplicitFacing(action)
   if (isWorkStateAction(action)) {
     return isStart
-      ? 'Pose: neutral focused work-state pose with the full body anchored and the canonical viewpoint preserved.'
+      ? `Pose: neutral focused work-state pose with the full body anchored and the ${changesFacing ? 'specified' : 'canonical'} viewpoint preserved.`
       : 'Pose: clearest processing, focus, or scanning moment using only a small identity-safe local motion while the body root, scale, and viewpoint remain fixed.'
   }
   if (isIdleAction(action)) {
     return isStart
-      ? 'Pose: match the canonical reference pose and viewpoint as closely as possible; do not force a new front-facing view or change limb placement merely to neutralize the pose.'
-      : 'Pose: preserve the canonical pose and silhouette with only one subtle identity-safe local change; no action extreme, large appendage movement, or body-root motion.'
+      ? changesFacing
+        ? 'Pose: retain the quiet reference pose as seen from the specified viewpoint; do not change limb placement merely to neutralize the pose.'
+        : 'Pose: match the canonical reference pose and viewpoint as closely as possible; do not force a new front-facing view or change limb placement merely to neutralize the pose.'
+      : `Pose: preserve the quiet pose and silhouette ${changesFacing ? 'in the specified facing' : 'from the reference'} with only one subtle identity-safe local change; no action extreme, large appendage movement, or body-root motion.`
   }
   if (isStart) {
-    if (animationType === 'locomotion_loop') return 'Pose: first contact pose of an in-place gait cycle, full body visible, in a strict side profile with both locomotion legs and feet clearly visible and separated: one foot planted under the body and the other extended forward or back.'
+    if (animationType === 'locomotion_loop') return `Pose: first contact pose of an in-place gait, full body visible, ${action.actionContract ? '' : 'in a strict side profile '}with both locomotion legs and feet clearly visible and separated: one foot planted under the body and the other extended forward or back.`
     if (animationType === 'vertical_bounce') return 'Pose: grounded anticipation pose at the original baseline, full body visible and ready to jump.'
     return 'Pose: full-body neutral pose with the body anchored and visible motion appendages at rest unless the source image clearly uses a different neutral stance.'
   }
@@ -404,13 +481,18 @@ const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}
 }
 
 module.exports = {
+  ACTION_CLASS_BY_ID,
   MOTION_PRESETS,
+  buildActionFrameBeats,
   buildActionFramePlan,
+  describeCustomOneShotPlayback,
+  describeFramePoseGroup,
   expandMotionPreset,
   getActionText,
   getMotionPreset,
   getDefaultMotionPresetId,
   getDefaultLockedParts,
+  getOfficialActionClass,
   getKeyframePoseInstruction,
   inferAnimationType,
   isEmoteAction,

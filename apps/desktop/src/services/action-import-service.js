@@ -76,11 +76,16 @@ const createActionImportService = ({
 
   const preserveHostActionMetadata = (currentConfig = {}, generated = {}) => {
     const generatedActionIds = new Set((generated.actions || []).map((action) => action.id))
+    const currentActions = new Map((currentConfig.actions || []).map((action) => [action.id, action]))
     const triggerRules = Array.isArray(currentConfig.triggerRules)
       ? currentConfig.triggerRules.filter((rule) => generatedActionIds.has(rule.actionId))
       : []
     return {
       ...generated,
+      actions: (generated.actions || []).map((action) => {
+        const loop = currentActions.get(action.id)?.loop
+        return typeof loop === 'boolean' ? { ...action, loop } : action
+      }),
       ...(Array.isArray(currentConfig.triggerProposalInbox)
         ? { triggerProposalInbox: currentConfig.triggerProposalInbox }
         : {}),
@@ -160,7 +165,7 @@ const createActionImportService = ({
     return toActionConfig(nextConfig)
   }
 
-  const importActionFrames = async ({ sourceDir, actionId, label }) => {
+  const importActionFrames = async ({ sourceDir, actionId, label, loop }) => {
     if (!isSafeActionId(actionId)) throw new Error('Invalid action id')
     if (!sourceDir || !fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
       throw new Error('Source frames folder does not exist')
@@ -193,7 +198,7 @@ const createActionImportService = ({
           ...toActionConfig(currentConfig),
           actions: [
             ...(Array.isArray(currentConfig.actions) ? currentConfig.actions.map((action) => ({ ...action })) : []),
-            generatedAction
+            { ...generatedAction, ...(typeof loop === 'boolean' ? { loop } : {}) }
           ]
         }
         const config = preserveHostActionMetadata(currentConfig, {
@@ -224,6 +229,9 @@ const createActionImportService = ({
     })
     const config = preserveHostActionMetadata(currentConfig, {
       ...generated,
+      actions: generated.actions.map((action) => action.id === actionId && typeof loop === 'boolean'
+        ? { ...action, loop }
+        : action),
       defaultAction: generated.defaultAction || currentConfig.defaultAction || actionId,
       clickAction: generated.clickAction || currentConfig.clickAction || actionId
     })

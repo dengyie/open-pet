@@ -3,6 +3,7 @@ const {
   createCandidateSelection,
   normalizeStoredCandidateDecision
 } = require('./candidate-decision')
+const { executionFailureCode, isHatchPetBudgetError } = require('./quality-first-action-runner')
 
 const ACTION_ORDER = Object.freeze(['idle', 'running-right', 'waving', 'jumping', 'failed', 'waiting', 'running', 'review'])
 const normalizeId = (value) => String(value || '').trim()
@@ -57,8 +58,9 @@ const assertCanonicalPool = (pool) => {
   const technicalCandidates = publicCandidates.filter((candidate) => candidate.technicalEligible === true && candidate.sha256)
   const passingCandidates = technicalCandidates.filter((candidate) => candidate.recommended === true)
   if (technicalCandidates.length === 0 || Number(pool?.dispatchCount || 0) > 4) {
-    const error = new Error('canonical_identity_candidates_unusable')
-    error.code = 'canonical_identity_candidates_unusable'
+    const failureCode = pool?.generationFailureCode || 'canonical_identity_candidates_unusable'
+    const error = new Error(failureCode)
+    error.code = failureCode
     error.canonicalPool = {
       dispatchCount: Math.max(0, Math.min(4, Number(pool?.dispatchCount) || candidates.length)),
       passingCandidateCount: 0,
@@ -156,14 +158,14 @@ const createQualityFirstFullPetOrchestrator = ({
     persistRunState = async () => {}
   } = {}) => {
     recordEvent({ scope: 'identity', status: 'started', runId: normalizeId(run?.runId) })
-    let pool
+    let selection
     try {
-      pool = await generateCanonicalCandidatePool({ run, plan, sourceReference })
+      const pool = await generateCanonicalCandidatePool({ run, plan, sourceReference })
+      selection = assertCanonicalPool(pool)
     } catch (error) {
       recordEvent({ scope: 'identity', status: 'failed', runId: normalizeId(run?.runId), failureCode: String(error?.code || 'identity_generation_error'), message: String(error?.message || error).slice(0, 240) })
       throw error
     }
-    const selection = assertCanonicalPool(pool)
     const candidates = selection.candidates
     recordEvent({ scope: 'identity', status: 'completed', runId: normalizeId(run?.runId), candidateCount: candidates.length })
     const startedAt = now()
@@ -230,6 +232,35 @@ const createQualityFirstFullPetOrchestrator = ({
       }
     }
     await persistRunState(acceptedRun)
+    const actionResults = {}
+    let durableRun = { ...acceptedRun, qualityFirst: { ...acceptedRun.qualityFirst, actionResults } }
+    const recover = async (reason) => {
+      const recovery = await createRecoveryBundle({ run: durableRun, actionResults, reason })
+      durableRun = {
+        ...durableRun,
+        status: 'recovery-required',
+        currentStep: 'recovery',
+        updatedAt: now(),
+        reviewStatus: 'recovery-required',
+        qualityFirst: { ...durableRun.qualityFirst, phase: 'recovery-required', actionResults, failureCode: reason, nextAction: 'export-recovery-bundle', recovery }
+      }
+      await persistRunState(durableRun)
+      return durableRun
+    }
+    const saveCheckpoint = async (input) => {
+      try {
+        await persistActionResult({ ...input, canonical: selectedCandidate })
+        return true
+      } catch {
+        recordEvent({ scope: 'action', status: 'failed', runId: normalizeId(run?.runId), actionId: input.actionId, failureCode: 'action_checkpoint_write_failed' })
+        return false
+      }
+    }
+    const actionFailed = ({ actionId, error }) => {
+      const failureCode = executionFailureCode(error, 'action_generation_error')
+      recordEvent({ scope: 'action', status: 'failed', runId: normalizeId(run?.runId), actionId, failureCode, message: String(error?.message || error).slice(0, 240) })
+      return { ok: false, actionId, disposition: actionId === 'idle' ? 'blocked' : 'omitted', failureCode, candidates: [] }
+    }
     const runActionWithEvents = async ({ actionId, profile = null }) => {
       recordEvent({ scope: 'action', status: 'started', runId: normalizeId(run?.runId), actionId })
       try {
@@ -248,34 +279,19 @@ const createQualityFirstFullPetOrchestrator = ({
         })
         return result
       } catch (error) {
-        recordEvent({ scope: 'action', status: 'failed', runId: normalizeId(run?.runId), actionId, failureCode: String(error?.code || 'action_generation_error'), message: String(error?.message || error).slice(0, 240) })
-        throw error
+        return actionFailed({ actionId, error })
       }
     }
     const idle = await runActionWithEvents({ actionId: 'idle' })
-    await persistActionResult({ actionId: 'idle', result: idle, canonical: selectedCandidate, profile: null })
-    const actionResults = { idle: publicActionResult(idle) }
-    let durableRun = {
-      ...acceptedRun,
-      qualityFirst: { ...acceptedRun.qualityFirst, actionResults }
-    }
+    if (!await saveCheckpoint({ actionId: 'idle', result: idle, profile: null })) return recover('action_checkpoint_write_failed')
+    actionResults.idle = publicActionResult(idle)
     await persistRunState(durableRun)
     if (!idle?.ok) {
-      const recovery = await createRecoveryBundle({ run: durableRun, actionResults, reason: 'idle_generation_failed' })
-      durableRun = {
-        ...durableRun,
-        status: 'recovery-required',
-        currentStep: 'recovery',
-        updatedAt: now(),
-        reviewStatus: 'recovery-required',
-        qualityFirst: { ...durableRun.qualityFirst, phase: 'recovery-required', actionResults, nextAction: 'export-recovery-bundle', recovery }
-      }
-      await persistRunState(durableRun)
-      return durableRun
+      return recover(isHatchPetBudgetError({ code: idle?.failureCode }) ? idle.failureCode : 'idle_generation_failed')
     }
     const profile = await createCharacterScaleProfile({ canonical: selectedCandidate, idle })
     await persistScaleProfile({ profile, canonical: selectedCandidate, idle })
-    await persistActionResult({ actionId: 'idle', result: idle, canonical: selectedCandidate, profile })
+    if (!await saveCheckpoint({ actionId: 'idle', result: idle, profile })) return recover('action_checkpoint_write_failed')
     actionResults.idle = { ...publicActionResult(idle), scaleProfileHash: profile.hash }
     const requestedActions = unique(actions.length ? actions : ACTION_ORDER)
     const orderedActions = ACTION_ORDER.filter((actionId) => requestedActions.includes(actionId) && actionId !== 'idle')
@@ -301,11 +317,30 @@ const createQualityFirstFullPetOrchestrator = ({
       }
       await persistRunState(durableRun)
       const result = await runActionWithEvents({ actionId, profile })
-      await persistActionResult({ actionId, result, canonical: selectedCandidate, profile })
+      if (isHatchPetBudgetError({ code: result?.failureCode })) {
+        const skipped = orderedActions.slice(actionIndex)
+        if (actionId === 'running-right') skipped.splice(1, 0, 'running-left')
+        for (const skippedId of unique(skipped)) {
+          actionResults[skippedId] = publicActionResult({ ...result, actionId: skippedId })
+        }
+        durableRun = {
+          ...durableRun,
+          currentStep: 'final-package',
+          qualityFirst: { ...durableRun.qualityFirst, failureCode: result.failureCode, nextAction: 'finalize-package' }
+        }
+        await persistRunState(durableRun)
+        break
+      }
+      if (!await saveCheckpoint({ actionId, result, profile })) return recover('action_checkpoint_write_failed')
       actionResults[actionId] = publicActionResult(result)
       if (actionId === 'running-right' && result?.ok && typeof mirrorRunningLeft === 'function') {
-        const mirrored = await mirrorRunningLeft({ source: result, profile, canonical: selectedCandidate })
-        await persistActionResult({ actionId: 'running-left', result: mirrored, canonical: selectedCandidate, profile })
+        let mirrored
+        try {
+          mirrored = await mirrorRunningLeft({ source: result, profile, canonical: selectedCandidate })
+        } catch (error) {
+          mirrored = actionFailed({ actionId: 'running-left', error })
+        }
+        if (!await saveCheckpoint({ actionId: 'running-left', result: mirrored, profile })) return recover('action_checkpoint_write_failed')
         actionResults['running-left'] = publicActionResult(mirrored)
       }
       const nextAction = orderedActions.slice(actionIndex + 1).find((entry) => entry !== 'running-left') || 'finalize-package'
@@ -320,7 +355,15 @@ const createQualityFirstFullPetOrchestrator = ({
     const failedOptional = Object.entries(actionResults)
       .filter(([actionId, result]) => actionId !== 'idle' && result?.ok !== true)
       .map(([actionId]) => actionId)
-    const packageResult = await finalizePackage({ run: durableRun, canonical: selectedCandidate, profile, actionResults })
+    let packageResult
+    try {
+      packageResult = await finalizePackage({ run: durableRun, canonical: selectedCandidate, profile, actionResults })
+    } catch (error) {
+      if (isHatchPetBudgetError(error) || error?.code === 'action_checkpoint_invalid') {
+        return recover(executionFailureCode(error, 'quality_first_final_package_failed'))
+      }
+      throw error
+    }
     if (!packageResult || typeof packageResult !== 'object' || !packageResult.artifacts || typeof packageResult.artifacts !== 'object') {
       const error = new Error('Quality-first final package artifacts are missing')
       error.code = 'quality_first_final_package_missing'

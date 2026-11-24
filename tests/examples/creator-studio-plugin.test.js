@@ -2303,6 +2303,7 @@ test('creator studio import-approved-action imports approved single-action frame
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-studio-import-action-'))
   const framesDir = path.join(dataDir, 'runs/demo/frames/actions/shy-spin')
   const qaDir = path.join(dataDir, 'runs/demo/qa')
+  const actionContract = { loop: true, facing: 'viewer-left', camera: 'locked' }
   fs.mkdirSync(framesDir, { recursive: true })
   fs.mkdirSync(qaDir, { recursive: true })
   await sharp({
@@ -2315,7 +2316,7 @@ test('creator studio import-approved-action imports approved single-action frame
   }).png().toFile(path.join(framesDir, '0001.png'))
   fs.writeFileSync(
     path.join(qaDir, 'action-frame-validation.json'),
-    `${JSON.stringify(createActionFrameQa(), null, 2)}\n`
+    `${JSON.stringify({ ...createActionFrameQa(), actionContract, loop: true, playback: { loop: true } }, null, 2)}\n`
   )
   const run = createRun({
     dataDir,
@@ -2333,6 +2334,7 @@ test('creator studio import-approved-action imports approved single-action frame
           name: '害羞转圈',
           motionPrompt: '点击害羞转圈',
           frameCount: 1,
+          actionContract,
           triggerProposal: { type: 'click', binding: 'clickAction' }
         }]
       }
@@ -2411,6 +2413,7 @@ test('creator studio import-approved-action imports approved single-action frame
     assert.equal(requests[0].payload.dataRelativePath, 'runs/demo/frames/actions/shy-spin')
     assert.equal(requests[0].payload.actionId, 'shy-spin')
     assert.equal(requests[0].payload.label, '害羞转圈')
+    assert.equal(requests[0].payload.loop, true)
     assert.equal(JSON.stringify(requests[0].payload).includes(dataDir), false)
     assert.equal(requests[1].url, '/creator/trigger-proposals/submit')
     assert.equal(requests[1].payload.actionId, 'shy-spin')

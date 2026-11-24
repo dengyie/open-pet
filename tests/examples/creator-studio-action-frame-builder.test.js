@@ -10,6 +10,7 @@ const {
   repairActionFrameFromGeneratedImage
 } = require('../../examples/plugins/creator-studio/lib/action-frame-builder')
 const { assertActionFrameQaPassed } = require('../../examples/plugins/creator-studio/lib/action-frame-qa')
+const { draftGenerationTask } = require('../../examples/plugins/creator-studio/lib/conversation-wizard')
 const {
   writeBadStaticActionSheet,
   writeGoodSubtleWaveSheet
@@ -228,6 +229,60 @@ test('action frame builder creates ordered transparent frames and QA evidence', 
   assert.equal(qa.frames.every((frame) => frame.visiblePixels > 0), true)
   assert.equal(qa.frames.every((frame) => frame.sourceCell && Number.isInteger(frame.sourceCell.column)), true)
   assert.equal(JSON.stringify(qa).includes(dataDir), false)
+})
+
+test('structured playback checks the loop seam only for loops and binds QA to the task contract', async () => {
+  const dataDir = makeDataDir()
+  const sourcePath = path.join(dataDir, 'sheet.png')
+  await createActionSheetPng({ filePath: sourcePath, frameCount: 8 })
+  for (const loop of [false, true]) {
+    const actionContract = { loop, facing: 'viewer-right', camera: 'locked' }
+    const output = await buildActionFramesFromGeneratedImage({
+      dataDir,
+      generationResult: { outputs: [{ dataRelativePath: 'sheet.png' }] },
+      action: { actionId: 'quiet-wave', motionPrompt: 'Wave in place.', frameCount: 8, loop: !loop, actionContract },
+      outputFramesDir: path.join(dataDir, `frames-${loop}`),
+      qaDir: path.join(dataDir, `qa-${loop}`)
+    })
+    const actionFrames = { ...output, qa: output.qaPath }
+    const qa = assertActionFrameQaPassed({ dataDir, actionFrames, actionContract })
+    assert.deepEqual(qa.actionContract, actionContract)
+    assert.equal(qa.playback.loop, loop)
+    assert.equal(qa.playback.holdLastFrameMs, loop ? 120 : 220)
+    assert.equal(Boolean(qa.quality.metrics.adjacentFrameDiff.loopSeam), loop)
+    assert.throws(() => assertActionFrameQaPassed({
+      dataDir, actionFrames, actionContract: { ...actionContract, facing: 'viewer-left' }
+    }), /action contract must match/)
+  }
+})
+
+test('dashboard-drafted loops fail QA when only the last-to-first transition jumps', async () => {
+  const dataDir = makeDataDir()
+  const action = draftGenerationTask({ prompt: 'Wave in a loop' }).generationTask.actions[0]
+  assert.equal(action.loop, true)
+  await createCustomActionSheetPng({
+    filePath: path.join(dataDir, 'sheet.png'),
+    frameCount: action.frameCount,
+    createBody: (index) => {
+      const color = `rgb(${80 + index * 10}, 125, 160)`
+      return `<ellipse cx="124" cy="130" rx="48" ry="62" fill="${color}"/><circle cx="164" cy="${130 - index * 3}" r="18" fill="${color}"/>`
+    }
+  })
+  const build = async (loop) => {
+    const output = await buildActionFramesFromGeneratedImage({
+      dataDir,
+      generationResult: { outputs: [{ dataRelativePath: 'sheet.png' }] },
+      action: { ...action, loop },
+      outputFramesDir: path.join(dataDir, `frames-${loop}`),
+      qaDir: path.join(dataDir, `qa-${loop}`)
+    })
+    return JSON.parse(fs.readFileSync(output.qaPath, 'utf-8'))
+  }
+  const oneShot = await build(false)
+  assert.equal(oneShot.ok, true, JSON.stringify(oneShot.errors))
+  const looping = await build(true)
+  assert.deepEqual(looping.errors, ['action_loop_seam_discontinuity'])
+  assert.equal(looping.ok, false)
 })
 
 test('action frame builder removes a plain opaque action-sheet background before accepting frames', async () => {

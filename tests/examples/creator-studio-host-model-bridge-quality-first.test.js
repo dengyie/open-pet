@@ -186,6 +186,19 @@ test('failed canonical candidates preserve Provider, model, and exact transport 
   assert.deepEqual(candidate.modelAttempts, error.modelAttempts)
 })
 
+test('canonical dispatch stops and retains the actual failure code after a non-retryable Provider error', async () => {
+  const persisted = []
+  const pool = await generateCanonicalCandidatePool({
+    generateCandidate: async ({ candidateId }) => hostModelBridgeModule.__testInternals.createFailedCanonicalCandidate({
+      candidateId, error: Object.assign(new Error('Provider credentials rejected'), { code: 'provider_auth_failed', retryable: false })
+    }),
+    persistCandidate: (candidate) => persisted.push(candidate)
+  })
+  assert.equal(pool.dispatchCount, 1)
+  assert.equal(pool.generationFailureCode, 'provider_auth_failed')
+  assert.deepEqual(persisted, pool.candidates)
+})
+
 test('identity-safe canonical replacement requests visible neutral variation without weakening identity locks', () => {
   assert.equal(typeof hostModelBridgeModule.__testInternals.createCanonicalRequestedChanges, 'function')
   const requestedChanges = hostModelBridgeModule.__testInternals.createCanonicalRequestedChanges('identity-safe-alternate-neutral-v1')
@@ -625,7 +638,7 @@ test('quality-first host runtime reuses a five-way-bound action checkpoint witho
     })
     const failed = await corruptedRuntime.runAction({ actionId: 'idle', canonical })
     assert.equal(failed.ok, false)
-    assert.equal(failed.failureCode, 'action_quality_gate_failed')
+    assert.equal(failed.failureCode, 'provider-generation-failed')
     assert.equal(failed.diversityStatus, 'degraded')
     assert.deepEqual(failed.warningCodes, ['action_candidate_diversity_insufficient'])
   } finally {
@@ -984,18 +997,29 @@ test('failed final review of a replacement row preserves the published package a
       <rect x="90" y="150" width="20" height="8" fill="#2f9e44"/>
     </svg>`
   )).png().toFile(outputPath)
-  const addRow = async (actionId) => {
+  const addRow = async (actionId, processorVersion) => {
     const row = require('../../examples/plugins/creator-studio/lib/full-pet-row-contract').getOfficialFullPetRow(actionId)
     const frames = await Promise.all(row.durations.map(async (durationMs, index) => {
       const framePath = path.join(runDir, `${actionId}-${index}.png`)
       await drawFrame(framePath, index)
       return { index, durationMs, path: framePath }
     }))
-    writeActionCheckpoint({ dataDir, runId, result: { actionId, ok: true, outputCount: frames.length, row: { actionId, quality: 'row-real', frames } } })
+    writeActionCheckpoint({
+      dataDir, runId,
+      result: {
+        actionId, ok: true, outputCount: frames.length,
+        bindings: {
+          planHash: plan.hash, canonicalHash: canonical.sha256, profileHash: profile.hash,
+          processorVersion, qualityProfileHash: getQualityFirstQualityProfile().hash
+        },
+        row: { actionId, quality: 'row-real', frames }
+      }
+    })
+    return { ok: true, processorVersion }
   }
   await drawFrame(path.join(dataDir, reference), 0)
-  await addRow('idle')
   const canonical = { relativePath: reference, sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(dataDir, reference))).digest('hex') }
+  const profile = { hash: 'd'.repeat(64) }
   const originalFetch = global.fetch
   const env = Object.fromEntries(['OPENPET_BRIDGE_URL', 'OPENPET_BRIDGE_TOKEN'].map(key => [key, process.env[key]]))
   t.after(() => {
@@ -1022,14 +1046,15 @@ test('failed final review of a replacement row preserves the published package a
   const runtime = await createQualityFirstHostRuntime({
     dataDir, run: { runId, petId: 'revision-pet', input: { referenceImage: { relativePath: reference } } }, planOverride: plan
   })
-  const published = await runtime.finalizePackage({ canonical })
+  const idle = await addRow('idle', runtime.processorVersionForAction('idle'))
+  const published = await runtime.finalizePackage({ canonical, profile, actionResults: { idle } })
   const publishedPaths = [
     published.spritesheetRelativePath, published.bundleRelativePath, published.petJsonRelativePath,
     published.atlasQaRelativePath, published.visualEvaluation.boardRelativePath
   ].map(relativePath => path.join(dataDir, relativePath))
   const publishedBytes = publishedPaths.map(filePath => fs.readFileSync(filePath))
-  await addRow('waving')
-  await assert.rejects(runtime.finalizePackage({ canonical }), { code: 'final_package_visual_gate_failed' })
+  const waving = await addRow('waving', runtime.processorVersionForAction('waving'))
+  await assert.rejects(runtime.finalizePackage({ canonical, profile, actionResults: { idle, waving } }), { code: 'final_package_visual_gate_failed' })
   assert.equal(boards.length, 2)
   assert.ok(boards[1].regions.some(region => region.regionId === 'sequence-waving'))
   assert.notEqual(boards[1].sha256, boards[0].sha256)

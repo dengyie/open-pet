@@ -31,6 +31,11 @@ const hasDescriptors = (candidate) => Boolean(
 )
 const errorSummary = (error) => String(error?.message || error || 'candidate processing failed').replace(/\s+/g, ' ').slice(0, 240)
 const isHatchPetBudgetError = error => /^hatch_pet_.*_budget_exhausted$/.test(String(error?.code || ''))
+const executionFailureCode = (error, fallback) => (
+  String(error?.code || fallback).replace(/[^A-Za-z0-9:_-]/g, '_').slice(0, 120)
+)
+const RETRYABLE_TRANSPORT_CODES = new Set(['provider_transport_failed', 'provider_timeout', 'provider_request_error', 'PROVIDER_TIMEOUT'])
+const isRetryableGenerationError = (error) => error?.retryable !== false && RETRYABLE_TRANSPORT_CODES.has(error?.code)
 
 const runQualityFirstAction = async ({
   context = {},
@@ -40,6 +45,7 @@ const runQualityFirstAction = async ({
   evaluateCandidate,
   existingCandidates = [],
   persistCandidate = () => {},
+  prepareRepair = () => {},
   archiveCandidateRevision = () => {}
 } = {}) => {
   const actionId = String(context.actionId || '')
@@ -54,12 +60,21 @@ const runQualityFirstAction = async ({
   const distinctCandidates = []
   const dispatches = []
   const failureCodes = []
+  let generationFailureCode = ''
+  let evaluationFailureCode = ''
+  let evaluatorUnavailable = false
+  let stopDispatching = false
   const dispatch = async (attemptKind, repairCodes = []) => {
     const dispatchIndex = Math.max(0, ...dispatches.map((entry) => Number(entry.dispatchIndex) || 0)) + 1
     const assignedCandidateId = `${candidateIdPrefix}-${dispatchIndex}`
     let generated
     try {
       await reserveCreativeDispatch({ actionId, attemptKind, candidateId: assignedCandidateId, dispatchIndex })
+    } catch (error) {
+      for (const candidate of allCandidates) await persistCandidate(candidate)
+      throw error
+    }
+    try {
       generated = await generateCandidate({
         actionId,
         attemptKind,
@@ -73,9 +88,9 @@ const runQualityFirstAction = async ({
         throw error
       }
       const modelAttempts = Array.isArray(error?.modelAttempts) ? error.modelAttempts.slice(0, 16) : []
-      const failureCode = String(error?.code || 'provider-generation-failed')
-        .replace(/[^A-Za-z0-9:_-]/g, '_')
-        .slice(0, 120)
+      const failureCode = executionFailureCode(error, 'provider-generation-failed')
+      stopDispatching = Boolean(generationFailureCode) || !isRetryableGenerationError(error)
+      generationFailureCode = failureCode
       const failedCandidate = {
         candidateId: assignedCandidateId,
         actionId,
@@ -83,7 +98,7 @@ const runQualityFirstAction = async ({
         dispatchIndex,
         provider: String(context.provider || ''),
         model: String(modelAttempts.at(-1)?.model || context.model || ''),
-        requestId: String(modelAttempts.at(-1)?.requestId || ''),
+        requestId: String(modelAttempts.at(-1)?.requestId || error?.requestId || error?.taskId || ''),
         modelAttempts,
         technicalEligible: false,
         recommended: false,
@@ -141,8 +156,8 @@ const runQualityFirstAction = async ({
   }
 
   const existingInitialCount = dispatches.filter((candidate) => candidate.attemptKind === 'initial').length
-  for (let index = existingInitialCount; index < 2; index += 1) await dispatch('initial')
-  if (distinctCandidates.length < 2 && !dispatches.some((candidate) => candidate.attemptKind === 'duplicate-replacement')) {
+  for (let index = existingInitialCount; index < 2 && !stopDispatching; index += 1) await dispatch('initial')
+  if (!stopDispatching && distinctCandidates.length < 2 && !dispatches.some((candidate) => candidate.attemptKind === 'duplicate-replacement')) {
     await dispatch('duplicate-replacement')
   }
 
@@ -178,7 +193,10 @@ const runQualityFirstAction = async ({
           Object.assign(candidate, withQa, { qualityWarningCodes: unique([...(withQa.qualityWarningCodes || []), error.code]) })
           throw error
         }
-        Object.assign(withQa, { gate: { ok: false, outcome: 'cannot-evaluate', failures: ['candidate-evaluation-failed'], error: errorSummary(error) } })
+        evaluationFailureCode = executionFailureCode(error, 'candidate-evaluation-failed')
+        evaluatorUnavailable = evaluationFailureCode !== 'invalid_sprite_evaluation'
+        Object.assign(candidate, withQa, { gate: { ok: false, outcome: 'cannot-evaluate', failures: [evaluationFailureCode], error: errorSummary(error) } })
+        return null
       }
     } else failureCodes.push(...(withQa.qa?.failures || []))
     failureCodes.push(...(withQa.gate?.failures || []))
@@ -199,7 +217,7 @@ const runQualityFirstAction = async ({
   }
   for (const [index, candidate] of allCandidates.entries()) {
     try {
-      await evaluateGeneratedCandidate(candidate)
+      if (!evaluatorUnavailable) await evaluateGeneratedCandidate(candidate)
     } catch (error) {
       // Retain all assets already paid for, including the unevaluated tail of
       // the initial batch, before stopping on a budget admission failure.
@@ -209,8 +227,9 @@ const runQualityFirstAction = async ({
     await persistCandidate(candidate)
   }
   let selected = selectBestPassingCandidate({ candidates: evaluatedCandidates })
-  if (!selected) {
+  if (!selected && !stopDispatching && !evaluationFailureCode && failureCodes.length > 0) {
     const repairCodes = unique(failureCodes)
+    await prepareRepair({ actionId, attemptKind: 'repair', failureCodes: repairCodes.slice() })
     const archiveRelativePath = String(await archiveCandidateRevision({ actionId, reasonCodes: repairCodes }) || '').replace(/\\/g, '/')
     if (archiveRelativePath) {
       if (archiveRelativePath.startsWith('/') || /^[a-zA-Z]:\//.test(archiveRelativePath) || archiveRelativePath.split('/').includes('..')) {
@@ -239,12 +258,14 @@ const runQualityFirstAction = async ({
   }
   const result = selected
     ? { ok: true, actionId, disposition: 'accepted', selectedCandidateId: selected.candidateId, selectedCandidate: selected, candidates: allCandidates, ...evidence }
-    : { ok: false, actionId, disposition: actionId === 'idle' ? 'blocked' : 'omitted', failureCode: 'action_quality_gate_failed', candidates: allCandidates, selectedCandidateId: '', ...evidence }
+    : { ok: false, actionId, disposition: actionId === 'idle' ? 'blocked' : 'omitted', failureCode: evaluationFailureCode || generationFailureCode || 'action_quality_gate_failed', candidates: allCandidates, selectedCandidateId: '', ...evidence }
   return result
 }
 
 module.exports = {
   areSpriteCandidatesDuplicates,
+  executionFailureCode,
   isHatchPetBudgetError,
+  isRetryableGenerationError,
   runQualityFirstAction
 }

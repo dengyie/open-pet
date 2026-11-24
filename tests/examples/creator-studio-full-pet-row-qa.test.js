@@ -104,7 +104,7 @@ test('recolor-only frames are rejected as missing locomotion motion', async () =
   const tempDir = createTempDir()
   const frames = await writeFrames({
     outputDir: path.join(tempDir, 'recolor-running'),
-    frameCount: 6,
+    frameCount: 8,
     createRects: (index) => [
       { x: 62, y: 94, width: 68, height: 72, color: `hsl(${index * 45}, 70%, 55%)` },
       { x: 78, y: 166, width: 16, height: 18, color: `hsl(${index * 45}, 70%, 45%)` },
@@ -113,7 +113,7 @@ test('recolor-only frames are rejected as missing locomotion motion', async () =
   })
 
   const qa = await analyzeRowFrames({
-    actionId: 'running',
+    actionId: 'running-right',
     frames,
     sourceKind: 'row-strip'
   })
@@ -145,11 +145,11 @@ test('recolor-only waving is rejected when the silhouette never moves', async ()
   assert.ok(qa.errors.includes('row_waving_motion_missing'))
 })
 
-test('upper-body-only motion is rejected for running rows', async () => {
+test('upper-body-only motion passes stationary work but fails both directional gait rows', async () => {
   const tempDir = createTempDir()
   const frames = await writeFrames({
     outputDir: path.join(tempDir, 'upper-only-running'),
-    frameCount: 6,
+    frameCount: 8,
     createRects: (index) => [
       { x: 62, y: 96, width: 68, height: 70, color: '#f6b73c' },
       { x: 78, y: 166, width: 16, height: 18, color: '#d49a2d' },
@@ -160,20 +160,25 @@ test('upper-body-only motion is rejected for running rows', async () => {
 
   const qa = await analyzeRowFrames({
     actionId: 'running',
-    frames,
+    frames: frames.slice(0, 6),
     sourceKind: 'row-strip'
   })
 
-  assert.equal(qa.quality, FULL_PET_ROW_QUALITY.FAILED)
+  assert.equal(qa.quality, FULL_PET_ROW_QUALITY.ROW_REAL, JSON.stringify(qa.errors))
   assert.equal(qa.lowerAlphaMaskUniqueFrameCount, 1)
-  assert.ok(qa.errors.includes('row_locomotion_lower_body_motion_missing'))
+  for (const actionId of ['running-right', 'running-left']) {
+    const gait = await analyzeRowFrames({ actionId, frames, sourceKind: 'row-strip' })
+    assert.equal(gait.quality, FULL_PET_ROW_QUALITY.FAILED)
+    assert.ok(gait.errors.includes('row_locomotion_lower_body_motion_missing'))
+    assert.ok(!gait.errors.includes('row_frame_count_mismatch'))
+  }
 })
 
-test('running rejects trivial one-pixel lower-body changes as fake gait motion', async () => {
+test('directional running rejects trivial one-pixel lower-body changes as fake gait motion', async () => {
   const tempDir = createTempDir()
   const frames = await writeFrames({
     outputDir: path.join(tempDir, 'pixel-running'),
-    frameCount: 6,
+    frameCount: 8,
     createRects: (index) => [
       { x: 62, y: 92, width: 68, height: 78, color: '#f6b73c' },
       { x: 78, y: 170, width: 16, height: 16, color: '#d49a2d' },
@@ -183,7 +188,7 @@ test('running rejects trivial one-pixel lower-body changes as fake gait motion',
   })
 
   const qa = await analyzeRowFrames({
-    actionId: 'running',
+    actionId: 'running-right',
     frames,
     sourceKind: 'row-strip'
   })
@@ -191,6 +196,25 @@ test('running rejects trivial one-pixel lower-body changes as fake gait motion',
   assert.equal(qa.quality, FULL_PET_ROW_QUALITY.FAILED)
   assert.ok(qa.errors.includes('row_locomotion_lower_body_motion_missing'))
   assert.equal(qa.motion.lower.averageChangedRatio < 0.01, true)
+})
+
+test('stationary work still requires cadence and a stable baseline', async () => {
+  const outputDir = createTempDir()
+  const frames = await writeFrames({
+    outputDir,
+    frameCount: 6,
+    createRects: (index) => [
+      { x: 62, y: 86 + index * 7, width: 68, height: 65, color: '#f6b73c' },
+      { x: 128 + index * 2, y: 72, width: 12, height: 32, color: '#1c7ed6' }
+    ]
+  })
+  const drifting = await analyzeRowFrames({ actionId: 'running', frames })
+  assert.ok(drifting.errors.includes('row_baseline_drift'))
+  const staticRow = await analyzeRowFrames({ actionId: 'running', frames: Array(6).fill(frames[0]) })
+  assert.ok(staticRow.errors.includes('row_work_cadence_missing'))
+  const alternating = await analyzeRowFrames({ actionId: 'running', frames: Array.from({ length: 6 }, (_, index) => frames[index % 2]) })
+  assert.ok(alternating.errors.includes('row_work_cadence_missing'))
+  assert.ok(!alternating.errors.includes('row_repeated_static'))
 })
 
 test('jumping rows require a real vertical pose progression', async () => {

@@ -937,6 +937,9 @@ test('creator workflow service stops existing-action generation for human review
   assert.equal(commandCalls[0].payload.generationTask.actions[0].frameCount, 6)
   assert.equal(commandCalls[0].payload.generationTask.actions[0].synthesisMode, 'canonical-frame')
   assert.equal(commandCalls[0].payload.generationTask.actions[0].animationType, 'reaction')
+  assert.deepEqual(commandCalls[0].payload.generationTask.actions[0].actionContract, {
+    loop: false, facing: 'reference', camera: 'locked'
+  })
   assert.deepEqual(copiedRuns, [{
     targetType: EDITABLE_TARGET_TYPE,
     targetId: EDITABLE_TARGET_ID,

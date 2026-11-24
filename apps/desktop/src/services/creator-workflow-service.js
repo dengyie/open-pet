@@ -4,7 +4,8 @@ const path = require('path')
 const { CODEX_ROWS } = require('../pet/pet-pack/codex-pet')
 const { sanitizeLogText } = require('./log-safety')
 const { writeJsonAtomic } = require('./json-file-utils')
-const { inferAnimationType } = require('../../../../examples/plugins/creator-studio/lib/action-semantics.js')
+const { inferAnimationType, isWorkStateAction } = require('../../../../examples/plugins/creator-studio/lib/action-semantics.js')
+const { normalizeSingleActionContract } = require('../../../../examples/plugins/creator-studio/lib/single-action-contract.js')
 const { getQualityFirstQualityProfile } = require('../../../../examples/plugins/creator-studio/lib/pet-generation-quality-profile.js')
 const {
   failGeneratingRunAfterCommandTermination
@@ -2024,12 +2025,14 @@ const createWorkflowProgressView = ({
   const runningAction = actions.find((action) => action.status === 'running')
 
   let summary = ''
-  if (qualityFirst?.phase === 'awaiting_identity_review') {
+  if (qualityFirst?.phase === 'planning-failed') {
+    summary = `动作规划失败（${qualityFirst.failureCode}）；可在恢复规划服务后重试生成`
+  } else if (qualityFirst?.phase === 'awaiting_identity_review') {
     summary = `等待人工确认 canonical identity（${qualityFirst.eligibleCandidateCount}/${qualityFirst.candidateCount} 个候选可用）`
   } else if (qualityFirst?.phase === 'identity-generation-failed') {
     summary = failureReason || '身份候选生成失败：没有候选通过完整质量门，全部付费资产已保留'
   } else if (qualityFirst?.phase === 'recovery-required') {
-    summary = 'idle 未通过质量门，已保留资产并生成恢复包；请导出恢复包或重新生成身份'
+    summary = '无法安全完成打包，已保留资产并生成恢复包；请导出恢复包或重新生成身份'
   } else if (failureReason && runStatus === 'failed') {
     const failedList = failedActions
       .slice(0, 4)
@@ -2071,13 +2074,15 @@ const createWorkflowProgressView = ({
 
   return {
     phase: qualityFirst?.phase || normalizeText(activeStage?.id) || 'generate',
-    phaseLabel: qualityFirst?.phase === 'awaiting_identity_review'
-      ? '身份候选审查'
-      : qualityFirst?.phase === 'identity-generation-failed'
-        ? '身份候选生成失败'
-        : qualityFirst?.phase === 'recovery-required'
-          ? '资产恢复'
-          : normalizeText(activeStage?.label) || '生成资源',
+    phaseLabel: qualityFirst?.phase === 'planning' || qualityFirst?.phase === 'planning-failed'
+      ? '动作规划'
+      : qualityFirst?.phase === 'awaiting_identity_review'
+        ? '身份候选审查'
+        : qualityFirst?.phase === 'identity-generation-failed'
+          ? '身份候选生成失败'
+          : qualityFirst?.phase === 'recovery-required'
+            ? '资产恢复'
+            : normalizeText(activeStage?.label) || '生成资源',
     summary: sanitizeProgressReason(summary) || '生成进度更新中',
     stages,
     actions,
@@ -2159,7 +2164,7 @@ const createFullPetTask = ({ characterName, stylePrompt = '' }) => ({
     loop: Boolean(row.loop),
     frameCount: row.durations.length,
     transparentBackground: true,
-    ...(row.id === 'running'
+    ...(isWorkStateAction({ actionId: row.id })
       ? {
           animationType: 'stationary_loop',
           viewDirection: 'preserve the canonical viewpoint',
@@ -2177,12 +2182,12 @@ const createFullPetTask = ({ characterName, stylePrompt = '' }) => ({
   questions: []
 })
 
-const createExistingActionTask = ({ actionName, motionPrompt }) => {
+const createExistingActionTask = ({ actionName, motionPrompt, actionContract }) => {
   const action = {
     actionId: normalizeActionId(actionName, 'custom-action'),
     name: normalizeText(actionName),
     motionPrompt: normalizeText(motionPrompt) || normalizeText(actionName),
-    loop: false
+    actionContract
   }
   return {
   mode: 'single-action',
@@ -3043,7 +3048,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     })
   }
 
-  const generateExistingAction = async ({ actionName, motionPrompt, referenceImageToken = '' }) => {
+  const generateExistingAction = async ({ actionName, motionPrompt, actionContract, referenceImageToken = '' }) => {
     const normalizedActionName = normalizeText(actionName)
     const normalizedMotionPrompt = normalizeText(motionPrompt)
     const normalizedReferenceImageToken = normalizeText(referenceImageToken)
@@ -3059,6 +3064,16 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         state: 'missing-input',
         code: 'missing_motion_prompt',
         message: '请先输入动作描述'
+      })
+    }
+    let contract
+    try {
+      contract = normalizeSingleActionContract(actionContract)
+    } catch (error) {
+      return createWorkflowResult({
+        state: 'missing-input',
+        code: 'invalid_action_contract',
+        message: error.message
       })
     }
 
@@ -3112,7 +3127,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
 
       return runWorkflow({
         mode: 'single-action',
-        task: createExistingActionTask({ actionName: normalizedActionName, motionPrompt: normalizedMotionPrompt }),
+        task: createExistingActionTask({ actionName: normalizedActionName, motionPrompt: normalizedMotionPrompt, actionContract: contract }),
         payload: {
           petName: EDITABLE_TARGET_NAME,
           petId: EDITABLE_TARGET_ID,

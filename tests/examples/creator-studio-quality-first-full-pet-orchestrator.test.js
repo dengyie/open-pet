@@ -13,7 +13,7 @@ const recommendedCanonical = ({ candidateId, sha256, score = 0, ...rest }) => ({
   ...rest
 })
 
-const createHarness = ({ idleOk = true, finalizePackage = async () => ({ spritesheetRelativePath: 'runs/run-1/quality-first/package/spritesheet.webp', artifacts: { outputDir: '/data/runs/run-1/quality-first/package' } }) } = {}) => {
+const createHarness = ({ idleOk = true, actionError, persistActionResult, finalizePackage = async () => ({ spritesheetRelativePath: 'runs/run-1/quality-first/package/spritesheet.webp', artifacts: { outputDir: '/data/runs/run-1/quality-first/package' } }) } = {}) => {
   const calls = { canonical: 0, actions: [], actionCanonicals: [], mirrors: 0, recovery: 0, events: [] }
   const orchestrator = createQualityFirstFullPetOrchestrator({
     generateCanonicalCandidatePool: async () => {
@@ -30,6 +30,7 @@ const createHarness = ({ idleOk = true, finalizePackage = async () => ({ sprites
     runQualityFirstAction: async ({ actionId, canonical }) => {
       calls.actions.push(actionId)
       calls.actionCanonicals.push(canonical?.candidateId || '')
+      if (actionId === 'waving' && actionError) throw actionError
       return { ok: actionId === 'idle' ? idleOk : actionId !== 'waving', actionId, selectedCandidateId: `${actionId}-candidate` }
     },
     createCharacterScaleProfile: async () => ({ hash: 'p'.repeat(64) }),
@@ -41,12 +42,45 @@ const createHarness = ({ idleOk = true, finalizePackage = async () => ({ sprites
       calls.recovery += 1
       return { relativePath: 'runs/run-1/recovery/recovery.json' }
     },
+    persistActionResult,
     finalizePackage,
     recordEvent: (event) => calls.events.push(event),
     now: () => '2026-07-20T12:00:00.000Z'
   })
   return { orchestrator, calls }
 }
+
+test('optional budget exhaustion stops dispatch and packages only completed actions', async () => {
+  const code = 'hatch_pet_evaluator_call_budget_exhausted'
+  const h = createHarness({
+    actionError: Object.assign(new Error('budget refused'), { code }),
+    finalizePackage: async ({ actionResults }) => {
+      assert.deepEqual(Object.keys(actionResults).filter(id => actionResults[id].ok), ['idle', 'running-right', 'running-left'])
+      return { artifacts: { outputDir: '/data/package' } }
+    }
+  })
+  const result = await h.orchestrator.start({ run: { runId: 'run-1' }, plan: { hash: 'plan-hash' }, actions: ['idle', 'running-right', 'waving', 'jumping'] })
+  assert.equal(result.status, 'ready_for_review')
+  assert.deepEqual(h.calls.actions, ['idle', 'running-right', 'waving'])
+  assert.deepEqual(result.qualityFirst.omittedActionIds, ['waving', 'jumping'])
+  assert.equal(result.qualityFirst.failureCode, code)
+  assert.equal(result.qualityFirst.actionResults.jumping.failureCode, code)
+})
+
+test('an optional checkpoint write failure keeps prior actions but blocks packaging', async () => {
+  const h = createHarness({
+    persistActionResult: async ({ actionId }) => {
+      if (actionId === 'waving') throw new Error('checkpoint write failed')
+    },
+    finalizePackage: async () => assert.fail('cannot package after a checkpoint write failure')
+  })
+  const result = await h.orchestrator.start({ run: { runId: 'run-1' }, plan: { hash: 'plan-hash' }, actions: ['idle', 'running-right', 'waving'] })
+  assert.equal(result.status, 'recovery-required')
+  assert.equal(result.qualityFirst.failureCode, 'action_checkpoint_write_failed')
+  assert.equal(result.qualityFirst.actionResults.idle.ok, true)
+  assert.equal(result.qualityFirst.actionResults['running-right'].ok, true)
+  assert.equal(h.calls.recovery, 1)
+})
 
 test('default start deterministically selects the best passing canonical and continues to final human review', async () => {
   const h = createHarness()
@@ -422,7 +456,7 @@ test('canonical acceptance fails closed when final package artifacts are missing
   })
 })
 
-test('canonical acceptance durably publishes identity, profile, and completed actions before later failure', async () => {
+test('canonical acceptance durably publishes completed actions and finalizes a partial package after an optional throw', async () => {
   const snapshots = []
   const events = []
   const orchestrator = createQualityFirstFullPetOrchestrator({
@@ -439,27 +473,38 @@ test('canonical acceptance durably publishes identity, profile, and completed ac
       return { ok: true, actionId, selectedCandidateId: `${actionId}-candidate` }
     },
     createCharacterScaleProfile: async () => ({ hash: 'p'.repeat(64) }),
-    finalizePackage: async () => ({ artifacts: { outputDir: '/data/package' } }),
+    mirrorRunningLeft: async () => { throw Object.assign(new Error('Mirroring failed'), { code: 'mirror_failed' }) },
+    finalizePackage: async ({ actionResults }) => {
+      assert.equal(actionResults.idle.ok, true)
+      assert.equal(actionResults['running-right'].ok, true)
+      assert.equal(actionResults.waving.ok, false)
+      assert.equal(actionResults['running-left'].failureCode, 'mirror_failed')
+      return { artifacts: { outputDir: '/data/package' } }
+    },
     recordEvent: (event) => events.push(event)
   })
   const pending = await orchestrator.start({ run: { runId: 'run-1' }, plan: { hash: 'plan-hash' }, requireIdentityReviewBeforeActions: true })
 
-  await assert.rejects(() => orchestrator.acceptCanonicalIdentity({
+  const result = await orchestrator.acceptCanonicalIdentity({
     run: pending,
     candidateId: 'canonical-1',
     sha256: 'a'.repeat(64),
     plan: { hash: 'plan-hash' },
     actions: ['idle', 'running-right', 'waving'],
     persistRunState: async (value) => snapshots.push(structuredClone(value))
-  }), /waving provider failed/)
+  })
 
+  assert.equal(result.status, 'ready_for_review')
+  assert.equal(result.artifacts.outputDir, '/data/package')
+  assert.deepEqual(result.qualityFirst.omittedActionIds, ['running-left', 'waving'])
   assert.equal(snapshots[0].qualityFirst.acceptedCanonical.candidateId, 'canonical-1')
   assert.equal(snapshots.some((entry) => entry.qualityFirst.scaleProfileHash === 'p'.repeat(64)), true)
   const latest = snapshots.at(-1)
   assert.equal(latest.qualityFirst.phase, 'generating-actions')
   assert.equal(latest.qualityFirst.actionResults.idle.ok, true)
   assert.equal(latest.qualityFirst.actionResults['running-right'].ok, true)
-  assert.equal(latest.qualityFirst.nextAction, 'waving')
+  assert.equal(latest.qualityFirst.actionResults.waving.failureCode, 'action_generation_error')
+  assert.equal(latest.qualityFirst.nextAction, 'finalize-package')
   assert.deepEqual(events.at(-1), {
     scope: 'action',
     status: 'failed',
