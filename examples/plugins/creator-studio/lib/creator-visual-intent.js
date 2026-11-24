@@ -77,6 +77,7 @@ const HAN_LOCOMOTION = /(?:走路|行走|跑(?:步)?|爬行|飞|飛)/u
 const HAN_HEADING = /(?:向|往|朝)[着著]?/u
 const HAN_BODY = /(?:身体|身體|身子|全身)\s*/u
 const HAN_FACING = `(?:${HAN_BODY.source})?(?:面向|面朝|朝向)[着著]?`
+const HAN_CLAUSE_END = /(?=\s*(?:$|[\p{P}并並且而和但却卻]|不过|不過|然后|然後))/u
 const EN_TOWARD = /(?:to|towards?)\s+/u
 const enViewerSide = (side) => String.raw`(?:the\s+)?(?:(?:viewer|screen)(?:[ -]|['’]s\s+))?(?:${side})(?:wards?)?\b`
 const hanViewerSide = (side) => String.raw`\s*(?:屏幕|螢幕|画面|畫面)?\s*${side}(?:侧|側|边|邊)?(?![侧側边邊前后後]*[爪手脚腳眼耳腿])`
@@ -98,7 +99,7 @@ const LOCOMOTION_SIDES = Object.fromEntries(VIEWER_SIDES.map((direction) => {
     `(?:${travel}|${facing})${enViewerSide(side)}(?!${anatomy})`,
     String.raw`(?:^|${motion}\s+)${side}[- ]facing\b|\b${side}[- ]facing\s+${motion}`,
     `${hanFacingAnchor}${HAN_FACING}${hanViewerSide(hanSide)}`,
-    String.raw`${hanFacingAnchor}${HAN_BODY.source}朝[着著]?${hanViewerSide(hanSide)}(?=\s*(?:$|并|且|而|和))`,
+    `${hanFacingAnchor}${HAN_BODY.source}朝[着著]?${hanViewerSide(hanSide)}${HAN_CLAUSE_END.source}`,
     `${HAN_LOCOMOTION.source}${hanModifiers}${hanHeading}`,
     `${hanHeading}${hanModifiers}${HAN_LOCOMOTION.source}`,
     `^${hanHeading}$`

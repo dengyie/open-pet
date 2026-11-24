@@ -115,7 +115,9 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
     '跑步，同时面向屏幕左侧并朝右边挥手',
     '跑向屏幕左侧并朝右边挥手',
     '原地跑步，身体朝左',
-    '原地跑步，同时身體朝螢幕左側'
+    '原地跑步，同时身體朝螢幕左側',
+    '原地跑，同时身体朝左但头向右看',
+    '原地跑，同時身體朝左側不過頭向右看'
   ]) {
     assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-left side profile', motionPrompt)
   }
