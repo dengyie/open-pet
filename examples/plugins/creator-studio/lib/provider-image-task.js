@@ -333,7 +333,7 @@ const normalizeFrameBeats = (value, sheet) => {
         beat: sanitizeVisualDirective(entry.replace(/^Frame\s+\d+\s*:\s*/i, ''))
       }
     }
-    assertAllowedKeys(entry, new Set(['frame', 'cell', 'beat']), `action.frameBeats[${index}]`)
+    assertAllowedKeys(entry, new Set(['frame', 'cell', 'beat', 'poses']), `action.frameBeats[${index}]`)
     const normalizedFrame = Number(entry.frame)
     if (!Number.isInteger(normalizedFrame) || normalizedFrame !== frame) {
       throw createTaskError('image_prompt_frame_plan_incomplete', 'Image task frame beats must be contiguous from frame 1')
@@ -342,6 +342,16 @@ const normalizeFrameBeats = (value, sheet) => {
     const providedCell = sanitizeVisualDirective(entry.cell)
     if (sheet && providedCell && providedCell !== expectedCell) {
       throw createTaskError('image_prompt_frame_plan_incomplete', 'Image task frame beat cell does not match sheet geometry')
+    }
+    if (entry.poses !== undefined) {
+      if (entry.beat !== undefined || !Array.isArray(entry.poses) || entry.poses.length < 2 || entry.poses.length > MAX_VISUAL_DIRECTIVES) {
+        throw createTaskError('image_prompt_contract_invalid', 'Image task frame pose group is invalid')
+      }
+      const poses = entry.poses.map(sanitizeVisualDirective)
+      if (poses.some((pose) => !pose)) {
+        throw createTaskError('image_prompt_frame_plan_incomplete', 'Image task frame pose group text is required')
+      }
+      return { frame, cell: expectedCell || providedCell, poses }
     }
     return {
       frame,
@@ -352,7 +362,7 @@ const normalizeFrameBeats = (value, sheet) => {
   if (sheet && normalized.length !== sheet.frameCount) {
     throw createTaskError('image_prompt_frame_plan_incomplete', 'Image task frame beats must cover every required frame')
   }
-  if (normalized.some((entry) => !entry.beat)) {
+  if (normalized.some((entry) => !entry.beat && !entry.poses)) {
     throw createTaskError('image_prompt_frame_plan_incomplete', 'Image task frame beat text is required')
   }
   return normalized
@@ -367,6 +377,7 @@ const normalizeAction = (value, sheet) => {
       'animationType',
       'moment',
       'viewDirection',
+      'facing',
       'loopType',
       'movingParts',
       'secondaryMotion',
@@ -384,6 +395,7 @@ const normalizeAction = (value, sheet) => {
     animationType: sanitizeVisualDirective(value.animationType),
     moment: sanitizeVisualDirective(value.moment),
     viewDirection: sanitizeVisualDirective(value.viewDirection),
+    ...(['reference', 'viewer-left', 'viewer-right'].includes(value.facing) ? { facing: value.facing } : {}),
     loopType: sanitizeVisualDirective(value.loopType),
     movingParts: normalizeVisualDirectives(value.movingParts),
     secondaryMotion: normalizeVisualDirectives(value.secondaryMotion),

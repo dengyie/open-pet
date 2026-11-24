@@ -1,4 +1,5 @@
 const crypto = require('crypto')
+const { normalizeSingleActionContract } = require('./single-action-contract')
 
 const VALID_MODES = new Set(['single-action', 'full-pet'])
 const VALID_TARGET_PETS = new Set(['current', 'new'])
@@ -101,11 +102,14 @@ const normalizeSpecList = (value) => (
     : []
 )
 
-const normalizeAction = (action = {}, index = 0) => {
+const normalizeAction = (action = {}, index = 0, mode) => {
   const name = String(action.name || `Action ${index + 1}`).trim() || `Action ${index + 1}`
   const actionId = String(action.actionId || hashActionId(name)).trim()
   if (!SAFE_ACTION_ID_PATTERN.test(actionId)) throw new Error(`Creator Studio actionId is invalid: ${actionId}`)
-  const loop = Boolean(action.loop)
+  const actionContract = mode === 'single-action' && action.actionContract !== undefined
+    ? normalizeSingleActionContract(action.actionContract)
+    : null
+  const loop = actionContract?.loop ?? Boolean(action.loop)
   const animationType = String(action.animationType || '').trim()
   if (animationType && !VALID_ANIMATION_TYPES.has(animationType)) {
     throw new Error(`Creator Studio animationType is invalid: ${animationType}`)
@@ -119,6 +123,7 @@ const normalizeAction = (action = {}, index = 0) => {
     name,
     motionPrompt: String(action.motionPrompt || name).trim() || name,
     loop,
+    ...(actionContract ? { actionContract } : {}),
     frameCount: clampFrameCount(action.frameCount, loop ? 12 : 16),
     transparentBackground: action.transparentBackground !== false,
     ...(animationType ? { animationType } : {}),
@@ -148,7 +153,7 @@ const normalizeGenerationTask = (task = {}) => {
   const styleSource = String(task.styleSource || (mode === 'single-action' ? 'currentPet' : 'referenceImage'))
   if (!VALID_STYLE_SOURCES.has(styleSource)) throw new Error(`Creator Studio styleSource is invalid: ${styleSource}`)
   const actions = Array.isArray(task.actions)
-      ? task.actions.map(normalizeAction).map((action) => (
+      ? task.actions.map((action, index) => normalizeAction(action, index, mode)).map((action) => (
           mode === 'single-action'
             ? { ...action, synthesisMode: 'canonical-frame' }
             : action

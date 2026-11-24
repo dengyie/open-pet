@@ -6,12 +6,19 @@ const RIG_REPAIR_CODES = new Set([
   'visual-defect-cross-frame-inconsistent',
   'visual-score-actionReadability-below-minimum',
   'visual-defect-action-unreadable',
-  'body-scale-variance-high'
+  'body-scale-variance-high',
+  'frame-edge-contact',
+  'loop-seam-too-large',
+  'motion-is-static'
 ])
 
+const shouldUseCanonicalRig = ({ actionId, characterClass, attemptKind, failureCodes }) => (
+  attemptKind === 'repair' && supportsCanonicalRig({ actionId, characterClass }) &&
+  Array.isArray(failureCodes) && failureCodes.some(code => RIG_REPAIR_CODES.has(code))
+)
+
 const createActionCandidateRenderer = ({ action, characterClass, generateVideo, generateRig }) => async (request) => {
-  const useRig = request.attemptKind === 'repair' && supportsCanonicalRig({ actionId: action.actionId, characterClass }) &&
-    Array.isArray(request.failureCodes) && request.failureCodes.some(code => RIG_REPAIR_CODES.has(code))
+  const useRig = shouldUseCanonicalRig({ ...request, actionId: action.actionId, characterClass })
   return useRig ? generateRig(request) : generateVideo(request)
 }
-module.exports = { createActionCandidateRenderer }
+module.exports = { createActionCandidateRenderer, shouldUseCanonicalRig }

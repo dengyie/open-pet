@@ -221,6 +221,30 @@ test('runner performs at most one reason-directed repair after both initial cand
   assert.deepEqual(h.calls.archives, [{ actionId: 'idle', reasonCodes: ['cell-edge-contact', 'visual-score-overall-below-minimum'] }])
 })
 
+test('rejected repair preflight leaves previous candidate records in place', async () => {
+  const h = createHarness({
+    generated: [
+      { descriptors: descriptors('0000', 0) },
+      { descriptors: descriptors('ffff', 2) }
+    ],
+    evaluationById: {
+      'candidate-1': { gate: { ok: false, failures: ['motion-is-static'] } },
+      'candidate-2': { gate: { ok: false, failures: ['motion-is-static'] } }
+    }
+  })
+  await assert.rejects(runQualityFirstAction({
+    context: { actionId: 'running-right' },
+    ...h.callbacks,
+    prepareRepair: async ({ failureCodes }) => {
+      assert.deepEqual(failureCodes, ['motion-is-static'])
+      throw Object.assign(new Error('Rejected start frame'), { code: 'video_start_frame_rejected' })
+    },
+    archiveCandidateRevision: async () => assert.fail('candidate records must not move on preflight failure')
+  }), { code: 'video_start_frame_rejected' })
+  assert.equal(h.calls.generated.length, 2)
+  assert.deepEqual(h.calls.persisted, ['candidate-1', 'candidate-2'])
+})
+
 test('runner keeps processed quality failures technically selectable but excludes them from automatic selection', async () => {
   const h = createHarness({
     generated: [
@@ -384,7 +408,82 @@ test('action revisions use distinct candidate IDs for outputs and failed records
       processCandidate: async (candidate) => candidate,
       evaluateCandidate: async () => ({})
     })
+    assert.equal(result.failureCode, 'video_generation_failed')
+    assert.equal(result.candidates.length, 1)
     assert.ok(result.candidates.every((candidate) => candidate.candidateId.startsWith(candidateIdPrefix + '-')))
   }
   assert.equal(new Set(ids).size, ids.length)
+})
+
+test('runner stops after a repeated transient Provider failure instead of spending a quality repair', async () => {
+  let dispatches = 0
+  const result = await runQualityFirstAction({
+    context: { actionId: 'waving' }, reserveCreativeDispatch: () => {},
+    generateCandidate: async () => {
+      dispatches++
+      throw Object.assign(new Error('Provider transport failed'), { code: 'provider_transport_failed', retryable: true })
+    },
+    processCandidate: async () => assert.fail('no generated asset'),
+    evaluateCandidate: async () => assert.fail('no generated asset'),
+    archiveCandidateRevision: async () => assert.fail('not a quality failure')
+  })
+  assert.equal(result.failureCode, 'provider_transport_failed')
+  assert.equal(dispatches, 2)
+})
+
+for (const code of ['auth_failed', 'provider_rate_limited', 'candidate_asset_missing']) {
+  test(`runner stops on ${code} even if the provider marks it retryable`, async () => {
+    let dispatches = 0
+    const result = await runQualityFirstAction({
+      context: { actionId: 'waving' }, reserveCreativeDispatch: () => {},
+      generateCandidate: async () => {
+        dispatches++
+        throw Object.assign(new Error(code), { code, retryable: true })
+      },
+      processCandidate: async () => assert.fail('no generated asset'),
+      evaluateCandidate: async () => assert.fail('no generated asset'),
+      archiveCandidateRevision: async () => assert.fail('not a quality failure')
+    })
+    assert.equal(dispatches, 1)
+    assert.equal(result.failureCode, code)
+  })
+}
+
+test('an evaluator outage retains paid assets without requesting a new candidate', async () => {
+  const generated = []
+  const persisted = []
+  const result = await runQualityFirstAction({
+    context: { actionId: 'waving' }, reserveCreativeDispatch: () => {},
+    generateCandidate: async ({ candidateId, dispatchIndex }) => {
+      generated.push(candidateId)
+      return { descriptors: descriptors(dispatchIndex === 1 ? 'ffff' : '0f0f', dispatchIndex) }
+    },
+    processCandidate: async () => ({ qa: { ok: true, failures: [] } }),
+    evaluateCandidate: async () => { throw Object.assign(new Error('Evaluator unavailable'), { code: 'evaluator_unavailable' }) },
+    persistCandidate: (candidate) => persisted.push(candidate.candidateId),
+    archiveCandidateRevision: async () => assert.fail('not a quality failure')
+  })
+  assert.equal(result.failureCode, 'evaluator_unavailable')
+  assert.deepEqual(generated, ['candidate-1', 'candidate-2'])
+  assert.deepEqual(persisted, generated)
+})
+
+test('an invalid evaluation on one idle board does not discard another paid candidate', async () => {
+  const evaluated = []
+  const result = await runQualityFirstAction({
+    context: { actionId: 'idle' }, reserveCreativeDispatch: () => {},
+    generateCandidate: async ({ dispatchIndex }) => ({ descriptors: descriptors(dispatchIndex === 1 ? 'ffff' : '0f0f', dispatchIndex) }),
+    processCandidate: async () => ({ qa: { ok: true, failures: [] } }),
+    evaluateCandidate: async (candidate) => {
+      evaluated.push(candidate.candidateId)
+      if (candidate.dispatchIndex === 1) {
+        throw Object.assign(new Error('Invalid sprite evaluation'), { code: 'invalid_sprite_evaluation' })
+      }
+      return { gate: { ok: true, failures: [] } }
+    },
+    archiveCandidateRevision: async () => assert.fail('not a quality failure')
+  })
+  assert.deepEqual(evaluated, ['candidate-1', 'candidate-2'])
+  assert.equal(result.selectedCandidateId, 'candidate-2')
+  assert.deepEqual(result.candidates[0].gate.failures, ['invalid_sprite_evaluation'])
 })

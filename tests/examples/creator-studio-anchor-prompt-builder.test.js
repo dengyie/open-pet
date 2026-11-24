@@ -205,6 +205,118 @@ test('four-frame wave plans close the loop by returning to the start pose', () =
   assert.doesNotMatch(result.prompt, /Cell 4 .*tilts slightly outward/is)
 })
 
+test('directional one-shot gait requests a clear stop, not a seamless loop', () => {
+  const action = {
+    actionId: 'quick-jog', motionPrompt: 'Jog in place.', animationType: 'locomotion_loop', frameCount: 6,
+    actionContract: { loop: false, facing: 'viewer-left', camera: 'locked' }
+  }
+  const { prompt } = buildActionSpriteRowPrompt({ action })
+  assert.match(prompt, /face toward the left edge of the image as seen by the viewer/i)
+  assert.match(prompt, /camera motion, pan, zoom, or rotation/i)
+  assert.match(prompt, /cell 6.*supported stopping pose/i)
+  assert.match(prompt, /play once with a clear ending pose/i)
+  assert.doesNotMatch(prompt, /seamless|loop-closing/i)
+
+  const looping = { ...action, actionContract: { ...action.actionContract, loop: true, facing: 'viewer-right' } }
+  assert.match(buildActionKeyframePrompt({ action: looping, keyframeRole: 'start' }).prompt, /face toward the right edge of the image as seen by the viewer/i)
+  assert.match(buildActionSpriteRowPrompt({ action: looping }).prompt, /seamless in-place locomotion cycle/i)
+})
+
+test('16-frame one-shot gait and idle sheets never blend in a loop-closing beat', () => {
+  for (const [name, lastPose] of [
+    ['Running gait', /supported stopping pose/i],
+    ['Idle blink', /settled pose without restarting the motion/i]
+  ]) {
+    const action = { name, frameCount: 16, actionContract: { loop: false, facing: 'reference', camera: 'locked' } }
+    const { prompt } = buildActionSpriteRowPrompt({ action })
+    assert.doesNotMatch(prompt, /seamless|loop.closing|wraparound transition that/i)
+    assert.match(prompt.split('\n').find((line) => /cell 16\b/i.test(line)), lastPose)
+  }
+})
+
+test('one-shot plans keep custom poses that happen to use loop-related words', () => {
+  const pose = 'raised paw with a seamless sleeve cuff'
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: {
+      name: 'Lift a paw', frameCount: 6, loop: false,
+      framePlan: ['neutral stance', pose]
+    }
+  })
+  assert.match(prompt, new RegExp(pose))
+  assert.match(prompt.split('\n').find((line) => /cell 6\b/i.test(line)), new RegExp(pose))
+  assert.match(prompt, /hold the last requested pose as the settled ending, without restarting the motion/i)
+})
+
+test('a full custom one-shot plan keeps one pose per cell and settles in its requested last pose', () => {
+  const framePlan = ['paw planted', 'paw lifting', 'paw raised beside the face', 'paw lowered with eyes open']
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: { name: 'Lift a paw', frameCount: framePlan.length, loop: false, framePlan }
+  })
+  const cells = prompt.split('\n').filter((line) => /^cell \d+\b/i.test(line))
+  assert.deepEqual(cells.map((line) => line.split(' — ')[1]), framePlan.map((pose) => `${pose}.`))
+  assert.match(prompt, /hold the last requested pose as the settled ending/i)
+})
+
+test('every custom one-shot pose occurs in exactly one cell, in order, including the final pose', () => {
+  for (let poseCount = 1; poseCount <= 6; poseCount++) {
+    const framePlan = Array.from({ length: poseCount }, (_, index) =>
+      `pose marker ${index + 1} with open eyes, relaxed shoulders, and the front paw in view, end marker ${index + 1}`)
+    for (let frameCount = 1; frameCount <= 6; frameCount++) {
+      const context = `${poseCount} poses, ${frameCount} cells`
+      const { prompt } = buildActionSpriteRowPrompt({
+        action: { name: 'Lift a paw', frameCount, loop: false, framePlan }
+      })
+      const cells = prompt.split('\n').filter((line) => /^cell \d+\b/i.test(line)).map((line) => line.split(' — ')[1])
+      assert.equal(cells.length, frameCount, context)
+      assert.ok(cells.every(Boolean), context)
+      const poses = cells.flatMap((cell) => [...cell.matchAll(/pose marker \d+[^;]+?end marker \d+/g)].map(([pose]) => pose))
+      assert.deepEqual(poses, framePlan, context)
+      assert.ok(cells.at(-1).endsWith(`${framePlan.at(-1)}.`), context)
+      assert.match(prompt, /hold the last requested pose as the settled ending/i, context)
+    }
+  }
+})
+
+test('one-shot playback wording does not consume the custom pose length budget', () => {
+  const pose = 'Raise the left paw beside the face, with the wrist bent slightly inward and the elbow relaxed. Keep the shoulders level, the gaze straight ahead, both feet flat on the ground, and the tail lowered. Keep the three paw pads clearly visible'
+  assert.ok(pose.length > 220 && pose.length < 240)
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: { name: 'Lift a paw', frameCount: 4, loop: false, framePlan: ['neutral stance', pose] }
+  })
+  const cell = prompt.split('\n').find((line) => /^Cell 4\b/.test(line))
+  assert.equal(cell.split(' — ')[1], `${pose}.`)
+  assert.match(prompt, /^.*Loop requirement:.*use each cell description as a visual pose only.*without restarting the motion.*$/im)
+})
+
+test('a custom one-shot gait uses custom text as pose reference, not as playback instructions', () => {
+  const pose = 'start the next stride by raising the left foot'
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: {
+      name: 'Running gait', frameCount: 6, loop: false,
+      framePlan: ['first contact with the right foot planted', pose]
+    }
+  })
+  const cells = prompt.split('\n').filter((line) => /^cell \d+\b/i.test(line))
+  assert.equal(cells.length, 6)
+  assert.match(prompt, /^.*Loop requirement:.*use each cell description as a visual pose only.*without restarting the motion.*$/im)
+  assert.ok(cells.some((line) => line.includes(pose)))
+  assert.match(cells.at(-1), new RegExp(pose))
+  assert.match(prompt, /hold the last requested pose as the settled ending/i)
+})
+
+test('idle blink uses the specified facing for its start, peak, and loop return', () => {
+  const action = {
+    actionId: 'idle', name: 'Idle blink', frameCount: 5,
+    actionContract: { loop: true, facing: 'viewer-left', camera: 'locked' }
+  }
+  const { prompt } = buildActionSpriteRowPrompt({ action })
+  assert.match(prompt, /face toward the left edge/i)
+  assert.match(prompt, /cell 1[^\n]*quiet reference pose from the specified facing/i)
+  assert.match(prompt, /cell 5[^\n]*starting pose in the specified facing/i)
+  assert.doesNotMatch(prompt, /canonical identity pose, viewpoint/i)
+  assert.match(buildActionKeyframePrompt({ action, keyframeRole: 'peak' }).prompt, /silhouette in the specified facing/i)
+})
+
 test('official running metadata produces a complete stationary work-state cycle', () => {
   const result = buildActionSpriteRowPrompt({ action: { actionId: 'running', name: 'Running', motionPrompt: 'Active processing and scanning motion.', frameCount: 8 } })
   assert.match(result.prompt, /seamless stationary loop with a stable body root/i)

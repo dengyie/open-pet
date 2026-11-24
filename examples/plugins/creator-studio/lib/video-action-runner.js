@@ -370,7 +370,11 @@ const runVideoAction = async ({
       response = await bridge('/creator/model-video-generate', providerRequest, { signal })
       break
     } catch (error) {
-      if (!error?.retryable || attempt >= providerTask.retryPolicy.maxAttempts) throw error
+      if (!error?.retryable) throw error
+      if (attempt >= providerTask.retryPolicy.maxAttempts) {
+        error.retryable = false
+        throw error
+      }
       await new Promise((resolve, reject) => {
         if (signal?.aborted) {
           reject(signal.reason || error)

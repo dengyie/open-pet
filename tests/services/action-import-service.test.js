@@ -39,14 +39,17 @@ test('action import service copies selected frames folder and regenerates action
   const result = await service.importActionFrames({
     sourceDir,
     actionId: 'wave',
-    label: '挥手'
+    label: '挥手',
+    loop: true
   })
 
   assert.equal(fs.existsSync(path.join(framesRoot, 'wave', '01_no_bg.png')), true)
   assert.equal(fs.existsSync(path.join(spritesDir, 'wave.png')), true)
   assert.equal(result.importedAction.id, 'wave')
   assert.equal(result.importedAction.label, '挥手')
+  assert.equal(result.importedAction.loop, true)
   assert.equal(result.actions.length, 1)
+  assert.equal((await service.regenerate()).actions[0].loop, true)
 })
 
 test('action import service imports frames into pet pack manifests without dropping existing actions', async () => {
