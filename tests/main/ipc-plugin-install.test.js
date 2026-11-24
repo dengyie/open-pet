@@ -1021,6 +1021,11 @@ test('Shell action mutations retain contract results and animation broadcasts', 
 
   const runtime = registerIpcHandlers({
     ...services,
+    petPackService: {
+      ...services.petPackService,
+      getActivePackId: () => 'legacy-cat',
+      listPacks: () => assert.fail('Actions frame selection must not enumerate pet packs')
+    },
     petService: {
       ...services.petService,
       getAnimations: () => animations,

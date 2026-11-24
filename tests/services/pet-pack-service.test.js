@@ -201,6 +201,19 @@ test('pet pack service activates bundled pet packs without installing them', () 
   assert.equal(actionService.getConfig().actions.length, 9)
 })
 
+test('pet pack service reads the selected pack ID from settings without opening pet assets', (t) => {
+  const bundledPacksDir = createTempDir('bundled-pet-pack-id')
+  const settingsService = createSettingsService()
+  const service = createServiceWithBundledPacks({ settingsService, bundledPacksDir })
+  t.mock.method(fs, 'readdirSync', () => assert.fail('ID lookups must not enumerate pack files'))
+  t.mock.method(fs, 'readFileSync', () => assert.fail('ID lookups must not read pet assets'))
+
+  assert.equal(service.getActivePackId(), BUILT_IN_PACK_ID)
+  settingsService.save({ petPacks: { activePackId: 'doro', installed: {} } })
+  assert.equal(service.getActivePackId(), 'doro')
+  assert.equal(service.getActivePackId(), 'doro')
+})
+
 test('pet pack service falls back to built-in when active installed Codex atlas is transparent', () => {
   const userPacksDir = createTempDir('pet-packs-transparent-active')
   const badPackDir = path.join(userPacksDir, 'transparent-pet')
@@ -329,6 +342,65 @@ test('pet pack service reports deterministic version conflict decisions during i
   assert.equal(nextInspection.pack.conflict.incomingVersion, '1.1.0')
   assert.equal(nextInspection.pack.conflict.decision, 'downgrade')
   assert.equal(nextInspection.pack.conflict.requiresReview, true)
+})
+
+test('pet pack service leaves an active pack untouched if staging its upgrade fails', (t) => {
+  const firstSource = createTempDir('pet-pack-rollback-first')
+  const nextSource = createTempDir('pet-pack-rollback-next')
+  createPetPackDirectory(firstSource)
+  createPetPackDirectory(nextSource, { version: '2.0.0' })
+  fs.writeFileSync(path.join(firstSource, 'sprites', 'idle.png'), 'original sprite')
+  const settingsService = createSettingsService()
+  const service = createService(settingsService)
+  const first = service.importPack(service.inspectPackDirectory(firstSource).selectionId)
+  service.setActivePack('pack-cat')
+  const previousSettings = structuredClone(settingsService.get())
+  const selectionId = service.inspectPackDirectory(nextSource).selectionId
+  const copy = t.mock.method(fs, 'cpSync', (source, target) => {
+    fs.mkdirSync(target, { recursive: true })
+    fs.writeFileSync(path.join(target, 'partial'), 'incomplete copy')
+    throw new Error('injected copy failure')
+  })
+
+  assert.throws(() => service.importPack(selectionId), /injected copy failure/)
+  copy.mock.restore()
+
+  assert.equal(service.getActivePetPack().manifest.version, '1.0.0')
+  assert.equal(fs.readFileSync(path.join(first.pack.rootPath, 'sprites', 'idle.png'), 'utf8'), 'original sprite')
+  assert.deepEqual(settingsService.get(), previousSettings)
+  assert.deepEqual(fs.readdirSync(path.dirname(first.pack.rootPath)), ['pack-cat'])
+
+  const upgraded = service.importPack(selectionId)
+  assert.equal(upgraded.pack.rootPath, first.pack.rootPath)
+  assert.equal(upgraded.petPacks.activePackId, 'pack-cat')
+  assert.equal(service.getActivePetPack().manifest.version, '2.0.0')
+  assert.deepEqual(fs.readdirSync(path.dirname(first.pack.rootPath)), ['pack-cat'])
+})
+
+test('pet pack service restores the previous pack and settings if saving upgrade metadata fails', (t) => {
+  const firstSource = createTempDir('pet-pack-rollback-settings-first')
+  const nextSource = createTempDir('pet-pack-rollback-settings-next')
+  createPetPackDirectory(firstSource)
+  createPetPackDirectory(nextSource, { version: '2.0.0' })
+  const settingsService = createSettingsService()
+  const service = createService(settingsService)
+  const first = service.importPack(service.inspectPackDirectory(firstSource).selectionId)
+  service.setActivePack('pack-cat')
+  const previousSettings = structuredClone(settingsService.get())
+  const selectionId = service.inspectPackDirectory(nextSource).selectionId
+  const saveSettings = settingsService.save
+  t.mock.method(settingsService, 'save', (settings) => {
+    saveSettings(settings)
+    if (settings.petPacks.installed['pack-cat'].version === '2.0.0') {
+      throw new Error('injected settings failure')
+    }
+  })
+
+  assert.throws(() => service.importPack(selectionId), /injected settings failure/)
+
+  assert.equal(service.getActivePetPack().manifest.version, '1.0.0')
+  assert.deepEqual(settingsService.get(), previousSettings)
+  assert.deepEqual(fs.readdirSync(path.dirname(first.pack.rootPath)), ['pack-cat'])
 })
 
 test('pet pack service exports installed user packs as re-importable zip packages', async () => {

@@ -3,6 +3,7 @@ const path = require('path')
 const os = require('os')
 const crypto = require('crypto')
 const { pathToFileURL } = require('url')
+const { isDeepStrictEqual } = require('util')
 const zipArchiveUtils = require('./zip-archive-utils')
 const { writeJsonAtomic } = require('./json-file-utils')
 const { getLegacyPetAnimations, loadLegacyPetPack, loadPetPackFromDirectory } = require('../pet/pet-pack/loader')
@@ -212,10 +213,12 @@ const createPackSummary = (pack, { active = false, installedAt = '', updatedAt =
   }
 }
 
-const copyDirectory = (sourceDir, targetDir) => {
-  fs.rmSync(targetDir, { recursive: true, force: true })
-  ensureDirectory(targetDir)
-  fs.cpSync(sourceDir, targetDir, { recursive: true })
+const removeImportDirectory = (dirPath) => {
+  try {
+    fs.rmSync(dirPath, { recursive: true, force: true })
+  } catch (error) {
+    console.warn('Failed to clean up pet pack import:', error.message)
+  }
 }
 
 const writePackManifest = (rootPath, pack) => {
@@ -250,6 +253,7 @@ const createPetPackService = ({
   const limits = { ...zipArchiveUtils.DEFAULT_ZIP_LIMITS, ...zipLimits }
 
   const getSettings = () => normalizePetPackSettings(settingsService.get().petPacks)
+  const getActivePackId = () => getSettings().activePackId
 
   const savePetPackSettings = (petPacks) => {
     const settings = settingsService.get()
@@ -437,10 +441,9 @@ const createPetPackService = ({
   }
 
   const cleanupPendingSelection = () => {
-    if (pendingSelection?.cleanupPath) {
-      fs.rmSync(pendingSelection.cleanupPath, { recursive: true, force: true })
-    }
+    const cleanupPath = pendingSelection?.cleanupPath
     pendingSelection = null
+    if (cleanupPath) removeImportDirectory(cleanupPath)
   }
 
   const inspectPackSource = async (sourcePath) => {
@@ -535,53 +538,89 @@ const createPetPackService = ({
     const packId = pack.manifest.id
     if (!isSafePackId(packId)) throw new Error('Pet pack id is invalid')
     if (packId === BUILT_IN_PACK_ID) throw new Error('Pet pack id is reserved for the built-in pack')
-    const contentPackageHash = packageHash || getDirectoryPackageHash(selection.sourceDir)
-    const downloadedPackageHash = sourcePackageHash || selection.sourcePackageHash || ''
-    assertPackAllowed({ id: packId, packageHash: contentPackageHash, sourceSha256: downloadedPackageHash })
     ensureDirectory(userPacksDir)
-    const targetDir = path.join(userPacksDir, packId)
+    const targetParentRealPath = fs.realpathSync(userPacksDir)
+    const targetDir = path.join(targetParentRealPath, packId)
     const sourceRealPath = fs.realpathSync(selection.sourceDir)
-    const targetParentRealPath = fs.existsSync(userPacksDir) ? fs.realpathSync(userPacksDir) : userPacksDir
-    if (sourceRealPath === path.resolve(targetDir) || sourceRealPath.startsWith(`${path.resolve(targetDir)}${path.sep}`)) {
+    if (sourceRealPath === targetDir || sourceRealPath.startsWith(`${targetDir}${path.sep}`)) {
       throw new Error('Cannot import a pet pack from its install target')
     }
-    copyDirectory(selection.sourceDir, targetDir)
-    assertInsideDirectory(targetParentRealPath, targetDir, 'install target')
-    const installedPack = loadPetPackFromDirectory(targetDir)
-    validatePackFiles(installedPack)
 
-    const current = getSettings()
-    const previousMetadata = current.installed[packId] || {}
-    const timestamp = now().toISOString()
-    const provenance = {
-      ...(installedPack.manifest.provenance || {}),
-      originalFormat: selection.sourceType === 'zip' ? 'openpet-pet-zip' : installedPack.source?.type || 'directory',
-      importedAt: previousMetadata.provenance?.importedAt || previousMetadata.importedAt || timestamp
-    }
-    const nextSettings = savePetPackSettings({
-      ...current,
-      installed: {
-        ...current.installed,
-        [packId]: {
-          id: packId,
-          displayName: installedPack.manifest.displayName,
-          version: installedPack.manifest.version,
-          packageHash: contentPackageHash,
-          sourcePackageHash: downloadedPackageHash,
-          provenance,
-          installedAt: previousMetadata.installedAt || timestamp,
-          updatedAt: timestamp
-        }
+    const stagingRoot = fs.mkdtempSync(path.join(targetParentRealPath, '.import-'))
+    const stagedDir = path.join(stagingRoot, 'pack')
+    const backupDir = path.join(stagingRoot, 'previous')
+    let backedUp = false
+    let swapped = false
+    let previousSettings
+    let keepBackup = false
+    try {
+      fs.cpSync(selection.sourceDir, stagedDir, { recursive: true })
+      assertNoSymlinks(stagedDir)
+      const stagedPack = loadPetPackFromDirectory(stagedDir)
+      if (stagedPack.manifest.id !== packId) throw new Error('Pet pack id changed during import')
+      validatePackFiles(stagedPack)
+      const contentPackageHash = packageHash || getDirectoryPackageHash(stagedDir)
+      const downloadedPackageHash = sourcePackageHash || selection.sourcePackageHash || ''
+      assertPackAllowed({ id: packId, packageHash: contentPackageHash, sourceSha256: downloadedPackageHash })
+
+      const current = getSettings()
+      const previousMetadata = current.installed[packId] || {}
+      const timestamp = now().toISOString()
+      const provenance = {
+        ...(stagedPack.manifest.provenance || {}),
+        originalFormat: selection.sourceType === 'zip' ? 'openpet-pet-zip' : stagedPack.source?.type || 'directory',
+        importedAt: previousMetadata.provenance?.importedAt || previousMetadata.importedAt || timestamp
       }
-    })
-    cleanupPendingSelection()
-    return {
-      pack: createPackSummary({
-        ...installedPack,
-        source: { type: 'user-installed', path: targetDir },
+      const installPath = path.join(userPacksDir, packId)
+      const summary = createPackSummary({
+        ...stagedPack,
+        rootPath: installPath,
+        source: { type: 'user-installed', path: installPath },
         metadata: { packageHash: contentPackageHash, sourcePackageHash: downloadedPackageHash, provenance }
-      }),
-      petPacks: nextSettings
+      })
+      if (fs.lstatSync(targetDir, { throwIfNoEntry: false })) {
+        fs.renameSync(targetDir, backupDir)
+        backedUp = true
+      }
+      fs.renameSync(stagedDir, targetDir)
+      swapped = true
+      previousSettings = current
+      const nextSettings = savePetPackSettings({
+        ...current,
+        installed: {
+          ...current.installed,
+          [packId]: {
+            id: packId,
+            displayName: stagedPack.manifest.displayName,
+            version: stagedPack.manifest.version,
+            packageHash: contentPackageHash,
+            sourcePackageHash: downloadedPackageHash,
+            provenance,
+            installedAt: previousMetadata.installedAt || timestamp,
+            updatedAt: timestamp
+          }
+        }
+      })
+      cleanupPendingSelection()
+      return { pack: summary, petPacks: nextSettings }
+    } catch (error) {
+      try {
+        if (swapped) fs.renameSync(targetDir, stagedDir)
+        if (backedUp) {
+          fs.renameSync(backupDir, targetDir)
+          backedUp = false
+        }
+        if (previousSettings && !isDeepStrictEqual(getSettings(), previousSettings)) {
+          savePetPackSettings(previousSettings)
+        }
+      } catch (rollbackError) {
+        keepBackup = backedUp
+        const recoveryPath = keepBackup ? `; previous pack preserved at ${backupDir}` : ''
+        throw new AggregateError([error, rollbackError], `Pet pack import failed: ${error.message}; rollback failed: ${rollbackError.message}${recoveryPath}`)
+      }
+      throw error
+    } finally {
+      if (!keepBackup) removeImportDirectory(stagingRoot)
     }
   }
 
@@ -595,7 +634,7 @@ const createPetPackService = ({
     const outputPath = path.join(outputDir, fileName)
     const exportRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-pet-pack-export-'))
     try {
-      copyDirectory(pack.rootPath, exportRoot)
+      fs.cpSync(pack.rootPath, exportRoot, { recursive: true })
       writePackManifest(exportRoot, pack)
       await zipArchiveUtils.writeZipFromDirectory(exportRoot, outputPath)
     } finally {
@@ -810,6 +849,7 @@ const createPetPackService = ({
   }
 
   return {
+    getActivePackId,
     getActivePetPack,
     getPackManifest,
     listPacks,
