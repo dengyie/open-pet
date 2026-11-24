@@ -275,6 +275,9 @@ const buildSections = ({ task, action, creativeBrief, backend, model, currentPet
   const actionSheet = getActionSheetLayout(action)
   const actionSpec = getActionSpec({ action, frameCount: actionSheet.frameCount })
   const framePlan = buildActionFramePlan({ action, frameCount: actionSheet.frameCount })
+  const oneShotPlayback = mode === 'single-action'
+    ? describeCustomOneShotPlayback({ action, frameCount: actionSheet.frameCount })
+    : ''
   const negativePrompt = createNegativePrompt({ mode, actionName })
   const providerWording = model === 'gpt-image-2'
     ? 'Use transparent-friendly, easy cutout silhouette wording; do not depend on a provider alpha-channel parameter.'
@@ -369,7 +372,7 @@ const buildSections = ({ task, action, creativeBrief, backend, model, currentPet
       action?.loop
         ? 'For looping actions, start and end pose should be compatible, motion should not drift across the canvas, and body center should remain stable.'
         : 'For one-shot actions, start from neutral, perform the action clearly, then return to neutral or end in a clear final pose.',
-      mode === 'single-action' ? describeCustomOneShotPlayback({ action, frameCount: actionSheet.frameCount }) : ''
+      ...(oneShotPlayback ? [oneShotPlayback] : [])
     ],
     'Root And Anchor Rules': [
       'Use a stable root anchor at the lower center of the character in every frame.',

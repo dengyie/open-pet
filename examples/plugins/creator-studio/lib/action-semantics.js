@@ -372,11 +372,14 @@ const getCustomFramePoses = (action) => Array.isArray(action.framePlan)
   ? action.framePlan.map(stripFramePrefix).filter(Boolean)
   : []
 
-const describeCustomOneShotPlayback = ({ action, frameCount }) => (
-  frameCount > 0 && resolveActionLoop(action) === false && getCustomFramePoses(action).length >= frameCount
+const describeCustomOneShotPlayback = ({ action, frameCount }) => {
+  if (frameCount <= 0 || resolveActionLoop(action) !== false) return ''
+  const poseCount = getCustomFramePoses(action).length
+  if (!poseCount) return ''
+  return poseCount >= frameCount
     ? 'use each cell description as a visual pose only; hold the last requested pose as the settled ending, without restarting the motion'
-    : ''
-)
+    : 'use each cell description as a visual pose only; finish in the final cell without restarting the motion'
+}
 
 const hasExplicitFacing = (action) => ['viewer-left', 'viewer-right'].includes(action.actionContract?.facing)
 
@@ -405,11 +408,9 @@ const expandPhases = (phases, count) => {
   })
 }
 
-const expandOneShotCustomPhases = (poses, count, ending) => {
-  if (poses.length >= count) return expandPhases(poses, count)
-  const describePose = (pose) => `visual pose only, no restart: "${pose}"`
-  return [...expandPhases(poses, count - 1).map(describePose), ending]
-}
+const expandOneShotCustomPhases = (poses, count, ending) => poses.length >= count
+  ? expandPhases(poses, count)
+  : [...expandPhases(poses, count - 1), ending]
 
 const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
   const count = Math.max(1, Number(frameCount) || 1)

@@ -256,6 +256,17 @@ test('a full custom one-shot plan keeps one pose per cell and settles in its req
   assert.match(prompt, /hold the last requested pose as the settled ending/i)
 })
 
+test('one-shot playback wording does not consume the custom pose length budget', () => {
+  const pose = 'Raise the left paw beside the face, with the wrist bent slightly inward and the elbow relaxed. Keep the shoulders level, the gaze straight ahead, both feet flat on the ground, and the tail lowered. Keep the three paw pads clearly visible'
+  assert.ok(pose.length > 220 && pose.length < 240)
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: { name: 'Lift a paw', frameCount: 4, loop: false, framePlan: ['neutral stance', pose] }
+  })
+  const cell = prompt.split('\n').find((line) => /^Cell 3\b/.test(line))
+  assert.equal(cell.split(' — ')[1], `${pose}.`)
+  assert.match(prompt, /^.*Loop requirement:.*use each cell description as a visual pose only.*without restarting the motion.*$/im)
+})
+
 test('a custom one-shot gait uses custom text as pose reference, not as playback instructions', () => {
   const pose = 'start the next stride by raising the left foot'
   const { prompt } = buildActionSpriteRowPrompt({
@@ -266,9 +277,7 @@ test('a custom one-shot gait uses custom text as pose reference, not as playback
   })
   const cells = prompt.split('\n').filter((line) => /^cell \d+\b/i.test(line))
   assert.equal(cells.length, 6)
-  for (const line of cells.filter((line) => line.includes(pose))) {
-    assert.match(line, /visual pose only, no restart/i)
-  }
+  assert.match(prompt, /^.*Loop requirement:.*use each cell description as a visual pose only.*without restarting the motion.*$/im)
   assert.ok(cells.some((line) => line.includes(pose)))
   assert.match(cells.at(-1), /supported stopping pose/i)
   assert.doesNotMatch(cells.at(-1), /start the next stride/i)
