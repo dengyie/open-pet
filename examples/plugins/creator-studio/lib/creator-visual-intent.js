@@ -71,6 +71,16 @@ const SIDE_TERMS = Object.freeze({
   'viewer-right': /\b(?:right|rightward)\b|右/u
 })
 
+const LOCOMOTION_SIDES = Object.fromEntries(VIEWER_SIDES.map((direction) => {
+  const side = direction.slice('viewer-'.length)
+  const hanSide = side === 'left' ? '左' : '右'
+  return [direction, new RegExp([
+    String.raw`\b(?:fac(?:e|es|ing)|towards?|run(?:s|ning)?|walk(?:s|ing)?|sprint(?:s|ing)?|trot(?:s|ting)?|crawl(?:s|ing)?|fly(?:ing)?)\s+(?:the\s+)?(?:(?:viewer|screen)[ -])?${side}(?:wards?)?\b(?!\s+(?:(?:front|rear|hind)\s+)?(?:paws?|limbs?|legs?|arms?|eyes?|ears?|now)\b)`,
+    String.raw`\b${side}[- ]facing\b`,
+    `(?:向|往|朝)(?:屏幕|螢幕|画面|畫面)?${hanSide}(?:侧|側|边|邊)?(?![前后後]?[爪手脚腳眼耳])`
+  ].join('|'), 'u')]
+}))
+
 const MOTIONS = [
   ['Waving', /\bwav(?:e|es|ed|ing)\b|挥手|揮手|挥爪|揮爪|招手/u, 'stationary_loop', 'wave one visible appendage in greeting', 'selected visible waving appendage'],
   ['Blinking', /\bblink(?:s|ed|ing)?\b|眨眼/u, 'stationary_loop', 'close and reopen the eyes once', 'eyelids'],
@@ -120,9 +130,10 @@ const toProviderAction = (action = {}) => {
   const [name, , animationType, moment, movingPart] = findMotion(descriptionBrief.primary) || findMotion(titleBrief.primary) ||
     ['Custom action', null, action.loop ? 'stationary_loop' : 'reaction', 'show a small anchored reaction', 'visible expressive features']
   const sideClauses = ({ primary, facing }) => animationType === 'locomotion_loop' ? [...primary, ...facing] : primary
+  const sideTerms = animationType === 'locomotion_loop' ? LOCOMOTION_SIDES : SIDE_TERMS
   const descriptionSides = sideClauses(descriptionBrief)
-  const hasSideInDescription = Object.values(SIDE_TERMS).some((pattern) => descriptionSides.some((clause) => pattern.test(clause)))
-  const side = chooseUnambiguous(hasSideInDescription ? descriptionSides : sideClauses(titleBrief), SIDE_TERMS)
+  const hasSideInDescription = Object.values(sideTerms).some((pattern) => descriptionSides.some((clause) => pattern.test(clause)))
+  const side = chooseUnambiguous(hasSideInDescription ? descriptionSides : sideClauses(titleBrief), sideTerms)
   const speed = chooseUnambiguous(descriptionBrief.primary, {
     slowly: /\b(?:slowly|slow|gently|gentle)\b|缓慢|緩慢|慢慢|轻轻|輕輕/u,
     quickly: /\b(?:quickly|quick|fast|rapidly)\b|快速|迅速/u
