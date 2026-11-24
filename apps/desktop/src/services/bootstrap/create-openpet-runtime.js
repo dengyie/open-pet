@@ -96,6 +96,7 @@ const createOpenPetRuntime = ({
   } = core
   const sidecarLogger = createSidecarLogger({ appLogService, safeRecordAppLog })
   let settingsSidecarBridge = null
+  let settingsHydration = null
   let catalogSidecarBridge = null
   let actionsSidecarBridge = null
   // Startup repairs can finish before the sidecar has completed its handshake.
@@ -229,14 +230,15 @@ const createOpenPetRuntime = ({
       throw new Error('Unsupported AI host operation')
     },
     onReady: async () => {
-      try {
-        await settingsSidecarBridge?.hydrate()
-      } catch (error) {
+      const hydration = settingsSidecarBridge?.hydrate().catch((error) => {
         safeRecordAppLog(appLogService, {
           scope: 'settings', level: 'error', actor: 'system', event: 'settings.hydrate.failed',
           message: error?.message || 'Backend settings hydration failed'
         })
-      }
+      })
+      settingsHydration = hydration
+      await hydration
+      if (settingsHydration === hydration) settingsHydration = null
       await flushDeferredSettingsPersistence()
       await aiSidecar.hydrate()
     },
@@ -325,6 +327,7 @@ const createOpenPetRuntime = ({
   })
 
   const persistCanonicalInput = async ({ input, applyMergedSettings }) => {
+    if (settingsHydration) await settingsHydration
     const backend = sidecarRuntimeCoordinator.getBackend?.()
     if (!backend || !settingsSidecarBridge) throw new Error('settings sidecar unavailable')
     let settings = input.settings
@@ -555,6 +558,7 @@ const createOpenPetRuntime = ({
     getMovementState,
     createSettingsWindow: createControlCenterWindow,
     petMovementPolicy,
+    persistCanonicalSettings: persistSettingsWhenBackendReady,
     petChatWindowService,
     sidecarRuntimeCoordinator
   }) || ipcRuntimeHelpers

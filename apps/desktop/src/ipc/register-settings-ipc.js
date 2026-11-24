@@ -16,7 +16,8 @@ const createSettingsCommandHandler = ({
     }
     const result = { scale: payload.scale }
     petService.previewSettings(result)
-    sendToPetWindow(getPetWindow, IPC.SETTINGS_CHANGED, result)
+    const committedScale = petService.getSettings?.()?.scale ?? 1
+    sendToPetWindow(getPetWindow, IPC.SETTINGS_CHANGED, { ...result, scalePreview: result.scale !== committedScale })
     return result
   }
 

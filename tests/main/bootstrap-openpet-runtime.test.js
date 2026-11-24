@@ -43,6 +43,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   const persistenceRequests = []
   const fetchCalls = []
   let failNextSettingsPatch = false
+  let holdNextSettingsRead
   const fetchImpl = async (url, init = {}) => {
     fetchCalls.push({ url: String(url), method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
     if (String(url).endsWith('/ai/state')) return new Response(JSON.stringify({ ok: true, data: { config: {}, messages: [], petPackId: '' } }))
@@ -50,10 +51,16 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
       failNextSettingsPatch = false
       return new Response(JSON.stringify({ ok: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'simulated settings persistence failure' } }), { status: 503, headers: { 'content-type': 'application/json' } })
     }
-    return new Response(JSON.stringify({ ok: true, data: {
+    const response = new Response(JSON.stringify({ ok: true, data: {
       version: 1,
       values: { ...settings, customCursorScope: 'system', petBehavior: { home: { enabled: true, anchor: { displayId: 'old-display', x: 1, y: 2 } } } }
     } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (!init.method && holdNextSettingsRead) {
+      const hold = holdNextSettingsRead
+      holdNextSettingsRead = null
+      await hold
+    }
+    return response
   }
   let unexpectedCursorExit
   let coordinatorOnReady
@@ -336,6 +343,19 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   ])
 
   const ipcDependencies = registeredIpcDependencies[0]
+  const heldRead = Promise.withResolvers()
+  holdNextSettingsRead = heldRead.promise
+  const hydration = coordinatorOnReady(backend)
+  const draggedAnchor = { displayId: 'new-display', x: 70, y: 80 }
+  const nextSettings = { ...settings, petBehavior: { home: { enabled: true, anchor: draggedAnchor } } }
+  const pendingDrag = ipcDependencies.persistCanonicalSettings({ settings: nextSettings, paths: ['petBehavior.home.anchor'] })
+  await setImmediatePromise()
+  assert.equal(persistenceRequests.length, 1, 'drag persistence must not overtake an in-flight hydrate')
+  heldRead.resolve()
+  await Promise.all([hydration, pendingDrag])
+  assert.deepEqual(persistenceRequests.at(-1).patch, { 'petBehavior.home.anchor': draggedAnchor })
+  assert.deepEqual(settings.petBehavior.home.anchor, draggedAnchor)
+
   assert.ok(ipcDependencies.sidecarRuntimeCoordinator)
   assert.ok(ipcDependencies.createSettingsWindow())
   assert.equal(settingsWindowPayloads.length, 0)

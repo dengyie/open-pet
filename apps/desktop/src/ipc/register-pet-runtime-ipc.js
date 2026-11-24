@@ -12,6 +12,7 @@ const registerPetRuntimeIpc = ({
   getMovementState,
   createSettingsWindow,
   petMovementPolicy,
+  persistCanonicalSettings,
   petChatWindowService,
   petBubbleChatWindowService,
   buildPetContextMenuItems,
@@ -67,7 +68,7 @@ const registerPetRuntimeIpc = ({
     petBubbleChatWindowService?.syncToPetWindow?.()
   })
 
-  ipcMainService.on(IPC.PET_DRAG_ENDED, (event) => {
+  ipcMainService.on(IPC.PET_DRAG_ENDED, async (event) => {
     if (!petMovementPolicy) return
     const win = browserWindowService.fromWebContents(event.sender)
     if (!win) return
@@ -75,7 +76,7 @@ const registerPetRuntimeIpc = ({
     const behavior = petMovementPolicy.normalizePetBehaviorSettings(currentSettings.petBehavior)
     if (!behavior.home.enabled) return
     const anchor = petMovementPolicy.createHomeAnchorFromWindow({ windowBounds: win.getBounds() })
-    const savedSettings = petService.saveSettings({
+    const nextSettings = {
       ...currentSettings,
       petBehavior: {
         ...behavior,
@@ -84,9 +85,26 @@ const registerPetRuntimeIpc = ({
           anchor
         }
       }
-    })
+    }
+    const savedSettings = persistCanonicalSettings
+      ? petService.applySettings(nextSettings)
+      : petService.saveSettings(nextSettings)
     sendToPetWindow(getPetWindow, IPC.SETTINGS_CHANGED, createPetRendererSettings(savedSettings))
     petBubbleChatWindowService?.syncToPetWindow?.()
+    if (persistCanonicalSettings) {
+      try {
+        await persistCanonicalSettings({ settings: savedSettings, paths: ['petBehavior.home.anchor'] })
+      } catch (error) {
+        recordAppLog({
+          scope: 'pet-window',
+          level: 'error',
+          actor: 'system',
+          event: 'pet.home.anchor.persist.failed',
+          message: 'Failed to persist the pet home anchor',
+          details: { errorCode: error?.code || 'persist-error' }
+        })
+      }
+    }
   })
 
   ipcMainService.on(IPC.PET_SET_MOUSE_PASSTHROUGH, (event, passthrough) => {

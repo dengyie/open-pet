@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { createPetRendererElements } = require('./fixtures/pet-renderer-elements')
 
 const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'apps', 'desktop', 'renderer.js'), 'utf-8')
 
@@ -33,12 +34,7 @@ const createElement = (id = '') => ({
 
 const createRendererHarness = async () => {
   const viewportCalls = []
-  const elements = {
-    pet: createElement('pet'),
-    cat: createElement('cat'),
-    bubble: createElement('bubble'),
-    menu: createElement('menu')
-  }
+  const elements = createPetRendererElements(createElement)
   let nextTimerId = 1
   const activeTimers = new Map()
   const callbacks = {}
@@ -48,7 +44,7 @@ const createRendererHarness = async () => {
     document: {
       documentElement: { style: createStyle() },
       body: { style: createStyle() },
-      getElementById: (id) => elements[id],
+      getElementById: (id) => elements[id] ?? null,
       createElement: () => createElement()
     },
     window: {
@@ -108,7 +104,7 @@ test('scale changes freeze the pet on the default action instead of continuing a
   callbacks.action({ actionId: 'waving' })
   assert.ok([...activeTimers.values()].includes(100))
 
-  callbacks.settings({ scale: 0.5 })
+  callbacks.settings({ scale: 0.5, scalePreview: true })
 
   const actionEvents = logs.filter((entry) => entry.event === 'pet.action.changed')
   assert.equal(actionEvents.at(-1).details.nextAction, 'idle')
@@ -137,9 +133,45 @@ test('scale preview sends one viewport resize after freezing to the default acti
   callbacks.action({ actionId: 'waving' })
   const callsBeforeScale = viewportCalls.length
 
-  callbacks.settings({ scale: 0.5 })
+  callbacks.settings({ scale: 0.5, scalePreview: true })
 
   const scaleViewportCalls = viewportCalls.slice(callsBeforeScale)
   assert.equal(scaleViewportCalls.length, 1)
   assert.equal(scaleViewportCalls[0].scale, 0.25)
+})
+
+test('saving the already-previewed scale resumes idle without replacing the sprite viewport', async () => {
+  const { activeTimers, callbacks, elements, viewportCalls } = await createRendererHarness()
+  callbacks.settings({ scale: 0.8, scalePreview: true })
+  const count = viewportCalls.length
+  assert.equal(activeTimers.size, 0)
+
+  callbacks.settings({ scale: 1, walkSpeed: 3 })
+  assert.equal(activeTimers.size, 0)
+  assert.equal(elements.cat.style.width, '40px')
+
+  callbacks.settings({ scale: 0.8, walkSpeed: 3 })
+  assert.equal(activeTimers.size, 1)
+  assert.equal(viewportCalls.length, count)
+  assert.equal(viewportCalls.at(-1).scale, 0.4)
+})
+
+test('returning to the saved scale cancels preview and resumes idle', async () => {
+  const { activeTimers, callbacks, elements, viewportCalls } = await createRendererHarness()
+  callbacks.settings({ scale: 0.8, scalePreview: true })
+  callbacks.settings({ scale: 1, scalePreview: false })
+
+  assert.equal(activeTimers.size, 1)
+  assert.equal(elements.cat.style.width, '50px')
+  assert.equal(viewportCalls.at(-1).scale, 0.5)
+})
+
+test('a committed scale change outside preview keeps the active animation playing', async () => {
+  const { activeTimers, callbacks, elements } = await createRendererHarness()
+  callbacks.action({ actionId: 'waving' })
+  callbacks.settings({ scale: 0.8 })
+
+  assert.equal(activeTimers.size, 1)
+  assert.equal(elements.cat.style.backgroundImage, 'url(waving.png)')
+  assert.equal(elements.cat.style.width, '40px')
 })

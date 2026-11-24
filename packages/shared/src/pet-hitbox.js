@@ -5,19 +5,24 @@
     root.OpenPetHitbox = factory()
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window, function () {
-  const getFrameHitbox = ({ animation, layout, frameIndex = 0, windowHeight, scale = 1 }) => {
+  const getFrameHitbox = ({ animation, layout, frameIndex = 0, windowHeight, scale = 1, mirrored = false }) => {
     if (!animation || !layout) return null
     const frame = Array.isArray(animation.frames) ? animation.frames[frameIndex] : null
     const trim = frame?.trim || { x: 0, y: 0, width: animation.frameWidth, height: animation.frameHeight }
     const fitScale = layout.dims.fitScale || 1
     const padding = (layout.viewport.padding || 0) * scale
-    const left = layout.catLeft + (trim.x * fitScale * scale) - padding
-    const top = (windowHeight - layout.catBottom - (layout.dims.height * scale)) + (trim.y * fitScale * scale) - padding
+    const width = Math.max(1, Math.round(layout.dims.width * scale))
+    const height = Math.max(1, Math.round(layout.dims.height * scale))
+    const frameScaleX = Math.max(1, Math.round(animation.frameWidth * fitScale * scale)) / animation.frameWidth
+    const frameScaleY = Math.max(1, Math.round(animation.frameHeight * fitScale * scale)) / animation.frameHeight
+    const trimLeft = mirrored ? width - (trim.x + trim.width) * frameScaleX : trim.x * frameScaleX
+    const left = layout.catLeft + trimLeft - padding
+    const top = windowHeight - layout.catBottom - height + trim.y * frameScaleY - padding
     return {
       left,
       top,
-      right: left + (trim.width * fitScale * scale) + padding * 2,
-      bottom: top + (trim.height * fitScale * scale) + padding * 2
+      right: left + trim.width * frameScaleX + padding * 2,
+      bottom: top + trim.height * frameScaleY + padding * 2
     }
   }
 

@@ -245,6 +245,25 @@ test('applyPetViewport resizes around bottom center for dynamic action bounds', 
   })
 })
 
+test('applyWindowScale preserves a pet sprite viewport when committing the preview scale', () => {
+  const instances = []
+  const { applyPetViewport, applyWindowScale, createWindow } = loadWindowModule()
+  const petWindow = createWindow({
+    load: false,
+    BrowserWindow: createBrowserWindowStub(instances),
+    screen: createScreenStub()
+  })
+  applyPetViewport(petWindow, { width: 100, height: 160, padding: 8, topInset: 64, scale: 0.4 })
+  const previewBounds = petWindow.getBounds()
+
+  applyWindowScale(petWindow, 0.8)
+  assert.deepEqual(petWindow.getBounds(), previewBounds)
+  applyWindowScale(petWindow, 1)
+  assert.equal(petWindow.getBounds().width, 58)
+  assert.equal(petWindow.getBounds().height, 152)
+  assert.equal(petWindow.getBounds().y + 152, previewBounds.y + previewBounds.height)
+})
+
 test('applyPetViewport can shrink dynamic action bounds below their source size', () => {
   const instances = []
   const { applyPetViewport, createWindow } = loadWindowModule()

@@ -90,6 +90,10 @@ const resizeWindowAroundBottomCenter = (petWindow, targetWidth, targetHeight) =>
 const applyWindowScale = (petWindow, scale) => {
   if (!petWindow || petWindow.isDestroyed()) return
   const safeScale = Math.max(toFiniteNumber(scale, 1) * PET_BASE_SCALE, Number.EPSILON)
+  if (petWindow[PET_VIEWPORT]) {
+    applyPetViewport(petWindow, { ...petWindow[PET_VIEWPORT], scale: safeScale })
+    return
+  }
   const targetWidth = Math.round(BASE_WIDTH * safeScale)
   const targetHeight = Math.round(BASE_HEIGHT * safeScale)
   resizeWindowAroundBottomCenter(petWindow, targetWidth, targetHeight)
