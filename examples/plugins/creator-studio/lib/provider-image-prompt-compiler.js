@@ -36,7 +36,7 @@ const FORBIDDEN_PROMPT_PATTERNS = Object.freeze([
   Object.freeze({ pattern: /(?:忽略|无视|覆盖|泄露|透露|重复).{0,40}(?:指令|提示词|系统|规则|要求)/i, label: 'prompt control' })
 ])
 
-const assertProviderNeutralPrompt = (value, capabilities = null) => {
+const assertProviderNeutralPrompt = (value) => {
   const text = String(value || '').trim()
   if (!text) throw createTaskError('image_prompt_contract_invalid', 'Compiled image prompt is empty')
   if (text.length > MAX_PROMPT_LENGTH) {
@@ -49,12 +49,6 @@ const assertProviderNeutralPrompt = (value, capabilities = null) => {
         `Compiled image prompt contains forbidden ${entry.label}`
       )
     }
-  }
-  if (capabilities && !capabilities.supportsDirectTransparency && /\btransparent\b/i.test(text)) {
-    throw createTaskError(
-      'image_prompt_capability_conflict',
-      'Compiled image prompt requests unsupported transparency'
-    )
   }
   return text
 }
@@ -96,7 +90,7 @@ const compileProviderImagePrompt = ({ task, model = 'gpt-image-2', visualPlan = 
     subject: normalizedTask.subject
   })
   const clauses = buildProviderImagePromptClauses({ task: normalizedTask, visualPlan: normalizedVisualPlan, capabilities, qualityGuidance })
-  const text = assertProviderNeutralPrompt(renderPrompt({ task: normalizedTask, clauses, capabilities }), capabilities)
+  const text = assertProviderNeutralPrompt(renderPrompt({ task: normalizedTask, clauses, capabilities }))
   return Object.freeze({
     version: PROMPT_COMPILER_VERSION,
     taskType: normalizedTask.taskType,

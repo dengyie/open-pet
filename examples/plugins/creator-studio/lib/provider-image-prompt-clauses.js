@@ -286,7 +286,9 @@ const validateClauses = ({ task, clauses, capabilities }) => {
       throw createTaskError('image_prompt_frame_plan_incomplete', 'Image prompt does not describe every required frame')
     }
   }
-  if (!capabilities.supportsDirectTransparency && clauses.some((clause) => /\btransparent\b/i.test(clause.text))) {
+  if (!capabilities.supportsDirectTransparency && clauses.some((clause) => (
+    clause.category === 'background' && /\btransparent\b/i.test(clause.text)
+  ))) {
     throw createTaskError('image_prompt_capability_conflict', 'Selected image model prompt cannot request transparency')
   }
 }
@@ -311,5 +313,6 @@ const buildProviderImagePromptClauses = ({ task, visualPlan, capabilities, quali
 
 module.exports = {
   CATEGORY_ORDER,
+  validateClauses,
   buildProviderImagePromptClauses
 }

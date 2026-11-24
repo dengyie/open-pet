@@ -13,6 +13,10 @@ const {
   resolveImageModelCapabilities
 } = require('../../examples/plugins/creator-studio/lib/image-model-capabilities')
 const {
+  buildProviderImagePromptClauses,
+  validateClauses
+} = require('../../examples/plugins/creator-studio/lib/provider-image-prompt-clauses')
+const {
   compileProviderImagePrompt
 } = require('../../examples/plugins/creator-studio/lib/provider-image-prompt-compiler')
 const {
@@ -310,6 +314,37 @@ test('gpt image 2 non-idle and idle keyframes separate pose authority from ident
   assert.match(idle.prompt, /body-root motion/i)
   assert.doesNotMatch(idle.prompt, /sole authority for the new pose/i)
   assertGptImage2PromptSafe(idle.prompt)
+})
+
+test('opaque-output image models retain English and Chinese pose descriptions of transparent wings', () => {
+  for (const model of ['gpt-image-2', 'eligible-runtime-image-model']) {
+    for (const moment of ['flaps transparent wings', '扇动透明的翅膀']) {
+      const result = compileProviderImagePrompt({
+        model,
+        task: {
+          taskType: 'action-keyframe',
+          stage: 'peak',
+          action: { name: 'flap', viewDirection: 'front view', moment }
+        }
+      })
+      assert.ok(result.text.includes(moment))
+      assert.match(result.text, /BACKGROUND\nUse one uniform opaque background color/)
+    }
+  }
+})
+
+test('background clause validation rejects direct transparency on opaque-output models', () => {
+  const task = createProviderImageTask({ taskType: 'character-image', stage: 'identity' })
+  const clauses = buildProviderImagePromptClauses({
+    task,
+    visualPlan: createVisualPlan({ subject: task.subject }),
+    capabilities: resolveImageModelCapabilities('gpt-image-1.5')
+  })
+
+  assert.throws(
+    () => validateClauses({ task, clauses, capabilities: resolveImageModelCapabilities('gpt-image-2') }),
+    { code: 'image_prompt_capability_conflict' }
+  )
 })
 
 test('gpt image 2 frame sheets define every cell without ranges or anatomy assumptions', () => {
