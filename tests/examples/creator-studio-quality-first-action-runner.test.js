@@ -221,6 +221,30 @@ test('runner performs at most one reason-directed repair after both initial cand
   assert.deepEqual(h.calls.archives, [{ actionId: 'idle', reasonCodes: ['cell-edge-contact', 'visual-score-overall-below-minimum'] }])
 })
 
+test('rejected repair preflight leaves previous candidate records in place', async () => {
+  const h = createHarness({
+    generated: [
+      { descriptors: descriptors('0000', 0) },
+      { descriptors: descriptors('ffff', 2) }
+    ],
+    evaluationById: {
+      'candidate-1': { gate: { ok: false, failures: ['motion-is-static'] } },
+      'candidate-2': { gate: { ok: false, failures: ['motion-is-static'] } }
+    }
+  })
+  await assert.rejects(runQualityFirstAction({
+    context: { actionId: 'running-right' },
+    ...h.callbacks,
+    prepareRepair: async ({ failureCodes }) => {
+      assert.deepEqual(failureCodes, ['motion-is-static'])
+      throw Object.assign(new Error('Rejected start frame'), { code: 'video_start_frame_rejected' })
+    },
+    archiveCandidateRevision: async () => assert.fail('candidate records must not move on preflight failure')
+  }), { code: 'video_start_frame_rejected' })
+  assert.equal(h.calls.generated.length, 2)
+  assert.deepEqual(h.calls.persisted, ['candidate-1', 'candidate-2'])
+})
+
 test('runner keeps processed quality failures technically selectable but excludes them from automatic selection', async () => {
   const h = createHarness({
     generated: [

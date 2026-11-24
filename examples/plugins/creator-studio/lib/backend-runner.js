@@ -1145,11 +1145,9 @@ const runQualityFirstActionRepair = async ({
   // stale checkpoints still fall through to normal generation.
   const unreportedCheckpoint = run.qualityFirst?.actionResults?.[normalizedActionId]?.ok !== true &&
     readActionCheckpoints({ dataDir, runId }).actions?.[normalizedActionId]?.ok === true
-  if (!unreportedCheckpoint) {
+  const runningRight = normalizedActionId === 'running-right'
+  if (!unreportedCheckpoint && !runningRight) {
     invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
-  }
-  if (normalizedActionId === 'running-right') {
-    invalidateActionCheckpoint({ dataDir, runId, actionId: 'running-left', reason: 'quality-first-running-mirror-repair', now })
   }
   const lease = createGenerationLease({ commandId: 'retry-action', startedAt, leaseId: `${runId}-retry-action-${startedAt}` })
   const generatingRun = {
@@ -1171,13 +1169,42 @@ const runQualityFirstActionRepair = async ({
     let effectiveProfile = profile
     let result
     try {
-      result = await runtime.runAction({ actionId: normalizedActionId, canonical, profile: effectiveProfile, plan })
+      result = await runtime.runAction({
+        actionId: normalizedActionId, canonical, profile: effectiveProfile, plan,
+        ...(runningRight && !unreportedCheckpoint ? { reuseCheckpoint: false } : {})
+      })
     } catch (error) {
-      if (normalizedActionId !== 'running-right' || error?.startFrameRejected !== true) throw error
-      result = {
-        ok: false, actionId: normalizedActionId, disposition: 'omitted', candidates: [],
-        failureCode: executionFailureCode(error, 'video_start_frame_rejected')
+      if (!runningRight || error?.startFrameRejected !== true) throw error
+      const failureCode = executionFailureCode(error, 'video_start_frame_rejected')
+      const previous = run.qualityFirst?.actionResults?.[normalizedActionId]
+      const retainedRun = {
+        ...run,
+        generationLease: undefined,
+        qualityFirst: {
+          ...run.qualityFirst,
+          actionResults: {
+            ...run.qualityFirst?.actionResults,
+            [normalizedActionId]: previous?.ok === true ? previous : {
+              ...createQualityFirstActionResultView({ actionId: normalizedActionId, disposition: 'omitted' }),
+              ...previous,
+              failureCode
+            }
+          }
+        }
       }
+      writeRun({ dataDir, run: retainedRun })
+      appendDiagnosticRunLog({
+        dataDir, runId, level: 'warn', event: 'quality-first.action.repair-rejected',
+        message: 'Running-right start frame was rejected before replacement',
+        data: { actionId: normalizedActionId, failureCode, evidenceArchive }, now
+      })
+      return { outputDir: '', bundlePath: '', sha256: '', run: retainedRun, repair: { scope: 'action', actionId: normalizedActionId, evidenceArchive } }
+    }
+    if (runningRight) {
+      if (!unreportedCheckpoint) {
+        invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
+      }
+      invalidateActionCheckpoint({ dataDir, runId, actionId: 'running-left', reason: 'quality-first-running-mirror-repair', now })
     }
     if (normalizedActionId === 'idle' && result?.ok === true && !effectiveProfile?.hash) {
       effectiveProfile = await runtime.createCharacterScaleProfile({ canonical, idle: result })

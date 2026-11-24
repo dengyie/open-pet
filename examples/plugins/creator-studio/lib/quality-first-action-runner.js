@@ -45,6 +45,7 @@ const runQualityFirstAction = async ({
   evaluateCandidate,
   existingCandidates = [],
   persistCandidate = () => {},
+  prepareRepair = () => {},
   archiveCandidateRevision = () => {}
 } = {}) => {
   const actionId = String(context.actionId || '')
@@ -68,7 +69,7 @@ const runQualityFirstAction = async ({
     const assignedCandidateId = `${candidateIdPrefix}-${dispatchIndex}`
     let generated
     try {
-      await reserveCreativeDispatch({ actionId, attemptKind, candidateId: assignedCandidateId, dispatchIndex, failureCodes: repairCodes.slice() })
+      await reserveCreativeDispatch({ actionId, attemptKind, candidateId: assignedCandidateId, dispatchIndex })
     } catch (error) {
       for (const candidate of allCandidates) await persistCandidate(candidate)
       throw error
@@ -228,6 +229,7 @@ const runQualityFirstAction = async ({
   let selected = selectBestPassingCandidate({ candidates: evaluatedCandidates })
   if (!selected && !stopDispatching && !evaluationFailureCode && failureCodes.length > 0) {
     const repairCodes = unique(failureCodes)
+    await prepareRepair({ actionId, attemptKind: 'repair', failureCodes: repairCodes.slice() })
     const archiveRelativePath = String(await archiveCandidateRevision({ actionId, reasonCodes: repairCodes }) || '').replace(/\\/g, '/')
     if (archiveRelativePath) {
       if (archiveRelativePath.startsWith('/') || /^[a-zA-Z]:\//.test(archiveRelativePath) || archiveRelativePath.split('/').includes('..')) {

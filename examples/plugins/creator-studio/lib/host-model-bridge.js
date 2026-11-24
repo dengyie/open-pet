@@ -3396,11 +3396,11 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       persistCandidate: persistCanonicalCandidate
     })
   }
-  const runAction = async ({ actionId, canonical, profile }) => {
+  const runAction = async ({ actionId, canonical, profile, reuseCheckpoint = true }) => {
     const action = plan.actions.find((entry) => entry.actionId === actionId)
     if (!action) return { ok: false, actionId, disposition: 'omitted', failureCode: 'action_not_in_plan', candidates: [] }
     const actionProfile = profile || readPersistedScaleProfile()
-    let reusable = resolveReusableActionResult({
+    let reusable = reuseCheckpoint ? resolveReusableActionResult({
       dataDir,
       runId: run.runId,
       actionId,
@@ -3410,7 +3410,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       processorVersion: processorVersionForAction(actionId),
       qualityProfileHash: qualityProfile.hash,
       requireBindings: true
-    })
+    }) : null
     if (reusable?.row?.quality === 'approved-rig') {
       try {
         await validateCanonicalRigRow({ dataDir, provenance: reusable.row.provenance, frames: reusable.row.frames, actionId, canonicalSha256: canonical.sha256 })
@@ -3605,7 +3605,8 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
         duplicateThresholds: { perceptualHashDistance: 4, identityDescriptorDistance: 0.08, alphaMaskDistance: 0.08 }
       },
       existingCandidates: retainedCandidates,
-      reserveCreativeDispatch: async (request) => {
+      reserveCreativeDispatch: async () => {},
+      prepareRepair: async (request) => {
         if (actionId === 'running-right' && shouldUseCanonicalRig({ ...request, characterClass: plan.character.assetClass })) {
           await resolveStartReference()
         }

@@ -436,7 +436,9 @@ test('video running-right reports a rejected start pose before creating candidat
   assert.equal(fs.existsSync(path.join(f.dataDir, 'runs', run.runId, 'candidates', 'running-right')), false)
 
   const { runQualityFirstActionRepair } = require('../../examples/plugins/creator-studio/lib/backend-runner')
-  const { writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+  const { readRun, writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+  const { readActionCheckpoints, writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
+  const { writeCandidateRecord } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
   const packageDir = `runs/${run.runId}/quality-first/package`
   fs.mkdirSync(path.join(f.dataDir, packageDir), { recursive: true })
   const spritesheet = `${packageDir}/spritesheet.webp`
@@ -449,19 +451,33 @@ test('video running-right reports a rejected start pose before creating candidat
     basicActions: { availableActionIds: ['idle'], omittedActionIds: ['running-right', 'running-left'] },
     visualEvaluation: { gate: { ok: true } }
   }
+  const rawPath = path.join(f.dataDir, 'runs', run.runId, 'retained-sheet.png')
+  fs.copyFileSync(path.join(f.dataDir, f.canonical.relativePath), rawPath)
+  const stored = writeCandidateRecord({
+    dataDir: f.dataDir, runId: run.runId, scope: 'action-running-right',
+    candidate: { candidateId: 'retained-right', sha256: f.canonical.sha256, technicalEligible: true, artifacts: [{ role: 'raw-sheet', path: rawPath, sha256: f.canonical.sha256 }] }
+  })
+  const savedCandidate = { candidateId: 'retained-right', candidateRecordRelativePath: stored.relativePath }
+  const candidatePath = path.join(f.dataDir, savedCandidate.candidateRecordRelativePath)
+  const candidateRecord = fs.readFileSync(candidatePath)
   writeRun({ dataDir: f.dataDir, run: {
     ...run, status: 'ready_for_review',
     generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
     qualityFirst: {
       acceptedCanonical: { ...f.canonical, candidateId: 'canonical-1' },
-      actionResults: { idle: { ok: true }, 'running-right': { ok: false } },
+      actionResults: { idle: { ok: true }, 'running-right': { ok: false, candidates: [savedCandidate] } },
       package: retainedPackage
     }
   } })
+  writeActionCheckpoint({ dataDir: f.dataDir, runId: run.runId, result: { actionId: 'running-right', ok: false } })
+  const priorCheckpoints = readActionCheckpoints({ dataDir: f.dataDir, runId: run.runId })
   const repair = await runQualityFirstActionRepair({ dataDir: f.dataDir, runId: run.runId, actionId: 'running-right', runtime, plan, profile: { ...f.profile, hash: 'profile' } })
   assert.equal(repair.run.status, 'ready_for_review')
   assert.equal(repair.run.qualityFirst.actionResults['running-right'].failureCode, 'video_start_frame_rejected')
   assert.deepEqual(repair.run.qualityFirst.package, retainedPackage)
+  assert.deepEqual(readRun({ dataDir: f.dataDir, runId: run.runId }).qualityFirst.actionResults['running-right'].candidates, [savedCandidate])
+  assert.deepEqual(fs.readFileSync(candidatePath), candidateRecord)
+  assert.deepEqual(readActionCheckpoints({ dataDir: f.dataDir, runId: run.runId }), priorCheckpoints)
   assert.deepEqual(calls, ['/creator/model-settings', '/creator/model-image-generate', '/creator/model-image-generate'])
 })
 
