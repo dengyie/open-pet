@@ -1,6 +1,7 @@
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
+const { normalizeSingleActionContract } = require('./single-action-contract')
 
 const assertExistingPathInsideDataDir = ({ dataDir, targetPath, label }) => {
   if (!targetPath) throw new Error(`${label} must stay inside the Creator Studio data directory`)
@@ -33,7 +34,7 @@ const sha256File = (filePath) => crypto
   .update(fs.readFileSync(filePath))
   .digest('hex')
 
-const assertActionFrameQaPassed = ({ dataDir, actionFrames, operation = 'approval/import' }) => {
+const assertActionFrameQaPassed = ({ dataDir, actionFrames, actionContract, operation = 'approval/import' }) => {
   if (!actionFrames?.qa) throw new Error(`Action frame QA must pass before ${operation}`)
   const qaPath = assertExistingPathInsideDataDir({
     dataDir,
@@ -49,6 +50,18 @@ const assertActionFrameQaPassed = ({ dataDir, actionFrames, operation = 'approva
   const frameCount = Number(actionFrames.frameCount)
   if (qa.ok !== true) throw new Error(`Action frame QA must pass before ${operation}`)
   if (qa.actionId !== actionFrames.actionId) throw new Error(`Action frame QA actionId must match before ${operation}`)
+  if (actionContract !== undefined) {
+    const expected = normalizeSingleActionContract(actionContract)
+    if (
+      qa.loop !== expected.loop ||
+      qa.playback?.loop !== expected.loop ||
+      qa.actionContract?.loop !== expected.loop ||
+      qa.actionContract?.facing !== expected.facing ||
+      qa.actionContract?.camera !== expected.camera
+    ) {
+      throw new Error(`Action frame QA action contract must match before ${operation}`)
+    }
+  }
   if (!Number.isInteger(frameCount) || frameCount < 1) {
     throw new Error('Generated action frame count is invalid')
   }
@@ -94,7 +107,11 @@ const assertActionFrameQaPassed = ({ dataDir, actionFrames, operation = 'approva
 const assertRunActionFrameQaPassed = ({ dataDir, run, operation = 'approval/import' }) => {
   const actionFrames = run?.artifacts?.actionFrames
   if (!actionFrames) return null
-  return assertActionFrameQaPassed({ dataDir, actionFrames, operation })
+  const action = run.generationTask?.actions?.[0]
+  if (action?.actionContract && action.actionId !== actionFrames.actionId) {
+    throw new Error(`Action frame QA actionId must match the task before ${operation}`)
+  }
+  return assertActionFrameQaPassed({ dataDir, actionFrames, actionContract: action?.actionContract, operation })
 }
 
 module.exports = {

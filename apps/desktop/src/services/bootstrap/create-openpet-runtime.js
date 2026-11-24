@@ -201,6 +201,7 @@ const createOpenPetRuntime = ({
         case 'generate-action': return creatorWorkflowService.generateExistingAction({
           actionName: payload.actionName,
           motionPrompt: payload.motionPrompt,
+          actionContract: payload.actionContract,
           referenceImageToken: payload.referenceImageToken
         })
         case 'retry-action': return creatorWorkflowService.retryFullPetAction({ runId: payload.runId, actionId: payload.actionId })

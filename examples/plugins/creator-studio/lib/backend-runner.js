@@ -302,6 +302,7 @@ const buildHostGeneratedActionOutput = async ({ dataDir, run, generationResult, 
   assertActionFrameQaPassed({
     dataDir,
     actionFrames: actionFrameArtifact,
+    actionContract: action.actionContract,
     operation: 'review'
   })
   const nextRun = {

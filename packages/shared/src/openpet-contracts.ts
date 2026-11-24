@@ -2085,9 +2085,16 @@ export interface CreatorGenerateNewCharacterRequest {
   referenceImageToken: string
 }
 
+export interface CreatorSingleActionContract {
+  loop: boolean
+  facing: 'reference' | 'viewer-left' | 'viewer-right'
+  camera: 'locked'
+}
+
 export interface CreatorGenerateExistingActionRequest {
   actionName: string
   motionPrompt: string
+  actionContract?: Partial<CreatorSingleActionContract>
   referenceImageToken?: string
 }
 

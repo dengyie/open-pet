@@ -12,6 +12,7 @@ const {
 } = require('./identity-descriptor')
 const { resolveGeneratedImagePath } = require('./real-atlas-builder')
 const { createPlaybackDiagnostics } = require('./action-frame-playback')
+const { resolveActionLoop } = require('./single-action-contract')
 
 const SAFE_ACTION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/
 const FRAME_WIDTH = 192
@@ -387,7 +388,7 @@ const summarizeAdjacentPairs = (pairs) => {
   }
 }
 
-const createAdjacentFrameDiffMetrics = async ({ frames, framesDir }) => {
+const createAdjacentFrameDiffMetrics = async ({ frames, framesDir, checkLoop }) => {
   if (!framesDir || frames.length < 2) {
     return {
       minChangedPixelRatio: 0,
@@ -425,7 +426,11 @@ const createAdjacentFrameDiffMetrics = async ({ frames, framesDir }) => {
   const identityCorePairs = createPairs(IDENTITY_CORE_REGION)
   return {
     ...summarizeAdjacentPairs(pairs),
-    identityCore: summarizeAdjacentPairs(identityCorePairs)
+    identityCore: summarizeAdjacentPairs(identityCorePairs),
+    ...(checkLoop ? {
+      loopSeam: compareAdjacentFramePixels(decodedFrames.at(-1), decodedFrames[0]),
+      loopSeamIdentityCore: compareAdjacentFramePixels(decodedFrames.at(-1), decodedFrames[0], { region: IDENTITY_CORE_REGION })
+    } : {})
   }
 }
 
@@ -846,7 +851,7 @@ const sourceBoundsTouchCellEdge = (frame) => {
     bottom >= Number(cell.height || 0) - 1 - tolerance
 }
 
-const createActionFrameQuality = async ({ frames, frameCount, extraction, framesDir, action = {}, identityReferenceMeanRgb = null, identityReferenceDescriptor = null, sheetLayout = null }) => {
+const createActionFrameQuality = async ({ frames, frameCount, extraction, framesDir, action = {}, loop, identityReferenceMeanRgb = null, identityReferenceDescriptor = null, sheetLayout = null }) => {
   const complete = isCompleteFrameEvidence({ frames, frameCount })
   const animationType = inferAnimationType(action)
   const frameBounds = frames.map((frame) => frame?.frameBounds).filter(Boolean)
@@ -879,7 +884,7 @@ const createActionFrameQuality = async ({ frames, frameCount, extraction, frames
   const duplicateFrameCount = Math.max(0, frames.length - uniqueFrameCount)
   const reusedFrameCount = frames.filter((frame) => frame?.reusedPreviousFrame).length
   const adjacentFrameDiff = complete
-    ? await createAdjacentFrameDiffMetrics({ frames, framesDir })
+    ? await createAdjacentFrameDiffMetrics({ frames, framesDir, checkLoop: loop })
     : {
         minChangedPixelRatio: 0,
         maxChangedPixelRatio: 0,
@@ -963,6 +968,12 @@ const createActionFrameQuality = async ({ frames, frameCount, extraction, frames
   }
   if (complete && adjacentFrameDiff.averageChangedPixelRatio < MIN_AVERAGE_CHANGED_PIXEL_RATIO) {
     errors.push('action_motion_below_minimum')
+  }
+  if (
+    adjacentFrameDiff.loopSeam?.changedPixelRatio > MAX_PAIR_CHANGED_PIXEL_RATIO ||
+    adjacentFrameDiff.loopSeamIdentityCore?.changedPixelRatio > MAX_IDENTITY_CORE_PAIR_CHANGED_PIXEL_RATIO
+  ) {
+    errors.push('action_loop_seam_discontinuity')
   }
   if (complete && isWavingAction(action) && alphaMaskUniqueFrameCount < Math.min(2, frameCount)) {
     errors.push('action_silhouette_motion_missing')
@@ -1224,12 +1235,13 @@ const buildActionFramesFromGeneratedImage = async ({
   const qaPath = path.join(safeQaDir, 'action-frame-validation.json')
   const playback = createPlaybackDiagnostics({
     frameCount,
-    loop: Boolean(action?.loop)
+    loop: Boolean(resolveActionLoop(action))
   })
   const quality = await createActionFrameQuality({
     frames,
     frameCount,
     action,
+    loop: playback.loop,
     framesDir: safeOutputFramesDir,
     extraction: extraction || {
       mode: 'action-sheet',
@@ -1250,7 +1262,8 @@ const buildActionFramesFromGeneratedImage = async ({
     frameCount,
     frameWidth: FRAME_WIDTH,
     frameHeight: FRAME_HEIGHT,
-    loop: Boolean(action?.loop),
+    loop: playback.loop,
+    ...(action.actionContract ? { actionContract: action.actionContract } : {}),
     playback,
     extraction: {
       ...(extraction || {
@@ -1412,7 +1425,7 @@ const repairActionFrameFromGeneratedImage = async ({
         frameCount,
         frameWidth: FRAME_WIDTH,
         frameHeight: FRAME_HEIGHT,
-        loop: Boolean(action?.loop),
+        loop: Boolean(resolveActionLoop(action)),
         extraction: frameSource.extraction,
         triggerProposal: action?.triggerProposal || { type: 'unbound' },
         frames: [],
@@ -1438,7 +1451,7 @@ const repairActionFrameFromGeneratedImage = async ({
   })
   const playback = createPlaybackDiagnostics({
     frameCount,
-    loop: Boolean(storedQa.loop ?? action?.loop),
+    loop: Boolean(action.actionContract?.loop ?? storedQa.loop ?? action.loop),
     frameDurationsMs: storedQa.playback?.frameDurationsMs
   })
   const extraction = {
@@ -1450,6 +1463,7 @@ const repairActionFrameFromGeneratedImage = async ({
         frames: hydratedFrames,
         frameCount,
         action,
+        loop: playback.loop,
         extraction,
         framesDir: safeOutputFramesDir,
         identityReferenceMeanRgb: resolveIdentityReferenceMeanRgb(generationResult),
@@ -1472,6 +1486,8 @@ const repairActionFrameFromGeneratedImage = async ({
     frameCount,
     frameWidth: FRAME_WIDTH,
     frameHeight: FRAME_HEIGHT,
+    loop: playback.loop,
+    ...(action.actionContract ? { actionContract: action.actionContract } : {}),
     playback,
     extraction,
     contactSheetRelativePath: toDataRelativePath({ dataDir, targetPath: contactSheetPath }),

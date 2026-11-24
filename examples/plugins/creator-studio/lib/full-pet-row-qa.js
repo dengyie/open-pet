@@ -1,5 +1,6 @@
 const crypto = require('crypto')
 const sharp = require('sharp')
+const { getOfficialActionClass } = require('./action-semantics')
 const { createIdentityDescriptor, identityDescriptorDistance, rgbDistance } = require('./identity-descriptor')
 const {
   FULL_PET_ROW_QUALITY,
@@ -305,15 +306,19 @@ const analyzeRowFrames = async ({
   if (uniqueFrameCount > 1 && isTransformLike(measures)) {
     errors.push('row_transform_like')
   }
-  const locomotion = /^running(?:-|$)/.test(row.id)
-  const verticalAction = row.id === 'jumping'
+  const actionClass = getOfficialActionClass(row.id)
+  const locomotion = actionClass === 'grounded-locomotion'
+  const verticalAction = actionClass === 'airborne-arc'
+  if (actionClass === 'grounded-work-loop' && uniqueFrameCount < Math.min(3, row.frameCount)) {
+    errors.push('row_work_cadence_missing')
+  }
   if (locomotion && alphaMaskUniqueFrameCount < Math.min(3, row.frameCount)) {
     errors.push('row_locomotion_motion_missing')
   }
-  if (locomotion && lowerAlphaMaskUniqueFrameCount < Math.min(3, row.frameCount)) {
-    errors.push('row_locomotion_lower_body_motion_missing')
-  }
-  if (locomotion && motion.lower.averageChangedRatio < limits.minLocomotionLowerMotionRatio) {
+  if (locomotion && (
+    lowerAlphaMaskUniqueFrameCount < Math.min(3, row.frameCount) ||
+    motion.lower.averageChangedRatio < limits.minLocomotionLowerMotionRatio
+  )) {
     errors.push('row_locomotion_lower_body_motion_missing')
   }
   if (row.id === 'waving' && motion.upper.averageChangedRatio < limits.minWavingUpperMotionRatio) {
