@@ -41,6 +41,8 @@ test('localized movement phrases override a conflicting side in the action title
     'Run slowly to the left',
     'Run in place toward the viewer’s left',
     '朝着屏幕左边跑',
+    '向左原地跑步',
+    '朝屏幕左边慢慢地原地跑',
     '原地跑，同時朝著畫面左邊'
   ]) {
     const action = toProviderAction({ name: 'Run right', motionPrompt })
@@ -106,7 +108,9 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
   for (const motionPrompt of [
     '向左跑，同时朝右边挥手',
     '跑步，同时面向屏幕左侧并朝右边挥手',
-    '跑向屏幕左侧并朝右边挥手'
+    '跑向屏幕左侧并朝右边挥手',
+    '原地跑步，身体朝左',
+    '原地跑步，同时身體朝螢幕左側'
   ]) {
     assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-left side profile', motionPrompt)
   }
