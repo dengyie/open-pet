@@ -1,3 +1,5 @@
+const { STYLE_PREFERENCES } = require('./creator-visual-intent')
+
 const TASK_TYPES = new Set(['character-image', 'action-keyframe', 'action-frame-sheet'])
 const STAGES = new Set(['identity', 'start', 'peak', 'final', 'repair'])
 const REFERENCE_TYPES = new Set(['single-character', 'identity-comparison', 'identity-and-motion'])
@@ -184,6 +186,20 @@ const normalizeAppearanceIntent = (value) => {
     }
     return sanitizeVisualDirective(raw)
   }).filter(Boolean)
+}
+
+const normalizeStylePreferences = (value, taskType, stage) => {
+  if (value == null) return null
+  if (taskType !== 'character-image' || stage !== 'identity') {
+    throw createTaskError('image_prompt_contract_invalid', 'Style preferences apply only to character identity images')
+  }
+  assertAllowedKeys(value, new Set(Object.keys(STYLE_PREFERENCES)), 'stylePreferences')
+  for (const [field, preference] of Object.entries(value)) {
+    if (typeof preference !== 'string' || !Object.hasOwn(STYLE_PREFERENCES[field], preference)) {
+      throw createTaskError('image_prompt_contract_invalid', 'Image task style preference is invalid')
+    }
+  }
+  return value
 }
 
 const resolveReferenceInterpretation = (referenceRole = '') => {
@@ -392,6 +408,7 @@ const createProviderImageTask = (input = {}) => {
       'action',
       'styleLocks',
       'appearanceIntent',
+      'stylePreferences',
       'strategyId',
       'requestedChanges',
       'actionClass',
@@ -437,6 +454,7 @@ const createProviderImageTask = (input = {}) => {
     throw createTaskError('image_prompt_contract_invalid', 'Quality-first action policy requires a square 1024 canvas')
   }
   const action = normalizeAction(input.action, sheet)
+  const stylePreferences = normalizeStylePreferences(input.stylePreferences, taskType, stage)
   if (taskType !== 'character-image' && !action) {
     throw createTaskError('image_prompt_contract_invalid', 'Action image task requires a visual action')
   }
@@ -484,6 +502,7 @@ const createProviderImageTask = (input = {}) => {
     action,
     styleLocks: normalizeVisualDirectives(input.styleLocks, DEFAULT_STYLE_LOCKS),
     appearanceIntent: normalizeAppearanceIntent(input.appearanceIntent),
+    ...(stylePreferences ? { stylePreferences: { ...stylePreferences } } : {}),
     strategyId,
     requestedChanges: normalizeVisualDirectives(input.requestedChanges),
     ...qualityFirstPolicy

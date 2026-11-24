@@ -10,6 +10,7 @@ const {
   compileProviderImagePrompt
 } = require('./provider-image-prompt-compiler')
 const { createVisualPlan } = require('./visual-plan')
+const { toProviderAction } = require('./creator-visual-intent')
 const {
   buildActionFramePlan,
   inferAnimationType,
@@ -413,7 +414,8 @@ const buildOpenPetImagePrompt = ({
   const action = firstAction(task)
   const rawBrief = String(run.input?.originalPrompt || run.input?.prompt || task.characterBrief || action?.motionPrompt || run.petId || '').trim()
   const creativeBrief = sanitizeCreativeBrief(rawBrief)
-  const appearanceIntent = String(task.characterBrief || '').trim()
+  const providerAction = task.mode === 'single-action' && action ? toProviderAction(action) : action
+  const appearanceIntent = task.mode !== 'single-action' && String(task.characterBrief || '').trim()
     ? [String(task.characterBrief).trim()]
     : []
   const warnings = []
@@ -428,13 +430,13 @@ const buildOpenPetImagePrompt = ({
     qualityGuidance
   })
   const actionSheet = getActionSheetLayout(action)
-  const actionSpec = action ? getActionSpec({ action, frameCount: actionSheet.frameCount }) : null
+  const actionSpec = providerAction ? getActionSpec({ action: providerAction, frameCount: actionSheet.frameCount }) : null
   const requestedVisualPlan = createVisualPlan({
     appearanceIntent,
     requestedChanges,
     action: actionSpec
       ? {
-          name: action?.name || action?.motionPrompt || 'the requested action',
+          name: providerAction?.name || 'the requested action',
           animationType: actionSpec.animationType,
           viewDirection: actionSpec.viewDirection,
           loopType: actionSpec.loopType,
@@ -459,9 +461,9 @@ const buildOpenPetImagePrompt = ({
             readingOrder: 'left-to-right-top-to-bottom'
           },
           action: {
-            name: action?.name || action?.motionPrompt || 'the requested action',
+            name: providerAction?.name || 'the requested action',
             animationType: actionSpec.animationType,
-            moment: action?.motionPrompt || action?.name || 'the requested action',
+            moment: providerAction?.motionPrompt || 'the requested action',
             viewDirection: actionSpec.viewDirection,
             loopType: actionSpec.loopType,
             movingParts: actionSpec.animatedParts,
@@ -471,7 +473,7 @@ const buildOpenPetImagePrompt = ({
             loopIntent: action?.loop
               ? 'a seamless loop that returns to the starting pose'
               : 'a readable action with a clear ending pose',
-            frameBeats: buildActionFramePlan({ action, frameCount: actionSheet.frameCount })
+            frameBeats: buildActionFramePlan({ action: providerAction, frameCount: actionSheet.frameCount })
           }
         }
       : {}),

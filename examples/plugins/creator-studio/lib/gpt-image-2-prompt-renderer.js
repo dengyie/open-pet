@@ -6,7 +6,8 @@ const SECTION_CATEGORY_ORDER = Object.freeze([
   ['COMPOSITION', ['composition']],
   ['ACTION', ['action', 'frame-beat']],
   ['BACKGROUND', ['background']],
-  ['CONSTRAINTS', ['exclusion']]
+  ['CONSTRAINTS', ['exclusion']],
+  ['OPTIONAL STYLE PREFERENCES', ['preference']]
 ])
 
 const renderGptImage2Prompt = ({ task, clauses }) => SECTION_CATEGORY_ORDER

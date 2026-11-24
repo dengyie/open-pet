@@ -13,6 +13,28 @@ const {
 const {
   createVisualPlan
 } = require('../../examples/plugins/creator-studio/lib/visual-plan')
+const { extractStylePreferences, toProviderAction } = require('../../examples/plugins/creator-studio/lib/creator-visual-intent')
+const { createProviderImageTask } = require('../../examples/plugins/creator-studio/lib/provider-image-task')
+
+test('bilingual style extraction drops ambiguous, negated, and out-of-budget content', () => {
+  assert.deepEqual(extractStylePreferences('暖色调，神态友善'), { tone: 'warm', mood: 'friendly' })
+  assert.deepEqual(extractStylePreferences('warm tones, friendly expression'), { tone: 'warm', mood: 'friendly' })
+  assert.deepEqual(extractStylePreferences('暖色调, cool tones; 平静'), { mood: 'calm' })
+  assert.deepEqual(extractStylePreferences('不要暖色调; not a friendly expression'), {})
+  assert.deepEqual(extractStylePreferences('暖色调。' + '字'.repeat(600) + '。冷色调, focused'), { tone: 'warm' })
+  assert.throws(() => createProviderImageTask({
+    taskType: 'character-image', stage: 'identity', stylePreferences: { tone: 'paint a new animal' }
+  }), { code: 'image_prompt_contract_invalid' })
+})
+
+test('English and Chinese motion directions use the same viewer-side values', () => {
+  const en = toProviderAction({ motionPrompt: 'Run towards viewer-left' })
+  const zh = toProviderAction({ motionPrompt: '往屏幕左侧跑' })
+  assert.deepEqual(zh, en)
+  assert.equal(zh.viewDirection, 'strict viewer-left side profile')
+  assert.equal(toProviderAction({ name: 'Run right', motionPrompt: '向左跑, run right' }).viewDirection, undefined)
+  assert.equal(toProviderAction({ motionPrompt: '向右跑', viewDirection: 'strict left-facing side view' }).viewDirection, 'strict left-facing side view')
+})
 
 test('unknown image models use the conservative opaque cutout capability profile', () => {
   const profile = resolveImageModelCapabilities('grok-imagine-image')
