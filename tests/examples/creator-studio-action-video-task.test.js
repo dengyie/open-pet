@@ -1224,3 +1224,19 @@ test('Creator bridge does not resubmit a paid video after task polling exhausts'
   assert.equal(posts, 1)
   assert.equal(bridgeCalls, 1)
 })
+
+test('Creator video reports provider rate limiting without retrying job submission', async () => {
+  const { createGrokVideoProvider } = require('../../examples/plugins/creator-studio/lib/grok-video-provider')
+  let posts = 0
+  const provider = createGrokVideoProvider({
+    baseUrl: 'https://api.mangoqwq.com/v1', apiKey: 'runtime-only-key',
+    fetchImpl: async () => {
+      posts++
+      return { ok: false, status: 429, json: async () => ({ error: { code: 'rate_limited' } }) }
+    }
+  })
+  await assert.rejects(createRunVideoActionFixture({
+    bridge: async () => provider.generateVideo({ model: 'grok-imagine-video', prompt: 'wave once', outputDir: fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-rate-limit-')) })
+  }), { code: 'video_provider_rate_limited' })
+  assert.equal(posts, 1)
+})

@@ -1773,13 +1773,16 @@ test('full-pet planning runs under a persisted lease and records planner depende
     if (oldToken == null) delete process.env.OPENPET_BRIDGE_TOKEN
     else process.env.OPENPET_BRIDGE_TOKEN = oldToken
   })
+  let planningAttempts = 0
   t.mock.method(global, 'fetch', async url => {
     if (String(url).endsWith('/creator/model-settings')) return Response.json({ config: {} })
     assert.match(String(url), /\/creator\/hatch-pet\/plan$/)
     const active = readRun({ dataDir, runId: created.runId })
     assert.equal(active.status, 'generating')
     assert.equal(active.currentStep, 'sprite-plan')
+    assert.equal(active.qualityFirst.phase, 'planning')
     assert.ok(active.generationLease.leaseId)
+    planningAttempts++
     await assert.rejects(runGenerationStep({ dataDir, runId: created.runId }), { statusCode: 409 })
     return Response.json({ ok: false, error: 'Planner unavailable', errorCode: 'planner_unavailable' }, { status: 503 })
   })
@@ -1793,9 +1796,12 @@ test('full-pet planning runs under a persisted lease and records planner depende
   assert.equal(failed.generationLease, undefined)
   assert.equal(failed.qualityFirst.phase, 'planning-failed')
   assert.equal(failed.qualityFirst.failureCode, 'planner_unavailable')
+  assert.equal(failed.qualityFirst.nextAction, 'retry-generation')
   assert.deepEqual(readRunLogs({ dataDir, runId: created.runId }).map(entry => entry.event), [
     'quality-first.planning.started', 'quality-first.planning.failed'
   ])
+  await assert.rejects(runGenerationStep({ dataDir, runId: created.runId }), { code: 'planner_unavailable' })
+  assert.equal(planningAttempts, 2)
 })
 
 test('provider full-pet execution rejects the removed legacy keyframe pipeline', async () => {

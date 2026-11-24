@@ -477,6 +477,7 @@ const runQualityFirstIdentityStage = async ({
     currentStep: planning ? 'sprite-plan' : 'canonical-candidates',
     updatedAt: startedAt,
     generationLease: lease,
+    ...(planning ? { qualityFirst: { version: 1, phase: 'planning', nextAction: 'plan-sprites' } } : {}),
     backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: planning ? 'Preparing the sprite generation plan' : 'Generating canonical identity candidates', updatedAt: startedAt }),
     error: ''
   }

@@ -856,7 +856,7 @@ const ResultCard = ({
       {progress?.qualityFirst ? <PackageQualityReview progress={progress} /> : null}
       {progress?.qualityFirst?.phase === 'recovery-required' ? (
         <div className="creator-recovery-panel error" data-testid="creator-recovery-required">
-          <strong>idle 未通过质量门</strong>
+          <strong>无法安全完成打包</strong>
           <span>本次所有付费资产都已保留。你可以导出资产恢复包检查坏资产，或重新生成身份候选后再试。</span>
           {progress.qualityFirst.recovery?.reason ? <span>失败原因：{progress.qualityFirst.recovery.reason}</span> : null}
           <button

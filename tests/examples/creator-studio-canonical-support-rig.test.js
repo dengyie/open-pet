@@ -441,7 +441,7 @@ for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`
   f.action = actionId === 'review' ? { actionId, anchorPolicy: 'action-relative-root-v1', frameCount: 6, layout: { columns: 3, rows: 2 } } : f.action
   const { createQualityFirstHostRuntime } = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
   const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
-  const { writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
+  const { readActionCheckpoints, writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
   const { archiveCandidateRevision } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
   const runId = `host-rig-repair-${actionId}`
   const plan = createSpriteAssetPlan({ version: 1, revision: 1, character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId }] })
@@ -536,8 +536,18 @@ for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`
       await sharp(Buffer.from(`<svg width="192" height="208"><ellipse cx="96" cy="115" rx="35" ry="42" fill="#ffcc42"/><rect x="105" y="${80 + index * 2}" width="13" height="20" fill="#391a10"/></svg>`)).png().toFile(target)
       idle.push({ path: target, frameIndex: index })
     }
-    writeActionCheckpoint({ dataDir: f.dataDir, runId, result: { actionId: 'idle', ok: true, row: { quality: 'row-real', frames: idle } } })
-    const packaged = await runtime.finalizePackage({ canonical: f.canonical })
+    const bindings = { ...readActionCheckpoints({ dataDir: f.dataDir, runId }).actions[actionId].bindings, processorVersion: runtime.processorVersionForAction('idle') }
+    writeActionCheckpoint({ dataDir: f.dataDir, runId, result: { actionId: 'idle', ok: true, bindings, row: { quality: 'row-real', frames: idle } } })
+    if (actionId === 'review') {
+      const pixels = fs.readFileSync(idle[0].path)
+      fs.writeFileSync(idle[0].path, 'corrupted after checkpoint')
+      try {
+        await assert.rejects(runtime.finalizePackage({ canonical: f.canonical, profile }), { code: 'action_checkpoint_invalid' })
+      } finally {
+        fs.writeFileSync(idle[0].path, pixels)
+      }
+    }
+    const packaged = await runtime.finalizePackage({ canonical: f.canonical, profile })
     const metadata = JSON.parse(fs.readFileSync(path.join(f.dataDir, packaged.petJsonRelativePath)))
     assert.equal(metadata.actionGeneration[actionId].quality, 'approved-rig')
     const auditRoot = path.join(path.dirname(path.join(f.dataDir, packaged.petJsonRelativePath)), metadata.actionGeneration[actionId].evidenceRoot)

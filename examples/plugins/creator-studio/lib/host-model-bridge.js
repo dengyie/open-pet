@@ -3821,21 +3821,32 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
     }
     return writeActionCheckpoint({ dataDir, runId: run.runId, result: checkpointResult })
   }
-  const finalizePackage = async ({ canonical, actionResults = {} }) => {
+  const finalizePackage = async ({ canonical, profile, actionResults = {} }) => {
     const checkpoints = readActionCheckpoints({ dataDir, runId: run.runId })
-    const officialRows = Object.values(checkpoints.actions || {})
-      .filter((entry) => entry?.ok === true && entry.row?.frames?.length)
-      .map((entry) => ({
+    const completedActionIds = Object.keys(actionResults).length
+      ? Object.keys(actionResults).filter((actionId) => actionResults[actionId]?.ok === true)
+      : Object.keys(checkpoints.actions || {}).filter((actionId) => checkpoints.actions[actionId]?.ok === true)
+    const officialRows = completedActionIds.map((actionId) => {
+      const entry = resolveReusableActionResult({
+        dataDir, runId: run.runId, actionId,
+        planHash: plan.hash, canonicalHash: canonical?.sha256, profileHash: profile?.hash,
+        processorVersion: processorVersionForAction(actionId), qualityProfileHash: qualityProfile.hash, requireBindings: true
+      })
+      if (!entry?.row?.frames?.length) {
+        throw Object.assign(new Error(`Invalid package checkpoint for ${actionId}`), { code: 'action_checkpoint_invalid' })
+      }
+      return {
         actionId: entry.actionId,
         quality: entry.row.quality,
         ...(entry.row.provenance ? { provenance: entry.row.provenance } : {}),
         sourceRelativePath: entry.row.frames[0].relativePath,
         frames: entry.row.frames.map((frame) => ({
-          path: path.resolve(dataDir, frame.relativePath),
+          path: frame.path,
           index: frame.frameIndex,
           durationMs: frame.durationMs
         }))
-      }))
+      }
+    })
     if (!officialRows.some((row) => row.actionId === 'idle')) return null
     const atlasGenerationResult = {
       outputs: [{ dataRelativePath: canonical.relativePath }]
