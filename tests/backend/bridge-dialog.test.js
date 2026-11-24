@@ -30,7 +30,7 @@ describe("dialog.request bridge", () => {
 		assert.equal(bridge.BACKEND_TO_SHELL_TYPES.includes("dialog.request"), true)
 		assert.equal(bridge.BACKEND_TO_SHELL_TYPES.includes("catalog.request"), true)
 		assert.equal(bridge.BACKEND_TO_SHELL_TYPES.includes("pet-packs.request"), true)
-		assert.equal(bridge.SHELL_TO_BACKEND_TYPES.length, 18, "settings, secrets, Catalog, Pet Pack, Creator, Actions, AI, bridge errors and pet command host results are part of the bridge contract")
+		assert.equal(bridge.SHELL_TO_BACKEND_TYPES.length, 19, "settings, secrets, Catalog, Pet Pack, Creator, Actions, AI, bridge errors and pet command host results are part of the bridge contract")
 	})
 
 	it("request and dialog.result correlate with the same envelope id", async () => {
@@ -47,6 +47,41 @@ describe("dialog.request bridge", () => {
 		assert.equal(response.id, sent[0].id)
 		assert.deepEqual(response.body.paths, ["/tmp/openpet"])
 		client.dispose()
+	})
+
+	it("round-trips AI host results through the typed reverse channel", async () => {
+		const warnings = []
+		const context = { pack: { manifest: { id: "demo-pet" } }, actions: [] }
+		let sent
+		const client = shellClient.createShellClient({
+			send: (envelope) => { sent = envelope },
+			logger: { warn: (_message, details) => warnings.push(details) },
+		})
+		const handler = shellMessageHandler.createMessageHandler({
+			send: client.receive,
+			onAiHostRequest: ({ operation }) => {
+				if (operation === "context") return context
+				throw new Error("Presentation unavailable")
+			},
+		})
+
+		try {
+			const cases = [
+				{ operation: "context", payload: {}, expected: { ok: true, result: context } },
+				{ operation: "present", payload: { result: { reply: "hello" } }, expected: { ok: false, error: "Presentation unavailable" } },
+			]
+			for (const { operation, payload, expected } of cases) {
+				const pending = client.request({ type: "ai.host.request", operation, payload })
+				void pending.catch(() => {})
+				assert.equal(await handler.handle(sent), true)
+				assert.deepEqual(warnings, [])
+				const response = await pending
+				assert.equal(response.id, sent.id)
+				assert.deepEqual(response.body, { type: "ai.host.result", operation, ...expected })
+			}
+		} finally {
+			client.dispose()
+		}
 	})
 
 	it("round-trips plugin production requests through the typed reverse channel", async () => {
