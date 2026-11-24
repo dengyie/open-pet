@@ -13,6 +13,10 @@ const {
   resolveImageModelCapabilities
 } = require('../../examples/plugins/creator-studio/lib/image-model-capabilities')
 const {
+  buildProviderImagePromptClauses,
+  validateClauses
+} = require('../../examples/plugins/creator-studio/lib/provider-image-prompt-clauses')
+const {
   compileProviderImagePrompt
 } = require('../../examples/plugins/creator-studio/lib/provider-image-prompt-compiler')
 const {
@@ -310,6 +314,101 @@ test('gpt image 2 non-idle and idle keyframes separate pose authority from ident
   assert.match(idle.prompt, /body-root motion/i)
   assert.doesNotMatch(idle.prompt, /sole authority for the new pose/i)
   assertGptImage2PromptSafe(idle.prompt)
+})
+
+test('opaque-output image models retain English and Chinese pose descriptions of transparent wings', () => {
+  for (const model of ['gpt-image-2', 'eligible-runtime-image-model']) {
+    for (const moment of ['flaps transparent wings', '扇动透明的翅膀']) {
+      const result = compileProviderImagePrompt({
+        model,
+        task: {
+          taskType: 'action-keyframe',
+          stage: 'peak',
+          action: { name: 'flap', viewDirection: 'front view', moment }
+        }
+      })
+      assert.ok(result.text.includes(moment))
+      assert.match(result.text, /BACKGROUND\nUse one uniform opaque background color/)
+    }
+  }
+})
+
+test('background clause validation rejects direct transparency on opaque-output models', () => {
+  const task = createProviderImageTask({ taskType: 'character-image', stage: 'identity' })
+  const clauses = buildProviderImagePromptClauses({
+    task,
+    visualPlan: createVisualPlan({ subject: task.subject }),
+    capabilities: resolveImageModelCapabilities('gpt-image-1.5')
+  })
+
+  assert.throws(
+    () => validateClauses({ task, clauses, capabilities: resolveImageModelCapabilities('gpt-image-2') }),
+    { code: 'image_prompt_capability_conflict' }
+  )
+})
+
+test('opaque-output image models reject explicit transparent-output requests in character briefs', () => {
+  for (const brief of [
+    'cat on a transparent background',
+    'cat on a transparent backdrop',
+    'cat on a transparent bg',
+    'cat as a transparent PNG',
+    'cat with transparent alpha',
+    'the background must be fully transparent',
+    'cat with no background',
+    'no background',
+    '透明背景上的猫',
+    '猫，背景透明',
+    '猫，透明底',
+    '猫，去背景',
+    '猫，无背景',
+    '无背景',
+    'Avoid an opaque background. Use a transparent background',
+    'Avoid a transparent background for the preview. Return a transparent PNG',
+    '不要透明背景。最后用透明背景'
+  ]) {
+    assert.throws(
+      () => buildCharacterAnchorPrompt({ model: 'gpt-image-2', appearanceIntent: [brief] }),
+      { code: 'image_prompt_capability_conflict' },
+      brief
+    )
+  }
+})
+
+test('opaque-output image models accept briefs that rule out transparency', () => {
+  for (const brief of [
+    'not a transparent background',
+    'no transparent background',
+    'non-transparent background',
+    'without a transparent background',
+    'never use a transparent background',
+    'avoid using a transparent background',
+    "don't use a transparent background",
+    '不要透明背景',
+    '不需要透明背景',
+    '无需透明背景',
+    '不用透明背景',
+    '别用透明底',
+    '非透明背景',
+    '避免背景透明'
+  ]) {
+    const { prompt } = buildCharacterAnchorPrompt({ model: 'gpt-image-2', appearanceIntent: [brief] })
+    assert.ok(prompt.includes(brief), brief)
+  }
+})
+
+test('character briefs can describe background texture and use transparency on capable models', () => {
+  const opaque = buildCharacterAnchorPrompt({
+    model: 'gpt-image-2',
+    appearanceIntent: ['cat with no background texture']
+  })
+  assert.match(opaque.prompt, /cat with no background texture/)
+
+  const direct = buildCharacterAnchorPrompt({
+    model: 'gpt-image-1.5',
+    appearanceIntent: ['cat on a transparent background']
+  })
+  assert.match(direct.prompt, /cat on a transparent background/)
 })
 
 test('gpt image 2 frame sheets define every cell without ranges or anatomy assumptions', () => {

@@ -15,6 +15,19 @@ const CATEGORY_ORDER = Object.freeze([
   'preference'
 ])
 
+const TRANSPARENT_OUTPUT_DIRECTIVES = [
+  /\btransparent\s+(?:background|backdrop|bg|png|alpha|output)\b/gi,
+  /\b(?:background|backdrop|bg|output)(?:\s*:\s*|\s+(?:(?:must|should)\s+be|is|becomes?)\s+)(?:(?:fully|completely)\s+)?transparent\b/gi,
+  /\bno\s+background(?:\s+(?:at all|whatsoever))?(?=\s*(?:$|[.,;:!?，。；！？])|\s+(?:and|or|with)\b)/gi,
+  /透明背景|背景透明|透明底|去背景|无背景/g
+]
+
+const TRANSPARENT_OUTPUT_NEGATION = /(?:\b(?:not|no|non|without|never|avoid|don['’]t)(?:-|(?:\s+(?:a|an|the|any|use|using|need|require|want|make|generat(?:e|ing)|output|fully|completely)){0,3}\s+)|(?:不要|不需要|无需|不用|别|非|避免)\s*(?:使用|用)?\s*)$/i
+
+const requestsTransparentOutput = (text) => TRANSPARENT_OUTPUT_DIRECTIVES.some((pattern) => (
+  Array.from(text.matchAll(pattern)).some(({ index }) => !TRANSPARENT_OUTPUT_NEGATION.test(text.slice(0, index)))
+))
+
 const categoryRank = (category) => {
   const index = CATEGORY_ORDER.indexOf(category)
   return index === -1 ? CATEGORY_ORDER.length : index
@@ -308,7 +321,11 @@ const validateClauses = ({ task, clauses, capabilities }) => {
       throw createTaskError('image_prompt_frame_plan_incomplete', 'Image prompt does not describe every required frame')
     }
   }
-  if (!capabilities.supportsDirectTransparency && clauses.some((clause) => /\btransparent\b/i.test(clause.text))) {
+  if (!capabilities.supportsDirectTransparency && clauses.some((clause) => (
+    clause.category === 'background'
+      ? /\btransparent\b/i.test(clause.text)
+      : clause.category === 'change' && requestsTransparentOutput(clause.text)
+  ))) {
     throw createTaskError('image_prompt_capability_conflict', 'Selected image model prompt cannot request transparency')
   }
 }
@@ -334,5 +351,6 @@ const buildProviderImagePromptClauses = ({ task, visualPlan, capabilities, quali
 
 module.exports = {
   CATEGORY_ORDER,
+  validateClauses,
   buildProviderImagePromptClauses
 }
