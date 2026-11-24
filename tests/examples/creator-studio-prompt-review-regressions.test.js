@@ -55,6 +55,10 @@ test('negation applies to every item in comma-delimited lists', () => {
     assert.equal(toProviderAction({ motionPrompt }).name, 'Waving')
   }
   assert.deepEqual(extractStylePreferences('Avoid warm tones, cheerful expressions; use cool tones'), { tone: 'cool' })
+  assert.deepEqual(extractStylePreferences('Avoid warm tones, cheerful expressions, use cool tones'), { tone: 'cool' })
+  assert.deepEqual(extractStylePreferences('不要暖色调、愉快的神态，改用冷色调'), { tone: 'cool' })
+  assert.equal(toProviderAction({ motionPrompt: 'Do not jump, just wave' }).name, 'Waving')
+  assert.equal(toProviderAction({ motionPrompt: '不要跳，只做招手动作' }).name, 'Waving')
 })
 
 test('specific motion wins over a generic expression label', () => {

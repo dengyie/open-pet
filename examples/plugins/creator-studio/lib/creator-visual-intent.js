@@ -16,14 +16,17 @@ const STYLE_PREFERENCES = Object.freeze({
 })
 
 const NEGATION = /\b(?:instead|never|not|no|avoid|remove|replace)\b|改成|不要|不用|不得|不[向往朝]|别[向往朝]|禁止|避免|移除|删除|刪除/u
+const AFFIRMATIVE_RESTART = /^\s*(?:\b(?:(?:but\s+)?(?:use|try|prefer|just|please))\b|改用|改做|只要|只做|请|請)/u
 
 const positiveClauses = (segment) => {
   const positive = []
+  let inNegativeList = false
   for (const clause of segment.split(/[,，、]+/)) {
+    if (inNegativeList && !AFFIRMATIVE_RESTART.test(clause)) continue
     const [head, negativeSuffix] = clause.split(/\bwithout\b|同时不|同時不/u, 2)
-    if (NEGATION.test(head)) break
-    if (head.trim()) positive.push(head.trim())
-    if (negativeSuffix !== undefined) break
+    const negated = NEGATION.test(head)
+    if (!negated && head.trim()) positive.push(head.trim())
+    inNegativeList = negated || negativeSuffix !== undefined
   }
   return positive
 }
