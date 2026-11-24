@@ -222,6 +222,19 @@ test('directional one-shot gait requests a clear stop, not a seamless loop', () 
   assert.match(buildActionSpriteRowPrompt({ action: looping }).prompt, /seamless in-place locomotion cycle/i)
 })
 
+test('idle blink uses the specified facing for its start, peak, and loop return', () => {
+  const action = {
+    actionId: 'idle', name: 'Idle blink', frameCount: 5,
+    actionContract: { loop: true, facing: 'viewer-left', camera: 'locked' }
+  }
+  const { prompt } = buildActionSpriteRowPrompt({ action })
+  assert.match(prompt, /face toward the left edge/i)
+  assert.match(prompt, /cell 1[^\n]*quiet reference pose from the specified facing/i)
+  assert.match(prompt, /cell 5[^\n]*starting pose in the specified facing/i)
+  assert.doesNotMatch(prompt, /canonical identity pose, viewpoint/i)
+  assert.match(buildActionKeyframePrompt({ action, keyframeRole: 'peak' }).prompt, /silhouette in the specified facing/i)
+})
+
 test('official running metadata produces a complete stationary work-state cycle', () => {
   const result = buildActionSpriteRowPrompt({ action: { actionId: 'running', name: 'Running', motionPrompt: 'Active processing and scanning motion.', frameCount: 8 } })
   assert.match(result.prompt, /seamless stationary loop with a stable body root/i)

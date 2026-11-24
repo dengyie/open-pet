@@ -365,6 +365,18 @@ const ACTION_PHASES = Object.freeze({
 
 const stripFramePrefix = (value) => normalizeText(value).replace(/^Frame\s+\d+\s*:\s*/i, '').replace(/[.。]+$/, '')
 
+const hasExplicitFacing = (action) => ['viewer-left', 'viewer-right'].includes(action.actionContract?.facing)
+
+const getIdlePhases = (action) => hasExplicitFacing(action)
+  ? [
+      'match the quiet reference pose from the specified facing, with the same scale, markings, accessories, and lower-center root',
+      ACTION_PHASES.idle[1],
+      'close the eyelids for one blink while preserving the silhouette in the specified facing',
+      ACTION_PHASES.idle[3],
+      'settle back into the starting pose in the specified facing for a seamless quiet loop'
+    ]
+  : ACTION_PHASES.idle
+
 const expandPhases = (phases, count) => {
   const normalized = phases.map(stripFramePrefix).filter(Boolean)
   if (!normalized.length) return ACTION_PHASES.reaction.slice(0, Math.min(count, ACTION_PHASES.reaction.length))
@@ -390,7 +402,7 @@ const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
     : isWorkStateAction(action)
       ? ACTION_PHASES.work_state
       : isIdleAction(action)
-        ? ACTION_PHASES.idle
+        ? getIdlePhases(action)
         : isWavingAction(action)
           ? ACTION_PHASES.wave
           : ACTION_PHASES[animationType] || ACTION_PHASES.reaction
@@ -410,8 +422,7 @@ const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
 const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}) => {
   const isStart = /start|first|neutral/i.test(normalizeText(keyframeRole))
   const animationType = inferAnimationType(action)
-  const requestedFacing = action.actionContract?.facing
-  const changesFacing = requestedFacing && requestedFacing !== 'reference'
+  const changesFacing = hasExplicitFacing(action)
   if (isWorkStateAction(action)) {
     return isStart
       ? `Pose: neutral focused work-state pose with the full body anchored and the ${changesFacing ? 'specified' : 'canonical'} viewpoint preserved.`
@@ -422,7 +433,7 @@ const getKeyframePoseInstruction = ({ action = {}, keyframeRole = 'start' } = {}
       ? changesFacing
         ? 'Pose: retain the quiet reference pose as seen from the specified viewpoint; do not change limb placement merely to neutralize the pose.'
         : 'Pose: match the canonical reference pose and viewpoint as closely as possible; do not force a new front-facing view or change limb placement merely to neutralize the pose.'
-      : 'Pose: preserve the canonical pose and silhouette with only one subtle identity-safe local change; no action extreme, large appendage movement, or body-root motion.'
+      : `Pose: preserve the quiet pose and silhouette ${changesFacing ? 'in the specified facing' : 'from the reference'} with only one subtle identity-safe local change; no action extreme, large appendage movement, or body-root motion.`
   }
   if (isStart) {
     if (animationType === 'locomotion_loop') return `Pose: first contact pose of an in-place gait, full body visible, ${action.actionContract ? '' : 'in a strict side profile '}with both locomotion legs and feet clearly visible and separated: one foot planted under the body and the other extended forward or back.`
