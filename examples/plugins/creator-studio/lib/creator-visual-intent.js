@@ -77,29 +77,37 @@ const HAN_LOCOMOTION = /(?:走路|行走|跑(?:步)?|爬行|飞|飛)/u
 const HAN_HEADING = /(?:向|往|朝)[着著]?/u
 const HAN_BODY = /(?:身体|身體|身子|全身)\s*/u
 const HAN_FACING = `(?:${HAN_BODY.source})?(?:面向|面朝|朝向)[着著]?`
-const HAN_CLAUSE_END = /(?=\s*(?:$|[\p{P}并並且而和但却卻]|不过|不過|然后|然後))/u
+const HAN_CLAUSE_END = /(?=\s*(?:$|[并並且而和但却卻]|不过|不過|然后|然後))/u
 const EN_TOWARD = /(?:to|towards?)\s+/u
+const EN_SIDE_JOIN = /(?:\s*(?:-to-|[/-])\s*|\s+(?:and|or|to)\s+)/u
+const HAN_SIDE_JOIN = /\s*(?:或者|[/和或与與及])?\s*/u
 const enViewerSide = (side) => String.raw`(?:the\s+)?(?:(?:viewer|screen)(?:[ -]|['’]s\s+))?(?:${side})(?:wards?)?\b`
 const hanViewerSide = (side) => String.raw`\s*(?:屏幕|螢幕|画面|畫面)?\s*${side}(?:侧|側|边|邊)?(?![侧側边邊前后後]*[爪手脚腳眼耳腿])`
+const hanEitherSide = hanViewerSide('[左右]')
 const FACING_CONTEXT = new RegExp(
-  `^(?:${EN_FACING.source}|${HAN_FACING}|${HAN_BODY.source}朝|${HAN_HEADING.source}${hanViewerSide('[左右]')}$)`,
+  `^(?:${EN_FACING.source}|${HAN_FACING}|${HAN_BODY.source}朝|${HAN_HEADING.source}${hanEitherSide}(?:${HAN_SIDE_JOIN.source}${hanEitherSide})?$)`,
   'u'
 )
 const LOCOMOTION_SIDES = Object.fromEntries(VIEWER_SIDES.map((direction) => {
   const side = direction.slice('viewer-'.length)
-  const hanSide = side === 'left' ? '左' : '右'
+  const otherSide = side === 'left' ? 'right' : 'left'
+  const ownHanSide = hanViewerSide(side === 'left' ? '左' : '右')
+  const otherHanSide = hanViewerSide(side === 'left' ? '右' : '左')
   const motion = String.raw`${LOCOMOTION_VERB.source}(?:\s+(?:in place|on the spot|slowly|quickly|gently|fast|rapidly))*`
   const travel = String.raw`(?:${motion}\s+(?:${EN_TOWARD.source})?|^towards?\s+)`
   const facing = String.raw`(?:^|${motion}\s+(?:(?:${EN_TOWARD.source})?${enViewerSide('left|right')}\s+)?)${EN_FACING.source}\s+(?:${EN_TOWARD.source})?`
   const anatomy = String.raw`\s+(?:(?:front|rear|hind)\s+)?(?:paws?|limbs?|legs?|arms?|eyes?|ears?|now)\b`
-  const hanHeading = `${HAN_HEADING.source}${hanViewerSide(hanSide)}`
+  const englishSide = `(?:${enViewerSide(otherSide)}${EN_SIDE_JOIN.source})?${enViewerSide(side)}`
+  const hanSideOptions = `(?:${otherHanSide}${HAN_SIDE_JOIN.source})?${ownHanSide}(?:${HAN_SIDE_JOIN.source}${otherHanSide})?`
+  const hanBodySide = `(?:${ownHanSide}${HAN_CLAUSE_END.source}|${ownHanSide}${HAN_SIDE_JOIN.source}${otherHanSide}|${otherHanSide}${HAN_SIDE_JOIN.source}${ownHanSide})`
+  const hanHeading = `${HAN_HEADING.source}${hanSideOptions}`
   const hanModifiers = String.raw`\s*(?:(?:原地|就地|慢慢地?|缓慢地?|緩慢地?|快速地?|迅速地?)\s*)*`
   const hanFacingAnchor = String.raw`(?:^|${HAN_LOCOMOTION.source}\s*)`
   return [direction, new RegExp([
-    `(?:${travel}|${facing})${enViewerSide(side)}(?!${anatomy})`,
+    `(?:${travel}|${facing})${englishSide}(?!${anatomy})`,
     String.raw`(?:^|${motion}\s+)${side}[- ]facing\b|\b${side}[- ]facing\s+${motion}`,
-    `${hanFacingAnchor}${HAN_FACING}${hanViewerSide(hanSide)}`,
-    `${hanFacingAnchor}${HAN_BODY.source}朝[着著]?${hanViewerSide(hanSide)}${HAN_CLAUSE_END.source}`,
+    `${hanFacingAnchor}${HAN_FACING}${hanSideOptions}`,
+    `${hanFacingAnchor}${HAN_BODY.source}朝[着著]?${hanBodySide}`,
     `${HAN_LOCOMOTION.source}${hanModifiers}${hanHeading}`,
     `${hanHeading}${hanModifiers}${HAN_LOCOMOTION.source}`,
     `^${hanHeading}$`

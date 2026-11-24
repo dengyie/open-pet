@@ -131,6 +131,21 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
   }
 })
 
+test('paired locomotion directions do not become a single fixed profile', () => {
+  for (const motionPrompt of [
+    '原地跑步，同时身体朝左/右交替摆动',
+    '原地跑步，同时身體朝左側或右側',
+    '原地跑步，同时朝左/右',
+    '跑向屏幕左侧／右侧',
+    '跑向左右两侧',
+    'Run left/right',
+    'Run left-to-right',
+    'Run in place while facing viewer-left or viewer-right'
+  ]) {
+    assert.equal(toProviderAction({ name: 'Run right', motionPrompt }).viewDirection, undefined, motionPrompt)
+  }
+})
+
 test('eye rolls and whole-body rolls remain distinct in English and Chinese', () => {
   for (const motionPrompt of ['Roll its eyes', 'An eye roll', '翻白眼']) {
     const action = toProviderAction({ motionPrompt })
