@@ -10,6 +10,7 @@ const {
   repairActionFrameFromGeneratedImage
 } = require('../../examples/plugins/creator-studio/lib/action-frame-builder')
 const { assertActionFrameQaPassed } = require('../../examples/plugins/creator-studio/lib/action-frame-qa')
+const { draftGenerationTask } = require('../../examples/plugins/creator-studio/lib/conversation-wizard')
 const {
   writeBadStaticActionSheet,
   writeGoodSubtleWaveSheet
@@ -253,6 +254,35 @@ test('structured playback checks the loop seam only for loops and binds QA to th
       dataDir, actionFrames, actionContract: { ...actionContract, facing: 'viewer-left' }
     }), /action contract must match/)
   }
+})
+
+test('dashboard-drafted loops fail QA when only the last-to-first transition jumps', async () => {
+  const dataDir = makeDataDir()
+  const action = draftGenerationTask({ prompt: 'Wave in a loop' }).generationTask.actions[0]
+  assert.equal(action.loop, true)
+  await createCustomActionSheetPng({
+    filePath: path.join(dataDir, 'sheet.png'),
+    frameCount: action.frameCount,
+    createBody: (index) => {
+      const color = `rgb(${80 + index * 10}, 125, 160)`
+      return `<ellipse cx="124" cy="130" rx="48" ry="62" fill="${color}"/><circle cx="164" cy="${130 - index * 3}" r="18" fill="${color}"/>`
+    }
+  })
+  const build = async (loop) => {
+    const output = await buildActionFramesFromGeneratedImage({
+      dataDir,
+      generationResult: { outputs: [{ dataRelativePath: 'sheet.png' }] },
+      action: { ...action, loop },
+      outputFramesDir: path.join(dataDir, `frames-${loop}`),
+      qaDir: path.join(dataDir, `qa-${loop}`)
+    })
+    return JSON.parse(fs.readFileSync(output.qaPath, 'utf-8'))
+  }
+  const oneShot = await build(false)
+  assert.equal(oneShot.ok, true, JSON.stringify(oneShot.errors))
+  const looping = await build(true)
+  assert.deepEqual(looping.errors, ['action_loop_seam_discontinuity'])
+  assert.equal(looping.ok, false)
 })
 
 test('action frame builder removes a plain opaque action-sheet background before accepting frames', async () => {
