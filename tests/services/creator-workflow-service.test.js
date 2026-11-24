@@ -3523,6 +3523,35 @@ test('creator diagnostics prioritize package output and bound aggregate retry hi
   assert.ok(Buffer.byteLength(JSON.stringify(diagnostics)) < 1_000_000)
 })
 
+test('creator diagnostics show review previews from the published package revision only', (t) => {
+  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-published-package-preview-'))
+  t.after(() => fs.rmSync(pluginDataDir, { recursive: true, force: true }))
+  const runId = 'run-published-package'
+  const published = `runs/${runId}/package-revisions/attempt-accepted`
+  const unpublished = `runs/${runId}/package-revisions/attempt-rejected`
+  const contactSheet = `${published}/qa/contact-sheet.png`
+  const preview = `${published}/qa/idle.gif`
+  const atlasQaRelativePath = `${published}/qa/atlas-validation.json`
+  for (const [relativePath, data] of [
+    [contactSheet, LEGACY_PNG_BYTES],
+    [preview, LEGACY_GIF_BYTES],
+    [`${unpublished}/qa/idle.gif`, LEGACY_GIF_BYTES],
+    [atlasQaRelativePath, JSON.stringify({ visualReview: { contactSheet, previews: [{ actionId: 'idle', path: preview }] } })],
+    [`runs/${runId}/run.json`, JSON.stringify({
+      runId, status: 'ready_for_review', qualityFirst: { package: { atlasQaRelativePath } }
+    })]
+  ]) {
+    const filePath = path.join(pluginDataDir, relativePath)
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    fs.writeFileSync(filePath, data)
+  }
+  const assets = __testInternals.readWorkflowDiagnostics({ pluginDataDir, runId }).progress.processAssets
+  for (const relativePath of [contactSheet, preview]) {
+    assert.ok(assets.some(asset => asset.relativePath === relativePath && asset.previewable && asset.role === 'quality-first-package'))
+  }
+  assert.equal(assets.some(asset => asset.relativePath.startsWith(unpublished)), false)
+})
+
 test('creator workflow asset preview loads on demand and rejects path escape', async () => {
   const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-asset-preview-'))
   const runId = 'run-preview-on-demand'

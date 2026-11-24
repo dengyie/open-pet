@@ -37,22 +37,29 @@ test('human override binds the exact warned candidate without rewriting its reco
     qualityWarningCodes: ['visual-defect-identity-drift', 'visual-score-overall-below-minimum']
   })
 
-  const selection = createCandidateSelection({
+  const options = {
     candidate,
     expectedHash: hash('f'),
     authority: 'human-override',
     qualityOverride: true,
     acknowledgedWarningCodes: ['visual-score-overall-below-minimum', 'visual-defect-identity-drift'],
     now: () => '2026-07-28T00:00:00.000Z'
-  })
+  }
+  const { evidenceSha256, ...selection } = createCandidateSelection(options)
 
   assert.equal(candidate.recommended, false)
+  assert.match(evidenceSha256, /^[a-f0-9]{64}$/)
+  assert.notEqual(createCandidateSelection({ ...options, actionId: 'running' }).evidenceSha256, evidenceSha256)
+  assert.notEqual(createCandidateSelection({
+    ...options, candidate: { ...candidate, evaluation: { scores: { overall: 50 } } }
+  }).evidenceSha256, evidenceSha256)
   assert.deepEqual(selection, {
     candidateId: 'canonical-4',
     sha256: hash('f'),
     selectionAuthority: 'human-override',
     qualityOverride: true,
     acknowledgedWarningCodes: ['visual-defect-identity-drift', 'visual-score-overall-below-minimum'],
+    actionId: 'canonical',
     selectedAt: '2026-07-28T00:00:00.000Z'
   })
 })

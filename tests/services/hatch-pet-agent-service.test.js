@@ -11,6 +11,18 @@ const { getQualityFirstQualityProfile } = require('../../examples/plugins/creato
 
 const validDecision = (decision = 'generate-identity') => ({ schemaVersion: 1, decision, scope: {}, reasonCodes: ['ready'], confidence: 0.8 })
 
+const withFixtureScoreEvidence = (completion, request) => {
+  if (request.tool.function.name !== 'hatch_pet_sprite_evaluation' || !completion?.arguments) return completion
+  const withEvidence = (record) => ({
+    ...record,
+    scoreEvidence: record.scoreEvidence === undefined ? Object.fromEntries(Object.keys(record.scores || {}).map(name => [
+      name, { regionId: record.candidateId || 'source', observation: 'Frozen fixture observation' }
+    ])) : record.scoreEvidence
+  })
+  const args = completion.arguments
+  return { ...completion, arguments: args.candidates ? { ...args, candidates: args.candidates.map(withEvidence) } : withEvidence(args) }
+}
+
 const createHarness = ({ enabled = true, configMode = 'follow-chat', requireIdentityReviewBeforeActions = false, completions = [], completeStructuredTool = null, completeStructuredVisionTool = null, secret = 'sk-host-owned', dataDir: suppliedDataDir = '', budgets = {} } = {}) => {
   let settings = { ai: { provider: 'openai-compatible', baseUrl: 'https://chat.test/v1', model: 'chat-model', apiKeyRef: 'ai.default', conversations: { untouched: [{ role: 'user', content: 'keep' }] }, memory: { enabled: true }, behavior: { enabled: true }, hatchPet: { enabled, configMode, provider: 'openai-compatible', baseUrl: 'https://dedicated.test/v1', model: 'planner', apiKeyRef: 'wrong-ref', requireIdentityReviewBeforeActions, budgets } } }
   const calls = []
@@ -19,10 +31,13 @@ const createHarness = ({ enabled = true, configMode = 'follow-chat', requireIden
   const queue = [...completions]
   let secretReads = 0
   const aiService = {
-    completeStructuredTool: async (request) => { calls.push(request); if (completeStructuredTool) return completeStructuredTool(request); const next = queue.shift(); if (next instanceof Error) throw next; return next }
+    completeStructuredTool: async (request) => { calls.push(request); if (completeStructuredTool) return completeStructuredTool(request); const next = queue.shift(); if (next instanceof Error) throw next; return withFixtureScoreEvidence(next, request) }
   }
   if (completeStructuredVisionTool) {
-    aiService.completeStructuredVisionTool = async (request) => { calls.push(request); return completeStructuredVisionTool(request) }
+    aiService.completeStructuredVisionTool = async (request) => {
+      calls.push(request)
+      return withFixtureScoreEvidence(await completeStructuredVisionTool(request), request)
+    }
   }
   const service = createHatchPetAgentService({
     aiService,
@@ -480,6 +495,30 @@ test('sprite evaluation rejects an all-zero response even when the provider omit
   assert.equal(result.gate.outcome, 'pass')
   assert.equal(h.calls.length, 2)
   assert.match(h.calls[1].messages[0].content, /previous evaluation was invalid/i)
+})
+
+test('final package reevaluation keeps the previous evidence for the same board', async (t) => {
+  const scores = { identity: 96, actionDistinctness: 92, crossAction: 94, smallScale: 90, style: 92, overall: 93 }
+  const completion = { arguments: { schemaVersion: 1, recommendation: 'pass', confidence: 0.95, scores, defects: [] } }
+  const h = createHarness({ completions: [
+    completion,
+    { arguments: { ...completion.arguments, scores: { ...scores, overall: 70 } } }
+  ] })
+  t.after(() => fs.rmSync(h.dataDir, { recursive: true, force: true }))
+  const boardPath = path.join(h.dataDir, 'board.png')
+  await sharp({ create: { width: 8, height: 8, channels: 4, background: '#fff' } }).png().toFile(boardPath)
+  const input = {
+    runId: 'package-evidence-revision',
+    scope: 'final-package',
+    board: { path: boardPath, sha256: 'a'.repeat(64), regions: [{ regionId: 'source' }] },
+    profile: getQualityFirstQualityProfile()
+  }
+  const accepted = await h.service.evaluateSprite(input)
+  const rejected = await h.service.evaluateSprite(input)
+  assert.notEqual(accepted.evidenceRelativePath, rejected.evidenceRelativePath)
+  const readStoredGate = (result) => JSON.parse(fs.readFileSync(path.join(h.dataDir, result.evidenceRelativePath), 'utf8')).evaluation.gate
+  assert.equal(readStoredGate(accepted).outcome, 'pass')
+  assert.equal(readStoredGate(rejected).outcome, 'repair')
 })
 
 test('sprite evaluation propagates cancellation to the provider without retrying', async () => {

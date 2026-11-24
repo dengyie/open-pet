@@ -57,10 +57,12 @@ const deepFreeze = (value) => {
   return Object.freeze(value)
 }
 
-const validateSpriteEvaluation = (value, { scope, regions = [] } = {}) => {
+const validateSpriteEvaluation = (value, { scope, regions = [], requireScoreEvidence = false } = {}) => {
   const normalizedScope = requireScope(scope)
-  if (!isPlainObject(value) || !sameKeys(value, ['schemaVersion', 'recommendation', 'confidence', 'scores', 'defects'])) {
-    throw createInvalidError('top-level fields must contain exactly schemaVersion, recommendation, confidence, scores, defects')
+  const fields = ['schemaVersion', 'recommendation', 'confidence', 'scores', 'defects']
+  if (requireScoreEvidence || value?.scoreEvidence !== undefined) fields.push('scoreEvidence')
+  if (!isPlainObject(value) || !sameKeys(value, fields)) {
+    throw createInvalidError(`top-level fields must contain exactly ${fields.join(', ')}`)
   }
   if (value.schemaVersion !== 1) throw createInvalidError('schemaVersion must be 1')
   if (!RECOMMENDATIONS.includes(value.recommendation)) throw createInvalidError('recommendation is invalid')
@@ -80,6 +82,21 @@ const validateSpriteEvaluation = (value, { scope, regions = [] } = {}) => {
   }
   if (!Array.isArray(value.defects) || value.defects.length > 32) throw createInvalidError('defects must be an array with at most 32 items')
   const allowedRegions = new Set(regions.map((region) => String(region?.regionId || '')).filter(Boolean))
+  let scoreEvidence
+  if (fields.includes('scoreEvidence')) {
+    if (!isPlainObject(value.scoreEvidence) || !sameKeys(value.scoreEvidence, scoreNames)) {
+      throw createInvalidError(`scoreEvidence must contain exactly ${scoreNames.join(', ')}`)
+    }
+    scoreEvidence = Object.fromEntries(scoreNames.map((name) => {
+      const entry = value.scoreEvidence[name]
+      if (!isPlainObject(entry) || !sameKeys(entry, ['regionId', 'observation']) ||
+          !allowedRegions.has(entry.regionId) ||
+          typeof entry.observation !== 'string' || !entry.observation.trim() || entry.observation.length > 240) {
+        throw createInvalidError(`scoreEvidence for ${name} requires a declared region and a brief observation`)
+      }
+      return [name, { regionId: entry.regionId, observation: entry.observation.trim() }]
+    }))
+  }
   const defects = value.defects.map((defect) => {
     if (!isPlainObject(defect) || !sameKeys(defect, ['code', 'severity', 'regionId'])) {
       throw createInvalidError('each defect must contain exactly code, severity, regionId')
@@ -95,11 +112,12 @@ const validateSpriteEvaluation = (value, { scope, regions = [] } = {}) => {
     recommendation: value.recommendation,
     confidence: value.confidence,
     scores,
+    ...(scoreEvidence ? { scoreEvidence } : {}),
     defects
   })
 }
 
-const validateCanonicalComparisonEvaluation = (value, { regions = [] } = {}) => {
+const validateCanonicalComparisonEvaluation = (value, { regions = [], requireScoreEvidence = false } = {}) => {
   if (!isPlainObject(value) || !sameKeys(value, ['schemaVersion', 'recommendation', 'candidates'])) {
     throw createInvalidError('canonical comparison must contain exactly schemaVersion, recommendation, candidates')
   }
@@ -112,7 +130,9 @@ const validateCanonicalComparisonEvaluation = (value, { regions = [] } = {}) => 
   }
   const seen = new Set()
   const candidates = value.candidates.map((candidate) => {
-    if (!isPlainObject(candidate) || !sameKeys(candidate, ['candidateId', 'confidence', 'scores', 'defects'])) {
+    const fields = ['candidateId', 'confidence', 'scores', 'defects']
+    if (requireScoreEvidence || candidate?.scoreEvidence !== undefined) fields.push('scoreEvidence')
+    if (!isPlainObject(candidate) || !sameKeys(candidate, fields)) {
       throw createInvalidError('canonical comparison candidate fields are invalid')
     }
     const candidateId = String(candidate.candidateId || '')
@@ -124,12 +144,17 @@ const validateCanonicalComparisonEvaluation = (value, { regions = [] } = {}) => 
       recommendation: value.recommendation,
       confidence: candidate.confidence,
       scores: candidate.scores,
+      scoreEvidence: candidate.scoreEvidence,
       defects: candidate.defects
-    }, { scope: 'canonical', regions })
+    }, { scope: 'canonical', regions, requireScoreEvidence })
+    if (Object.values(normalized.scoreEvidence || {}).some(entry => entry.regionId !== candidateId)) {
+      throw createInvalidError(`scoreEvidence must cite its own canonical candidate region: ${candidateId}`)
+    }
     return {
       candidateId,
       confidence: normalized.confidence,
       scores: normalized.scores,
+      ...(normalized.scoreEvidence ? { scoreEvidence: normalized.scoreEvidence } : {}),
       defects: normalized.defects
     }
   })
@@ -202,6 +227,7 @@ const evaluateCanonicalComparisonGate = ({ evaluation, profile, regions = [] } =
   const failures = Object.entries(candidateGates)
     .filter(([, gate]) => gate.ok !== true)
     .flatMap(([candidateId, gate]) => gate.failures.map((failure) => `${candidateId}:${failure}`))
+    .sort()
   const passingCandidateCount = Object.values(candidateGates).filter((gate) => gate.ok === true).length
   // 单候选的 gate 有四态（pass/repair/reject/cannot-evaluate），此前聚合时把所有非
   // pass 都压成 repair：整板不可读或全部候选被硬拒时，工作流仍会去跑修复循环，
@@ -225,6 +251,21 @@ const evaluateCanonicalComparisonGate = ({ evaluation, profile, regions = [] } =
   })
 }
 
+const createScoreEvidenceSchema = (scores) => ({
+  type: 'object',
+  additionalProperties: false,
+  properties: Object.fromEntries(scores.map(score => [score, {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      regionId: { type: 'string', minLength: 1, maxLength: 128 },
+      observation: { type: 'string', minLength: 1, maxLength: 240 }
+    },
+    required: ['regionId', 'observation']
+  }])),
+  required: scores
+})
+
 const createTool = (scope) => {
   const scoreProperties = Object.fromEntries(EVALUATION_SCOPES[scope].scores.map((score) => [score, { type: 'number', minimum: 0, maximum: 100 }]))
   return {
@@ -245,6 +286,7 @@ const createTool = (scope) => {
             properties: scoreProperties,
             required: EVALUATION_SCOPES[scope].scores
           },
+          scoreEvidence: createScoreEvidenceSchema(EVALUATION_SCOPES[scope].scores),
           defects: {
             type: 'array',
             maxItems: 32,
@@ -260,7 +302,7 @@ const createTool = (scope) => {
             }
           }
         },
-        required: ['schemaVersion', 'recommendation', 'confidence', 'scores', 'defects']
+        required: ['schemaVersion', 'recommendation', 'confidence', 'scores', 'scoreEvidence', 'defects']
       }
     }
   }
@@ -293,6 +335,7 @@ const createCanonicalComparisonTool = (candidateCount) => {
                 candidateId: { type: 'string', minLength: 1, maxLength: 128 },
                 confidence: { type: 'number', minimum: 0, maximum: 1 },
                 scores: { type: 'object', additionalProperties: false, properties: scoreProperties, required: canonicalScoreNames },
+                scoreEvidence: createScoreEvidenceSchema(canonicalScoreNames),
                 defects: {
                   type: 'array',
                   maxItems: 16,
@@ -308,7 +351,7 @@ const createCanonicalComparisonTool = (candidateCount) => {
                   }
                 }
               },
-              required: ['candidateId', 'confidence', 'scores', 'defects']
+              required: ['candidateId', 'confidence', 'scores', 'scoreEvidence', 'defects']
             }
           }
         },
@@ -392,6 +435,13 @@ const createSpriteEvaluatorRequest = async ({ scope, board, qa = {}, profile, re
   const systemPrompt = [
     'Inspect the single attached sprite review board and return the required structured score tool call.',
     'Use only the declared region IDs, score every required dimension, and report only fixed defect records.',
+    'Score anchors for each dimension: 0–24 absent or contradictory; 25–49 recognizable only in fragments, with severe problems; 50–74 recognizable but with substantial visible departures; 75–91 clear and faithful with limited visible departures; 92–100 near-exact or fully effective, with negligible visible departures. Use the full scale and justify the position within each band.',
+    'Reference identity checklist: first identify the visible silhouette and proportions; face, eyes, mouth and ears; palette and distinctive markings; appendages, outfit or accessories; and linework, shading and material. Use the same visible reference features for every comparison. Do not invent features hidden by the pose or crop.',
+    'Provide scoreEvidence for every score: cite a declared region and a concrete visual observation, not a restatement of the score. Describe what matches, differs, or is not visible.',
+    'Report observed quality without targeting an acceptance outcome. The host decides acceptance.',
+    ...(normalizedScope === CANONICAL_COMPARISON_SCOPE ? [
+      'Evaluate each candidate independently against the source reference and the same checklist. Do not rank, normalize against, or borrow evidence from neighboring candidates. Cite that candidate’s own region for every score.'
+    ] : []),
     'Use board-unreadable only when the board itself is missing, blank, corrupted, or impossible to visually inspect.',
     'When any sprite regions are visible, score their quality and use the specific visual defects instead of board-unreadable.',
     'The review board may contain intentional unused canvas outside the declared regions; unused canvas does not make a board unreadable.',
@@ -401,13 +451,13 @@ const createSpriteEvaluatorRequest = async ({ scope, board, qa = {}, profile, re
       'Evaluate idle against its declared frame plan; a natural blink with a still body is a complete idle action. Do not require a wave, translation, or large gesture.',
       ...(isWorkStateAction(actionIntent) ? ['The internal actionId running means stationary task-processing or focused work; evaluate the declared in-place working gesture. Locomotion uses running-right and running-left.'] : []),
       ...(actionIntent.actionId === 'review' ? ['The internal actionId review means deliberate inspection and comparison followed by a decision beat. Head-led observation and an acknowledgement nod are valid gestures; judge whether those phases are visibly clear in both detail and runtime frames.'] : []),
-      'Distinguish intended pose and expression changes from unintended anatomy, identity, or rendering-style drift. Keep all quality thresholds in force.'
+      'Distinguish intended pose and expression changes from unintended anatomy, identity, or rendering-style drift.'
     ] : []),
     ...(actionIntents.length ? [
       'The final-action-sequence regions map each atlas row to its declared action intent. Read frames left to right and compare all phases, including shared neutral endpoints.',
       'The internal actionId running means stationary task-processing or focused work; locomotion uses running-right and running-left. The actionId review means deliberate inspection and comparison followed by a decision beat.',
       'Judge actionDistinctness against these intended motions, and crossAction against actual identity, anatomy, scale and style consistency. Intended side views and airborne offsets are part of their actions; unintended drift remains a defect.',
-      'All final sequence rows and the summary share one atlas crop and scale within their respective regions. Assess the visible differences without assuming each action was independently fitted. Keep every quality threshold in force.'
+      'All final sequence rows and the summary share one atlas crop and scale within their respective regions. Assess the visible differences without assuming each action was independently fitted.'
     ] : []),
     ...(regionSummary.some(region => region.role === 'runtime-frame') ? [
       'Candidate-frame regions retain normalized full-resolution detail; runtime-frame regions show the actual 128-pixel output without enlargement. Use both as evidence.',
@@ -444,9 +494,7 @@ const createSpriteEvaluatorRequest = async ({ scope, board, qa = {}, profile, re
               regions: regionSummary,
               deterministicQa: boundedQa,
               ...(actionIntent ? { actionIntent } : {}),
-              ...(actionIntents.length ? { actionIntents } : {}),
-              minimumScores: thresholds,
-              minimumConfidence: profile.visual.confidence
+              ...(actionIntents.length ? { actionIntents } : {})
             })
           },
           {
@@ -484,6 +532,7 @@ const recordSpriteEvaluation = ({ dataDir, runId, scope, evidenceId = '', evalua
     recommendation: source.recommendation,
     confidence: source.confidence,
     scores: isPlainObject(source.scores) ? source.scores : {},
+    scoreEvidence: isPlainObject(source.scoreEvidence) ? source.scoreEvidence : undefined,
     defects: Array.isArray(source.defects) ? source.defects : [],
     gate: isPlainObject(source.gate)
       ? {
@@ -504,6 +553,7 @@ const recordSpriteEvaluation = ({ dataDir, runId, scope, evidenceId = '', evalua
           candidateId: String(candidate?.candidateId || '').slice(0, 128),
           confidence: Number(candidate?.confidence) || 0,
           scores: isPlainObject(candidate?.scores) ? candidate.scores : {},
+          scoreEvidence: isPlainObject(candidate?.scoreEvidence) ? candidate.scoreEvidence : undefined,
           defects: Array.isArray(candidate?.defects) ? candidate.defects.slice(0, 16) : []
         }))
       : undefined,

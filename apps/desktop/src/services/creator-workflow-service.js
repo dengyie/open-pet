@@ -843,10 +843,24 @@ const collectProcessAssetsForRun = ({ pluginDataDir, runId, includePreviews = fa
   }
 
   const runJson = readJsonIfExists(path.join(runDir, 'run.json'), null)
-  for (const candidate of [runJson?.qualityFirst?.package?.spritesheetRelativePath, runJson?.qualityFirst?.package?.visualEvaluation?.boardRelativePath]) {
+  const publishedPackage = runJson?.qualityFirst?.package
+  for (const candidate of [publishedPackage?.spritesheetRelativePath, publishedPackage?.visualEvaluation?.boardRelativePath]) {
     const relativePath = normalizeSafeRelativePath(candidate)
     if (!relativePath || !isRunRelativePath({ runId: normalizedRunId, relativePath })) continue
     add({ absolutePath: path.join(dataRoot, relativePath), kind: 'sheet', label: 'Quality-first package output', role: 'quality-first-package' })
+  }
+  const atlasQaRelativePath = normalizeSafeRelativePath(publishedPackage?.atlasQaRelativePath)
+  if (isRunRelativePath({ runId: normalizedRunId, relativePath: atlasQaRelativePath })) {
+    const atlasQaPath = path.join(dataRoot, atlasQaRelativePath)
+    if (isPathInsideDirectory({ rootPath: runDir, targetPath: atlasQaPath, requireExisting: true })) {
+      const visualReview = readJsonIfExists(atlasQaPath, null)?.visualReview
+      const previews = Array.isArray(visualReview?.previews) ? visualReview.previews.slice(0, PROCESS_CANDIDATE_MAX_FILES) : []
+      for (const candidate of [visualReview?.contactSheet, ...previews.map(preview => preview?.path)]) {
+        const relativePath = normalizeSafeRelativePath(candidate)
+        if (!isRunRelativePath({ runId: normalizedRunId, relativePath })) continue
+        add({ absolutePath: path.join(dataRoot, relativePath), kind: 'process', label: 'Quality-first review artifact', role: 'quality-first-package' })
+      }
+    }
   }
   const qualityPackageDir = path.join(runDir, 'quality-first')
   for (const absolute of scanImages(qualityPackageDir, PROCESS_CANDIDATE_MAX_FILES)) {

@@ -13,6 +13,7 @@ const { readActionCheckpoints, resolveReusableActionResult, writeActionCheckpoin
 const { getQualityFirstQualityProfile } = require('../../examples/plugins/creator-studio/lib/pet-generation-quality-profile')
 const { compileProviderImagePrompt } = require('../../examples/plugins/creator-studio/lib/provider-image-prompt-compiler')
 const { writeCandidateRecord } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
+const { createCandidateSelection } = require('../../examples/plugins/creator-studio/lib/candidate-decision')
 const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
 const hostModelBridgeModule = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
 
@@ -979,19 +980,49 @@ test('quality-first final package requires a passing code-owned visual gate over
   assert.equal(accepted.gate.ok, true)
   assert.match(accepted.boardRelativePath, /final-package-review-board\.png$/)
 
-  const warned = await evaluateQualityFirstFinalPackage({
+  const packageInputs = {
     dataDir,
     runId,
     sourcePath: paths.source,
     canonicalPath: paths.canonical,
     spritesheetPath: paths.atlas,
-    atlasQaPath,
-    allowVisualQualityWarnings: true,
-    requestEvaluation: async () => ({ gate: { ok: false, outcome: 'repair', failures: ['visual-score-overall-below-minimum'] }, evidenceRelativePath: `runs/${runId}/evaluations/final-package.json` })
+    atlasQaPath
+  }
+  const defectCode = 'visual-defect-cross-action-inconsistent'
+  const requestEvaluation = async (regionId = 'atlas') => ({
+    gate: { ok: false, outcome: 'repair', failures: [defectCode] },
+    evaluation: { defects: [{ regionId, severity: 'major', code: 'cross-action-inconsistent' }] },
+    evidenceRelativePath: `runs/${runId}/evaluations/final-package.json`
+  })
+  const candidate = { candidateId: 'idle-a', sha256: 'a'.repeat(64), technicalEligible: true, qualityWarningCodes: [defectCode] }
+  const rowSelection = createCandidateSelection({
+    candidate, expectedHash: candidate.sha256, actionId: 'idle', authority: 'human-override',
+    qualityOverride: true, acknowledgedWarningCodes: [defectCode]
+  })
+  let confirmation
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    ...packageInputs,
+    finalVisualConfirmation: rowSelection,
+    requestEvaluation: () => requestEvaluation()
+  }), error => {
+    confirmation = error.confirmationEvidence
+    return error.code === 'final_package_visual_gate_failed'
+  })
+  assert.match(confirmation.evidenceSha256, /^[a-f0-9]{64}$/)
+  assert.notEqual(confirmation.evidenceSha256, rowSelection.evidenceSha256)
+  const warned = await evaluateQualityFirstFinalPackage({
+    ...packageInputs, finalVisualConfirmation: confirmation, requestEvaluation: () => requestEvaluation()
   })
   assert.equal(warned.recommended, false)
-  assert.deepEqual(warned.qualityWarningCodes, ['visual-score-overall-below-minimum'])
+  assert.deepEqual(warned.qualityWarningCodes, [defectCode])
   assert.equal(warned.gate.ok, false)
+  assert.deepEqual(warned.confirmation, confirmation)
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    ...packageInputs, finalVisualConfirmation: confirmation, requestEvaluation: () => requestEvaluation('action-review')
+  }), error => error.code === 'final_package_visual_gate_failed')
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    ...packageInputs, finalVisualConfirmation: { ...confirmation, acknowledgedWarningCodes: [] }, requestEvaluation: () => requestEvaluation()
+  }), error => error.code === 'final_package_visual_gate_failed')
 
   await assert.rejects(() => evaluateQualityFirstFinalPackage({
     dataDir,
@@ -1000,7 +1031,7 @@ test('quality-first final package requires a passing code-owned visual gate over
     canonicalPath: paths.canonical,
     spritesheetPath: paths.atlas,
     atlasQaPath,
-    allowVisualQualityWarnings: true,
+    finalVisualConfirmation: confirmation,
     requestEvaluation: async () => ({ gate: { ok: false, outcome: 'cannot-evaluate', failures: ['final-package-evaluation-unavailable'] }, evidenceRelativePath: `runs/${runId}/evaluations/final-package.json` })
   }), (error) => error?.code === 'final_package_visual_gate_failed')
 
@@ -1025,6 +1056,88 @@ test('quality-first final package requires a passing code-owned visual gate over
     atlasQaPath,
     requestEvaluation: async () => ({ gate: { ok: true, outcome: 'pass', failures: [] } })
   }), /canonical.*inside the Creator Studio data directory/i)
+})
+
+test('failed final review of a replacement row preserves the published package and review board', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-package-revision-'))
+  const runId = 'package-revision'
+  const runDir = path.join(dataDir, 'runs', runId)
+  fs.mkdirSync(runDir, { recursive: true })
+  const reference = `runs/${runId}/reference.png`
+  const plan = createSpriteAssetPlan({
+    version: 1, revision: 1, character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId: 'idle' }, { actionId: 'waving' }]
+  })
+  const drawFrame = (outputPath, frameIndex) => sharp(Buffer.from(
+    `<svg width="192" height="208" xmlns="http://www.w3.org/2000/svg">
+      <rect x="58" y="96" width="46" height="58" fill="#f6b73c"/>
+      <rect x="${78 + frameIndex * 3}" y="74" width="12" height="26" fill="#1c7ed6"/>
+      <rect x="90" y="150" width="20" height="8" fill="#2f9e44"/>
+    </svg>`
+  )).png().toFile(outputPath)
+  const addRow = async (actionId, processorVersion) => {
+    const row = require('../../examples/plugins/creator-studio/lib/full-pet-row-contract').getOfficialFullPetRow(actionId)
+    const frames = await Promise.all(row.durations.map(async (durationMs, index) => {
+      const framePath = path.join(runDir, `${actionId}-${index}.png`)
+      await drawFrame(framePath, index)
+      return { index, durationMs, path: framePath }
+    }))
+    writeActionCheckpoint({
+      dataDir, runId,
+      result: {
+        actionId, ok: true, outputCount: frames.length,
+        bindings: {
+          planHash: plan.hash, canonicalHash: canonical.sha256, profileHash: profile.hash,
+          processorVersion, qualityProfileHash: getQualityFirstQualityProfile().hash
+        },
+        row: { actionId, quality: 'row-real', frames }
+      }
+    })
+    return { ok: true, processorVersion }
+  }
+  await drawFrame(path.join(dataDir, reference), 0)
+  const canonical = { relativePath: reference, sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(dataDir, reference))).digest('hex') }
+  const profile = { hash: 'd'.repeat(64) }
+  const originalFetch = global.fetch
+  const env = Object.fromEntries(['OPENPET_BRIDGE_URL', 'OPENPET_BRIDGE_TOKEN'].map(key => [key, process.env[key]]))
+  t.after(() => {
+    global.fetch = originalFetch
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+  process.env.OPENPET_BRIDGE_URL = 'http://127.0.0.1:1'
+  process.env.OPENPET_BRIDGE_TOKEN = 'fixture-token'
+  const boards = []
+  global.fetch = async (url, options) => {
+    if (String(url).endsWith('/creator/model-settings')) return Response.json({ config: { model: 'gpt-image-2' } })
+    assert.match(String(url), /\/creator\/hatch-pet\/evaluate$/)
+    const { board } = JSON.parse(options.body)
+    boards.push(board)
+    const gate = boards.length === 1
+      ? { ok: true, outcome: 'pass', failures: [] }
+      : { ok: false, outcome: 'reject', failures: ['visual-defect-action-unreadable'] }
+    return Response.json({ result: { gate } })
+  }
+  const runtime = await createQualityFirstHostRuntime({
+    dataDir, run: { runId, petId: 'revision-pet', input: { referenceImage: { relativePath: reference } } }, planOverride: plan
+  })
+  const idle = await addRow('idle', runtime.processorVersionForAction('idle'))
+  const published = await runtime.finalizePackage({ canonical, profile, actionResults: { idle } })
+  const publishedPaths = [
+    published.spritesheetRelativePath, published.bundleRelativePath, published.petJsonRelativePath,
+    published.atlasQaRelativePath, published.visualEvaluation.boardRelativePath
+  ].map(relativePath => path.join(dataDir, relativePath))
+  const publishedBytes = publishedPaths.map(filePath => fs.readFileSync(filePath))
+  const waving = await addRow('waving', runtime.processorVersionForAction('waving'))
+  await assert.rejects(runtime.finalizePackage({ canonical, profile, actionResults: { idle, waving } }), { code: 'final_package_visual_gate_failed' })
+  assert.equal(boards.length, 2)
+  assert.ok(boards[1].regions.some(region => region.regionId === 'sequence-waving'))
+  assert.notEqual(boards[1].sha256, boards[0].sha256)
+  assert.notEqual(boards[1].relativePath, boards[0].relativePath)
+  assert.deepEqual(publishedPaths.map(filePath => fs.readFileSync(filePath)), publishedBytes)
+  assert.deepEqual(fs.readdirSync(path.join(runDir, 'package-revisions')), [path.basename(path.dirname(published.artifacts.outputDir))])
 })
 
 test('video action candidates build their evaluator board with the accepted canonical', async () => {
@@ -1090,24 +1203,6 @@ test('video action review uses original normalized detail and retains runtime ev
   assert.deepEqual(options[0].runtimeFrames, runtimeFrames)
 })
 
-test('final package quality stays advisory after any explicit human candidate selection', () => {
-  const { hasHumanCandidateSelection } = hostModelBridgeModule.__testInternals
-  assert.equal(hasHumanCandidateSelection({
-    canonical: { selection: { selectionAuthority: 'human-override', qualityOverride: false } },
-    actionResults: {}
-  }), true)
-  assert.equal(hasHumanCandidateSelection({
-    canonical: { selection: { selectionAuthority: 'automatic', qualityOverride: false } },
-    actionResults: {
-      waving: { selectedCandidate: { selection: { selectionAuthority: 'human-override', qualityOverride: false } } }
-    }
-  }), true)
-  assert.equal(hasHumanCandidateSelection({
-    canonical: { selection: { selectionAuthority: 'automatic', qualityOverride: false } },
-    actionResults: {}
-  }), false)
-})
-
 test('host model bridge no longer exports the removed legacy full-pet repair entry point', () => {
   assert.equal(Object.hasOwn(hostModelBridgeModule, 'regenerateFullPetActionsViaHostModelBridge'), false)
 })
@@ -1138,4 +1233,21 @@ test('final package host passes all visible motion intents, including the mirror
   assert.match(captured.qa.actionIntents.find(intent => intent.actionId === 'running-left').framePlan[0], /left-facing/)
   assert.match(captured.qa.actionIntents.find(intent => intent.actionId === 'running').framePlan[2], /work/)
   assert.match(captured.qa.actionIntents.find(intent => intent.actionId === 'review').framePlan[2], /inspection/)
+
+  const rowCandidate = { candidateId: 'running-a', sha256: 'a'.repeat(64), technicalEligible: true, qualityWarningCodes: ['visual-defect-action-unreadable'] }
+  const rowSelection = createCandidateSelection({
+    candidate: rowCandidate, expectedHash: rowCandidate.sha256, actionId: 'running', authority: 'human-override',
+    qualityOverride: true, acknowledgedWarningCodes: rowCandidate.qualityWarningCodes
+  })
+  await assert.rejects(evaluateQualityFirstFinalPackage({
+    dataDir, runId, sourcePath: atlas, canonicalPath: atlas, spritesheetPath: atlas, atlasQaPath, actions: plan.actions,
+    finalVisualConfirmation: rowSelection,
+    requestEvaluation: async request => {
+      assert.ok(request.board.regions.some(region => region.regionId === 'sequence-review'))
+      return {
+        gate: { ok: false, outcome: 'reject', failures: ['visual-defect-identity-drift'] },
+        evaluation: { defects: [{ code: 'identity-drift', severity: 'blocking', regionId: 'sequence-review' }] }
+      }
+    }
+  }), error => error.code === 'final_package_visual_gate_failed')
 })

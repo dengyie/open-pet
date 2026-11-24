@@ -45,6 +45,7 @@ const publicCanonicalCandidate = (candidate = {}) => {
     ...(candidate.canonicalMetrics ? { canonicalMetrics: candidate.canonicalMetrics } : {}),
     ...(candidate.descriptors ? { descriptors: candidate.descriptors } : {}),
     ...(candidate.evaluation ? { evaluation: candidate.evaluation } : {}),
+    ...(/^[a-f0-9]{64}$/.test(candidate.evaluationBoardSha256) ? { evaluationBoardSha256: candidate.evaluationBoardSha256 } : {}),
     ...(candidate.gate ? { gate: candidate.gate } : {}),
     ...(candidate.selection ? { selection: candidate.selection } : {}),
     ...(evaluationEvidenceRelativePath ? { evaluationEvidenceRelativePath } : {})

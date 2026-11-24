@@ -411,6 +411,12 @@ const archiveRepairEvidence = ({ dataDir, run, scope, actionId = '', archivedAt 
     relativePath: 'full-pet-action-checkpoints.json'
   })
   const commonPaths = ['outputs', 'qa']
+  const revisionPrefix = `runs/${run.runId}/`
+  const atlasQaRelativePath = String(run.qualityFirst?.package?.atlasQaRelativePath || '')
+  const packagedRevision = atlasQaRelativePath.startsWith(revisionPrefix)
+    ? /^package-revisions\/(attempt-[a-zA-Z0-9]+)\/qa\/atlas-validation\.json$/.exec(atlasQaRelativePath.slice(revisionPrefix.length))
+    : null
+  const revisionRelativePath = packagedRevision ? path.join('package-revisions', packagedRevision[1]) : ''
   const scopedPaths = scope === 'identity'
     ? [
         'anchors',
@@ -451,6 +457,12 @@ const archiveRepairEvidence = ({ dataDir, run, scope, actionId = '', archivedAt 
       archiveDir,
       relativePath
     })
+  }
+  if (scope === 'identity' && revisionRelativePath) {
+    const sourcePath = path.join(runDir, revisionRelativePath)
+    if (fs.existsSync(sourcePath) && fs.realpathSync.native(sourcePath) === path.join(fs.realpathSync.native(runDir), revisionRelativePath)) {
+      copyRepairEvidencePath({ sourcePath, archiveDir, relativePath: revisionRelativePath })
+    }
   }
   return archiveRelativePath
 }
@@ -934,6 +946,7 @@ const acceptQualityFirstActionCandidate = async ({
     candidate,
     expectedHash,
     authority: 'human-override',
+    actionId: normalizedActionId,
     qualityOverride,
     acknowledgedWarningCodes,
     now

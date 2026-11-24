@@ -104,6 +104,10 @@ const sanitizeSelection = ({ value, candidateId, sha256 }) => {
     selectionAuthority,
     qualityOverride: value.qualityOverride === true,
     acknowledgedWarningCodes: sanitizeFailures(value.acknowledgedWarningCodes),
+    ...(sanitizeSha256(value.evidenceSha256) ? {
+      actionId: String(value.actionId || '').slice(0, 80),
+      evidenceSha256: sanitizeSha256(value.evidenceSha256)
+    } : {}),
     selectedAt: String(value.selectedAt || '').slice(0, 64)
   }
 }

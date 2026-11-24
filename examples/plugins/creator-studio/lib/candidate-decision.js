@@ -1,3 +1,5 @@
+const { createHash } = require('node:crypto')
+
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const SELECTION_AUTHORITIES = new Set(['automatic', 'human-override'])
 
@@ -85,6 +87,7 @@ const createCandidateSelection = ({
   candidate,
   expectedHash,
   authority,
+  actionId = 'canonical',
   qualityOverride = false,
   acknowledgedWarningCodes = [],
   now = () => new Date().toISOString()
@@ -104,12 +107,24 @@ const createCandidateSelection = ({
     throw createDecisionError('candidate_not_recommended', 'Automatic selection requires a recommended technical candidate')
   }
   const isQualityOverride = selectionAuthority === 'human-override' && normalized.recommended !== true
+  const acknowledgedCodes = isQualityOverride ? normalized.qualityWarningCodes.slice().sort() : []
+  const evidenceSha256 = isQualityOverride ? createHash('sha256').update(JSON.stringify({
+    actionId,
+    candidateId: normalized.candidateId,
+    sha256: candidateHash,
+    acknowledgedWarningCodes: acknowledgedCodes,
+    sourceEvidenceSha256: normalized.evaluationBoardSha256 ||
+      normalized.artifacts?.find(artifact => artifact.role === 'evaluation-evidence')?.sha256 || null,
+    evaluation: normalized.evaluation || null,
+    gate: normalized.gate || null
+  })).digest('hex') : ''
   return {
     candidateId: String(normalized.candidateId || '').trim().slice(0, 128),
     sha256: candidateHash,
     selectionAuthority,
     qualityOverride: isQualityOverride,
-    acknowledgedWarningCodes: isQualityOverride ? normalized.qualityWarningCodes.slice().sort() : [],
+    acknowledgedWarningCodes: acknowledgedCodes,
+    ...(evidenceSha256 ? { actionId, evidenceSha256 } : {}),
     selectedAt: String(now())
   }
 }

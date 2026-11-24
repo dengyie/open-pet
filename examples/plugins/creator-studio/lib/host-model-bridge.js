@@ -424,7 +424,7 @@ const evaluateQualityFirstFinalPackage = async ({
   spritesheetPath,
   atlasQaPath,
   actions = [],
-  allowVisualQualityWarnings = false,
+  finalVisualConfirmation = null,
   requestEvaluation = requestHatchPetSpriteEvaluation
 } = {}) => {
   const safeSourcePath = resolveQualityFirstInputPath({ dataDir, filePath: sourcePath, label: 'Quality-first source' })
@@ -442,7 +442,9 @@ const evaluateQualityFirstFinalPackage = async ({
     relativePath: atlasQa?.visualReview?.contactSheet,
     label: 'Quality-first action review'
   })
-  const outputPath = path.join(dataDir, 'runs', String(runId || ''), 'evaluations', 'final-package-review-board.png')
+  const boardDir = path.join(dataDir, 'runs', String(runId || ''), 'evaluations', 'final-package-boards')
+  fs.mkdirSync(boardDir, { recursive: true })
+  const outputPath = path.join(fs.mkdtempSync(path.join(boardDir, 'attempt-')), 'final-package-review-board.png')
   const board = await createFinalPackageEvaluatorBoard({
     sourcePath: safeSourcePath,
     canonicalPath: safeCanonicalPath,
@@ -482,11 +484,29 @@ const evaluateQualityFirstFinalPackage = async ({
   })
   if (evaluated?.gate?.ok !== true) {
     const failures = Array.isArray(evaluated?.gate?.failures) ? evaluated.gate.failures.map(String).slice(0, 32) : ['final-package-visual-gate-failed']
-    if (allowVisualQualityWarnings === true && ['repair', 'reject'].includes(String(evaluated?.gate?.outcome || ''))) {
+    const qualityWarningCodes = [...new Set(failures)].sort()
+    const evidenceSha256 = crypto.createHash('sha256').update(JSON.stringify({
+      scope: 'final-package',
+      runId,
+      boardSha256: board.sha256,
+      regions: board.regions,
+      spritesheetSha256: sha256File(safeSpritesheetPath),
+      gate: evaluated?.gate,
+      evaluation: evaluated?.evaluation
+    })).digest('hex')
+    const canConfirm = ['repair', 'reject'].includes(evaluated?.gate?.outcome)
+    if (
+      canConfirm &&
+      finalVisualConfirmation?.scope === 'final-package' &&
+      finalVisualConfirmation.evidenceSha256 === evidenceSha256 &&
+      Array.isArray(finalVisualConfirmation.acknowledgedWarningCodes) &&
+      JSON.stringify([...new Set(finalVisualConfirmation.acknowledgedWarningCodes)].sort()) === JSON.stringify(qualityWarningCodes)
+    ) {
       return {
         gate: evaluated?.gate || { ok: false, outcome: 'repair', failures },
         recommended: false,
-        qualityWarningCodes: failures,
+        qualityWarningCodes,
+        confirmation: { scope: 'final-package', evidenceSha256, acknowledgedWarningCodes: qualityWarningCodes },
         evidenceRelativePath: String(evaluated?.evidenceRelativePath || '').replace(/\\/g, '/'),
         boardRelativePath: path.relative(dataDir, board.path).replace(/\\/g, '/'),
         boardSha256: board.sha256
@@ -497,6 +517,7 @@ const evaluateQualityFirstFinalPackage = async ({
     error.retryable = false
     error.gate = evaluated?.gate || null
     error.evidenceRelativePath = String(evaluated?.evidenceRelativePath || '')
+    if (canConfirm) error.confirmationEvidence = { scope: 'final-package', evidenceSha256, acknowledgedWarningCodes: qualityWarningCodes }
     throw error
   }
   return {
@@ -2987,14 +3008,6 @@ const createQualityFirstRecoveryBundle = async ({ dataDir, run, actionResults = 
   }
 }
 
-const hasHumanCandidateSelection = ({ canonical, actionResults = {} } = {}) => (
-  canonical?.selection?.selectionAuthority === 'human-override' ||
-  Object.values(actionResults).some((result) => (
-    result?.selection?.selectionAuthority === 'human-override' ||
-    result?.selectedCandidate?.selection?.selectionAuthority === 'human-override'
-  ))
-)
-
 const createFailedCanonicalCandidate = ({
   candidateId,
   promptRelativePath,
@@ -3137,11 +3150,7 @@ const evaluateCanonicalCandidatePool = async ({
     },
     qa: {
       ok: true,
-      failures: [],
-      metrics: {
-        candidateCount: evaluable.length,
-        distinctCandidateCount: Math.max(0, Number(pool?.distinctEligibleCount) || 0)
-      }
+      failures: []
     }
   })
   for (const candidate of evaluable) {
@@ -3159,6 +3168,7 @@ const evaluateCanonicalCandidatePool = async ({
       ? (candidate.duplicateOfCandidateId ? 'duplicate-alternate' : 'alternate')
       : 'selectable-with-warning'
     candidate.evaluationEvidenceRelativePath = evaluation.evidenceRelativePath
+    candidate.evaluationBoardSha256 = board.sha256
     await persistCandidate(candidate)
   }
   const normalizedCandidates = candidates.map((candidate) => (
@@ -3832,7 +3842,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
     }
     return writeActionCheckpoint({ dataDir, runId: run.runId, result: checkpointResult })
   }
-  const finalizePackage = async ({ canonical, profile, actionResults = {} }) => {
+  const finalizePackage = async ({ canonical, profile, actionResults = {}, finalVisualConfirmation }) => {
     const checkpoints = readActionCheckpoints({ dataDir, runId: run.runId })
     const completedActionIds = Object.keys(actionResults).length
       ? Object.keys(actionResults).filter((actionId) => actionResults[actionId]?.ok === true)
@@ -3860,11 +3870,22 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       }
     })
     if (!officialRows.some((row) => row.actionId === 'idle')) return null
+    const revisionsDir = path.join(dataDir, 'runs', run.runId, 'package-revisions')
+    fs.mkdirSync(revisionsDir, { recursive: true })
+    const revisionDir = fs.mkdtempSync(path.join(revisionsDir, 'attempt-'))
+    try {
+      return await buildFinalPackage({ canonical, finalVisualConfirmation, officialRows, revisionDir })
+    } catch (error) {
+      fs.rmSync(revisionDir, { recursive: true, force: true })
+      throw error
+    }
+  }
+  const buildFinalPackage = async ({ canonical, finalVisualConfirmation, officialRows, revisionDir }) => {
     const atlasGenerationResult = {
       outputs: [{ dataRelativePath: canonical.relativePath }]
     }
-    const outputDir = path.join(dataDir, `runs/${run.runId}/quality-first/package`)
-    const qaDir = path.join(dataDir, `runs/${run.runId}/quality-first/qa`)
+    const outputDir = path.join(revisionDir, 'package')
+    const qaDir = path.join(revisionDir, 'qa')
     const packaged = await buildRealAtlasFromGeneratedImage({
       dataDir,
       generationResult: atlasGenerationResult,
@@ -3881,7 +3902,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       spritesheetPath: packaged.spritesheetPath,
       atlasQaPath: packaged.atlasQaPath,
       actions: plan.actions,
-      allowVisualQualityWarnings: hasHumanCandidateSelection({ canonical, actionResults })
+      finalVisualConfirmation
     })
     const generatedImage = {
       ok: true,
@@ -4445,7 +4466,6 @@ module.exports = {
     generateWithModelFallback,
     evaluateActionKeyframeQuality,
     getSuccessfulGenerationModels,
-    hasHumanCandidateSelection,
     isSoftIdentityDescriptorRetryEligible,
     prepareGeneratedKeyframeOutput,
     normalizeGeneratedCanonicalOutput,
