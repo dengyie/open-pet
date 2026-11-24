@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
-import { EVENT_BACKEND_SHUTTING_DOWN, EVENT_PET_PACK_ACTIVATED, SETTINGS_CANONICAL_PATHS, SETTINGS_TRUSTED_PATHS } from "@openpet/contracts"
+import { EVENT_BACKEND_SHUTTING_DOWN, EVENT_PET_PACK_ACTIVATED, EVENT_SETTINGS_CHANGED, SETTINGS_CANONICAL_PATHS, SETTINGS_TRUSTED_PATHS } from "@openpet/contracts"
 
 import { createRouter } from "./http/router.js"
 import {

@@ -933,6 +933,23 @@ test("backend-originated home enable settles after Shell persists its normalized
 		])
 		assert.equal(response.status, 200)
 		assert.deepEqual(persistedRequests, [{ "type": "settings.persist.request", ifVersion: before.data.version + 1, patch: { "petBehavior.home.anchor": { displayId: "display-1", x: 50, y: 65 } } }])
+
+		const headers = { authorization: `Bearer ${backend.sessionToken}` }
+		const beforeDrag = await (await fetch(`${backend.baseUrl}/settings`, { headers })).json()
+		const anchor = { displayId: "display-1", x: 250, y: 265 }
+		const stored = await requestBackend({
+			type: "settings.persist.request",
+			ifVersion: beforeDrag.data.version,
+			patch: { "petBehavior.home.anchor": anchor },
+		})
+		assert.deepEqual(stored.body, {
+			type: "settings.persist.result",
+			ok: true,
+			version: beforeDrag.data.version + 1,
+			changedPaths: ["petBehavior.home.anchor"],
+		})
+		const afterDrag = await (await fetch(`${backend.baseUrl}/settings`, { headers })).json()
+		assert.deepEqual(afterDrag.data.values.petBehavior.home.anchor, anchor)
 	} finally {
 		if (backend?.child) await stopSidecar(backend.child, { graceMs: 5_000 })
 		fs.rmSync(userDataDir, { recursive: true, force: true })
