@@ -1722,7 +1722,7 @@ test('quality-first idle recovery can rebuild the missing scale profile from a r
   assert.equal(result.run.qualityFirst.actionResults.waving.ok, true)
 })
 
-test('quality-first identity retry archives paid candidates and returns to identity review', async () => {
+test('quality-first identity retry archives paid candidates and the published package revision', async () => {
   const dataDir = createDataDir()
   const created = createRun({
     dataDir,
@@ -1731,12 +1731,27 @@ test('quality-first identity retry archives paid candidates and returns to ident
   const candidateDir = path.join(dataDir, 'runs', created.runId, 'candidates', 'canonical', 'old')
   fs.mkdirSync(candidateDir, { recursive: true })
   fs.writeFileSync(path.join(candidateDir, 'raw.png'), 'paid')
+  const revision = 'package-revisions/attempt-accepted'
+  const unpublished = 'package-revisions/attempt-rejected'
+  const revisionFiles = ['package/pet.codex-pet.zip', 'package/spritesheet.webp', 'qa/atlas-validation.json', 'qa/idle.gif']
+  for (const directory of [revision, unpublished]) {
+    for (const name of revisionFiles) {
+      const filePath = path.join(dataDir, 'runs', created.runId, directory, name)
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, name)
+    }
+  }
   writeRun({ dataDir, run: {
     ...created,
     status: 'ready_for_review',
     taskStatus: 'confirmed',
     generationTask: { ...created.generationTask, pipeline: 'quality-first-v1' },
-    qualityFirst: { phase: 'ready_for_review', acceptedCanonical: { candidateId: 'old', sha256: 'a'.repeat(64) }, actionResults: { idle: { ok: true } } }
+    qualityFirst: {
+      phase: 'ready_for_review',
+      acceptedCanonical: { candidateId: 'old', sha256: 'a'.repeat(64) },
+      actionResults: { idle: { ok: true } },
+      package: { atlasQaRelativePath: `runs/${created.runId}/${revision}/qa/atlas-validation.json` }
+    }
   } })
   const orchestrator = {
     start: async ({ run }) => ({ ...run, status: 'awaiting_identity_review', currentStep: 'identity-review', qualityFirst: { phase: 'awaiting_identity_review', canonicalCandidates: [] } })
@@ -1746,6 +1761,10 @@ test('quality-first identity retry archives paid candidates and returns to ident
   assert.equal(result.run.qualityFirst.phase, 'awaiting_identity_review')
   assert.match(result.repair.evidenceArchive, /repairs/)
   assert.equal(fs.existsSync(path.join(dataDir, result.repair.evidenceArchive, 'candidates', 'canonical', 'old', 'raw.png')), true)
+  for (const name of revisionFiles) {
+    assert.equal(fs.readFileSync(path.join(dataDir, result.repair.evidenceArchive, revision, name), 'utf8'), name)
+  }
+  assert.equal(fs.existsSync(path.join(dataDir, result.repair.evidenceArchive, unpublished)), false)
 })
 
 test('provider full-pet execution rejects the removed legacy keyframe pipeline', async () => {
