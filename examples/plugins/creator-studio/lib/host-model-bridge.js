@@ -3831,7 +3831,8 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       const entry = resolveReusableActionResult({
         dataDir, runId: run.runId, actionId,
         planHash: plan.hash, canonicalHash: canonical?.sha256, profileHash: profile?.hash,
-        processorVersion: processorVersionForAction(actionId), qualityProfileHash: qualityProfile.hash, requireBindings: true
+        processorVersion: actionResults[actionId]?.processorVersion ?? processorVersionForAction(actionId),
+        qualityProfileHash: qualityProfile.hash, requireBindings: true
       })
       if (!entry?.row?.frames?.length) {
         throw Object.assign(new Error(`Invalid package checkpoint for ${actionId}`), { code: 'action_checkpoint_invalid' })

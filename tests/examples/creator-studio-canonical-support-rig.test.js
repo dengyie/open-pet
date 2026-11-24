@@ -565,18 +565,24 @@ for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`
       await sharp(Buffer.from(`<svg width="192" height="208"><ellipse cx="96" cy="115" rx="35" ry="42" fill="#ffcc42"/><rect x="105" y="${80 + index * 2}" width="13" height="20" fill="#391a10"/></svg>`)).png().toFile(target)
       idle.push({ path: target, frameIndex: index })
     }
-    const bindings = { ...readActionCheckpoints({ dataDir: f.dataDir, runId }).actions[actionId].bindings, processorVersion: runtime.processorVersionForAction('idle') }
+    const idleProcessorVersion = actionId === 'review' ? 4 : runtime.processorVersionForAction('idle')
+    const bindings = { ...readActionCheckpoints({ dataDir: f.dataDir, runId }).actions[actionId].bindings, processorVersion: idleProcessorVersion }
     writeActionCheckpoint({ dataDir: f.dataDir, runId, result: { actionId: 'idle', ok: true, bindings, row: { quality: 'row-real', frames: idle } } })
+    const actionResults = actionId === 'review' ? {
+      idle: { ok: true, processorVersion: idleProcessorVersion },
+      review: { ok: true, processorVersion: result.processorVersion }
+    } : {}
     if (actionId === 'review') {
+      assert.notEqual(runtime.processorVersionForAction('idle'), idleProcessorVersion)
       const pixels = fs.readFileSync(idle[0].path)
       fs.writeFileSync(idle[0].path, 'corrupted after checkpoint')
       try {
-        await assert.rejects(runtime.finalizePackage({ canonical: f.canonical, profile }), { code: 'action_checkpoint_invalid' })
+        await assert.rejects(runtime.finalizePackage({ canonical: f.canonical, profile, actionResults }), { code: 'action_checkpoint_invalid' })
       } finally {
         fs.writeFileSync(idle[0].path, pixels)
       }
     }
-    const packaged = await runtime.finalizePackage({ canonical: f.canonical, profile })
+    const packaged = await runtime.finalizePackage({ canonical: f.canonical, profile, actionResults })
     const metadata = JSON.parse(fs.readFileSync(path.join(f.dataDir, packaged.petJsonRelativePath)))
     assert.equal(metadata.actionGeneration[actionId].quality, 'approved-rig')
     const auditRoot = path.join(path.dirname(path.join(f.dataDir, packaged.petJsonRelativePath)), metadata.actionGeneration[actionId].evidenceRoot)
