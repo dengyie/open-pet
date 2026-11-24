@@ -29,7 +29,7 @@ test('Backend Settings commands keep preview and native cursor selection in Shel
   const cursor = { id: 'cursor-1', fileName: 'cursor.png' }
   let selection = { canceled: true, filePaths: [] }
   const handler = createSettingsCommandHandler({
-    petService: { previewSettings: (settings) => previews.push(settings) },
+    petService: { getSettings: () => ({ scale: 0.8 }), previewSettings: (settings) => previews.push(settings) },
     getPetWindow: () => ({ id: 'pet-window' }),
     cursorAssetService: { importCursor: (filePath) => ({ ...cursor, filePath }) },
     showOpenDialogForEvent: async (_event, options) => { dialogs.push(options); return selection },
@@ -40,6 +40,9 @@ test('Backend Settings commands keep preview and native cursor selection in Shel
   assert.deepEqual(await handler({ operation: 'preview-scale', payload: { scale: 1.25 } }), { scale: 1.25 })
   assert.deepEqual(previews, [{ scale: 1.25 }])
   assert.equal(logs.some((entry) => entry.payload?.scale === 1.25 && entry.channel === IPC.SETTINGS_CHANGED), true)
+  assert.deepEqual(logs.at(-1), { channel: IPC.SETTINGS_CHANGED, payload: { scale: 1.25, scalePreview: true } })
+  assert.deepEqual(await handler({ operation: 'preview-scale', payload: { scale: 0.8 } }), { scale: 0.8 })
+  assert.deepEqual(logs.at(-1), { channel: IPC.SETTINGS_CHANGED, payload: { scale: 0.8, scalePreview: false } })
   await assert.rejects(handler({ operation: 'preview-scale', payload: { scale: 5 } }), { code: 'VALIDATION_FAILED' })
   assert.deepEqual(await handler({ operation: 'import-cursor', payload: {} }), { canceled: true })
   assert.deepEqual(dialogs[0].filters, [{ name: 'Cursor Images', extensions: ['png', 'webp'] }])
@@ -972,7 +975,7 @@ test('settings:preview-scale lets the renderer drive viewport resizing', () => {
 
   assert.deepEqual(previews, [{ scale: 1.25 }])
   assert.deepEqual(scaleCalls, [])
-  assert.deepEqual(sentMessages, [{ channel: IPC.SETTINGS_CHANGED, payload: { scale: 1.25 } }])
+  assert.deepEqual(sentMessages, [{ channel: IPC.SETTINGS_CHANGED, payload: { scale: 1.25, scalePreview: true } }])
 })
 
 test('settings host effect applies saved scale without using retired native IPC', async () => {

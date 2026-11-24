@@ -81,7 +81,7 @@ test('registerSettingsIpc wires settings preview and close flows', () => {
   ipcMain.listeners.get(IPC.SETTINGS_CLOSE)({ sender: { id: 'settings-web-contents' } })
 
   assert.deepEqual(previewCalls, [{ scale: 1.25 }])
-  assert.deepEqual(sentMessages, [{ channel: IPC.SETTINGS_CHANGED, payload: { scale: 1.25 } }])
+  assert.deepEqual(sentMessages, [{ channel: IPC.SETTINGS_CHANGED, payload: { scale: 1.25, scalePreview: true } }])
   assert.equal(settingsWindow.closeCalled, 1)
   assert.equal(petWindow.settingsWindow, null)
 })

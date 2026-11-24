@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { createPetRendererElements } = require('./fixtures/pet-renderer-elements')
 
 const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'apps', 'desktop', 'renderer.js'), 'utf-8')
 
@@ -37,19 +38,13 @@ const createRendererHarness = async () => {
   const callbacks = {}
   const timers = []
   const bubbleChatMessages = []
-  const elements = {
-    pet: createElement('pet'),
-    cat: createElement('cat'),
-    bubble: createElement('bubble'),
-    menu: createElement('menu'),
-    'custom-cursor-overlay': createElement('custom-cursor-overlay')
-  }
+  const elements = createPetRendererElements(createElement)
   const context = {
     console,
     document: {
       documentElement: { style: createStyle() },
       body: { style: createStyle() },
-      getElementById: (id) => elements[id],
+      getElementById: (id) => elements[id] ?? null,
       createElement: () => createElement()
     },
     window: {

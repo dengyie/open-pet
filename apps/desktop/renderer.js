@@ -16,7 +16,6 @@
 const pet = document.getElementById('pet')       // 主容器，承载所有指针事件
 const catEl = document.getElementById('cat')     // 小猫元素，精灵图渲染目标
 const bubble = document.getElementById('bubble') // 头顶气泡
-const menu = document.getElementById('menu')     // 右键菜单容器
 const cursorOverlay = document.getElementById('custom-cursor-overlay') || {
   style: {},
   classList: { add() {}, remove() {}, contains() { return false } },
@@ -41,7 +40,6 @@ const petHitbox = window.OpenPetHitbox || {
     right: Math.max(0, Number(windowWidth) || 0),
     bottom: Math.max(0, Number(windowHeight) || 0)
   }),
-  getViewportHitbox: () => null,
   isPointInHitbox: (point, hitbox) => {
     if (!hitbox) return true
     return point.x >= hitbox.left && point.x <= hitbox.right && point.y >= hitbox.top && point.y <= hitbox.bottom
@@ -56,9 +54,14 @@ const state = {
   animations: {},        // 动作查找表 { id → { sprite, frameCount, frameMs, … } }
   frameIndex: 0,         // 当前帧序号
   frameTimer: 0,         // setInterval id，用于播放帧
+  scale: PET_BASE_SCALE,
+  committedScale: PET_BASE_SCALE,
+  scalePreview: false,
 
   // ── 散步 ──
   walking: false,        // 是否正在移动
+  walkGeneration: 0,
+  walkReady: false,
   walkDirection: -1,     // 水平方向：-1 左 / 1 右
   walkMoving: false,     // 并发锁，防止 IPC moveBy 请求堆积
   walkTimer: 0,          // setInterval id，每 40ms 触发 tickWalk
@@ -67,7 +70,7 @@ const state = {
   walkDurationTimer: 0,  // setTimeout id，到期后自动结束散步
 
   // ── 拖拽 ──
-  drag: null,            // { pointerId, offsetX, offsetY, moved } | null
+  drag: null,
   mousePassthrough: false,
   currentLayout: null,
   customCursor: { enabled: false, assetPath: '', assetUrl: '', fileName: '', width: 0, height: 0, hotspotX: 0, hotspotY: 0 },
@@ -85,7 +88,6 @@ const state = {
   bubbleDuration: 6000,  // 气泡显示时长 ms（由设置同步）
   clickActionTimer: 0    // 延迟执行单击动作，双击时可取消
 }
-state.scale = PET_BASE_SCALE
 
 const roundNumber = (value) => Math.round((Number(value) || 0) * 100) / 100
 const normalizePetScale = (scale) => Math.max((Number(scale) || 1) * PET_BASE_SCALE, Number.EPSILON)
@@ -123,7 +125,7 @@ const maybeLogMouseDiagnostic = (event, diagnostic) => {
     previous.cursorApplied !== diagnostic.cursorApplied ||
     previous.cursorOverlayVisible !== diagnostic.cursorOverlayVisible ||
     previous.dragging !== diagnostic.dragging ||
-    previous.menuOpen !== diagnostic.menuOpen
+    previous.windowFocused !== diagnostic.windowFocused
   if (!changed && now - state.lastMouseDiagnosticAt < 1000) return
   state.lastMouseDiagnosticAt = now
   state.lastMouseDiagnostic = diagnostic
@@ -268,8 +270,8 @@ const applySpriteGeometry = (animation, dims) => {
   const scaledHeight = Math.max(1, Math.round(dims.height * state.scale))
   catEl.style.width = scaledWidth + 'px'
   catEl.style.height = scaledHeight + 'px'
-  frameStepX = Math.round(animation.frameWidth * dims.fitScale * state.scale)
-  frameStepY = Math.round(animation.frameHeight * dims.fitScale * state.scale)
+  frameStepX = Math.max(1, Math.round(animation.frameWidth * dims.fitScale * state.scale))
+  frameStepY = Math.max(1, Math.round(animation.frameHeight * dims.fitScale * state.scale))
   const atlasColumns = animation.atlas?.columns || animation.frameCount
   const atlasRows = animation.atlas?.rows || 1
   catEl.style.backgroundSize = `${Math.round(atlasColumns * frameStepX)}px ${Math.round(atlasRows * frameStepY)}px`
@@ -286,6 +288,7 @@ const tickFrame = () => {
     if (a?.loop) { state.frameIndex = 0 } else { setAction(state.defaultAction); return }
   }
   renderCurrentFrame()
+  refreshMouseStateFromLastPoint()
   scheduleFrameTick()
 }
 
@@ -299,20 +302,25 @@ const renderCurrentFrame = () => {
   catEl.style.backgroundPositionY = -(frameRow * frameStepY) + 'px'
 }
 
+const applyCurrentActionScale = () => {
+  const currentAction = state.animations[state.action]
+  if (!currentAction) return
+  const dims = getDisplayDimensions(currentAction)
+  applyActionLayout(currentAction, dims)
+  applySpriteGeometry(currentAction, dims)
+  renderCurrentFrame()
+  refreshMouseStateFromLastPoint()
+}
+
 const freezeActionForScalePreview = () => {
   if (state.action !== state.defaultAction) {
     stopWalk()
     setAction(state.defaultAction, { scheduleFrame: false })
     return
   }
-  const currentAction = state.animations[state.action]
-  if (!currentAction) return
   state.frameIndex = 0
   window.clearTimeout(state.frameTimer)
-  const dims = getDisplayDimensions(currentAction)
-  applyActionLayout(currentAction, dims)
-  applySpriteGeometry(currentAction, dims)
-  renderCurrentFrame()
+  applyCurrentActionScale()
 }
 
 const scheduleFrameTick = () => {
@@ -342,7 +350,8 @@ const isPointInsideCurrentFrame = (clientX, clientY) => {
     layout,
     frameIndex: state.frameIndex,
     windowHeight: window.innerHeight,
-    scale: state.scale
+    scale: state.scale,
+    mirrored: state.walkDirection > 0
   })
   return petHitbox.isPointInHitbox({ x: clientX, y: clientY }, hitbox)
 }
@@ -430,8 +439,7 @@ const applyPetCursorStyle = (insideFrame, point = state.lastPointerPoint, inside
     insideFrame,
     insideCursorRegion,
     windowFocused: isPetWindowFocused(),
-    dragging: Boolean(state.drag),
-    menuOpen: false
+    dragging: Boolean(state.drag)
   }
   const overlayState = cursorStyle.resolvePetCursorOverlayState(state.customCursor, context)
 
@@ -463,27 +471,11 @@ const refreshMouseStateFromLastPoint = () => {
     applyPetCursorStyle(false)
     return
   }
-  const { clientX, clientY } = state.lastPointerPoint
-  const insideFrame = isPointInsideCurrentFrame(clientX, clientY)
-  const insideCursorRegion = isPointInsideCursorRegion(clientX, clientY)
-  const cursorState = applyPetCursorStyle(insideFrame, { clientX, clientY }, insideCursorRegion)
-  setMousePassthrough(!insideFrame)
-  maybeLogMouseDiagnostic({ clientX, clientY, screenX: clientX, screenY: clientY }, {
-    insideFrame,
-    insideCursorRegion,
-    passthrough: !insideFrame,
-    cursorApplied: Boolean(cursorState.visible || state.nativeCursor),
-    cursorOverlayVisible: cursorState.visible,
-    nativeCursor: state.nativeCursor,
-    windowFocused: isPetWindowFocused(),
-    customCursorEnabled: Boolean(state.customCursor.enabled),
-    dragging: Boolean(state.drag),
-    menuOpen: false
-  })
+  updateMousePassthroughFromPoint(state.lastPointerPoint)
 }
 
 const updateMousePassthroughFromPoint = (event) => {
-  state.lastPointerPoint = { clientX: event.clientX, clientY: event.clientY }
+  state.lastPointerPoint = { clientX: event.clientX, clientY: event.clientY, screenX: event.screenX, screenY: event.screenY }
   const insideFrame = isPointInsideCurrentFrame(event.clientX, event.clientY)
   const insideCursorRegion = isPointInsideCursorRegion(event.clientX, event.clientY)
   const isInsideWindow = isPointInsidePetWindow(event.clientX, event.clientY)
@@ -501,8 +493,7 @@ const updateMousePassthroughFromPoint = (event) => {
     nativeCursor: state.nativeCursor,
     windowFocused: isPetWindowFocused(),
     customCursorEnabled: Boolean(state.customCursor.enabled),
-    dragging: Boolean(state.drag),
-    menuOpen: false
+    dragging: Boolean(state.drag)
   })
 }
 
@@ -526,8 +517,7 @@ const clearPointerHoverState = (event = {}) => {
     nativeCursor: '',
     windowFocused: isPetWindowFocused(),
     customCursorEnabled: Boolean(state.customCursor.enabled),
-    dragging: Boolean(state.drag),
-    menuOpen: menu.classList.contains('open')
+    dragging: Boolean(state.drag)
   })
 }
 
@@ -589,8 +579,11 @@ const setAction = (action, options = {}) => {
 
 /** 设置散步方向并翻转猫咪图片（CSS 变量 --cat-direction）。 */
 const setWalkDirection = (d) => {
-  state.walkDirection = d < 0 ? -1 : 1
+  const nextDirection = d < 0 ? -1 : 1
+  if (state.walkDirection === nextDirection) return
+  state.walkDirection = nextDirection
   catEl.style.setProperty('--cat-direction', state.walkDirection < 0 ? '1' : '-1')
+  refreshMouseStateFromLastPoint()
 }
 
 /** 掉头：方向取反。 */
@@ -601,8 +594,12 @@ const turnWalk = () => setWalkDirection(state.walkDirection * -1)
  * 多处调用：点击动作、菜单切换动作、自动停止到期。
  */
 const stopWalk = () => {
+  const wasWalking = state.walking
   state.walking = false
+  state.walkReady = false
+  state.walkGeneration += 1
   window.clearTimeout(state.walkDurationTimer)
+  if (wasWalking) refreshMouseStateFromLastPoint()
 }
 
 /**
@@ -612,39 +609,48 @@ const stopWalk = () => {
  * — 约 1.2% 概率随机掉头增加自然感。
  */
 const tickWalk = async () => {
-  if (!state.walking || state.drag || state.walkMoving) return
+  if (!state.walkReady || state.drag || state.walkMoving) return
+  const generation = state.walkGeneration
   state.walkMoving = true
   try {
     const r = await window.petAPI.moveBy({ x: state.walkDirection * state.walkSpeed, y: 0 })
-    if (r?.hitX) turnWalk()
-  } catch (_) { state.walking = false } finally { state.walkMoving = false }
-  if (Math.random() < 0.012) turnWalk()
+    if (generation !== state.walkGeneration) return
+    if (r?.hitX || Math.random() < 0.012) turnWalk()
+  } catch (_) {
+    if (generation === state.walkGeneration) stopWalk()
+  } finally {
+    state.walkMoving = false
+  }
 }
 
 /**
- * 切换散步模式（双击 / 右键菜单触发）。
+ * 切换散步模式（右键菜单触发）。
  * — 启动时查询贴边状态选择安全方向。
  * — 设置自动停止定时器（默认 15 秒）。
  */
 const toggleWalk = async () => {
-  const wasWalking = state.walking
-  state.walking = !state.walking
-  window.clearTimeout(state.walkDurationTimer)
-
   if (state.walking) {
+    stopWalk()
+  } else {
+    state.walking = true
+    const generation = ++state.walkGeneration
+    let ms
     try {
-      const ms = await window.petAPI.getMovementState()
-      if (ms?.atRight) setWalkDirection(-1)
-      else if (ms?.atLeft) setWalkDirection(1)
-      else setWalkDirection(Math.random() > 0.5 ? 1 : -1)
-    } catch (_) { setWalkDirection(Math.random() > 0.5 ? 1 : -1) }
+      ms = await window.petAPI.getMovementState()
+    } catch (_) {}
+    if (generation !== state.walkGeneration) return
+    if (ms?.atRight) setWalkDirection(-1)
+    else if (ms?.atLeft) setWalkDirection(1)
+    else setWalkDirection(Math.random() > 0.5 ? 1 : -1)
 
+    state.walkReady = true
     state.walkDurationTimer = window.setTimeout(() => {
+      if (generation !== state.walkGeneration) return
       stopWalk(); setAction(state.defaultAction); say('散步结束')
     }, state.walkDuration)
   }
 
-  if (state.walking !== wasWalking) setAction(state.defaultAction)
+  setAction(state.defaultAction)
   say(state.walking ? '出发' : '休息一下')
   logPetEvent('pet.walk.toggled', {
     walking: state.walking,
@@ -663,10 +669,33 @@ const toggleWalk = async () => {
  * 忽略右键（button !== 0）。
  */
 const onPointerDown = async (event) => {
-  if (event.button !== 0) return
-  const bounds = await window.petAPI.getBounds()
+  if (event.button !== 0 || state.drag) return
   const insideFrame = isPointInsideCurrentFrame(event.clientX, event.clientY)
   const insideCursorRegion = isPointInsideCursorRegion(event.clientX, event.clientY)
+  try {
+    pet.setPointerCapture(event.pointerId)
+  } catch (_) {
+    return
+  }
+  const drag = { pointerId: event.pointerId, offset: null, lastMove: null }
+  state.drag = drag
+  pet.classList.add('dragging')
+  updateMousePassthroughFromPoint(event)
+
+  let bounds
+  try {
+    bounds = await window.petAPI.getBounds()
+  } catch (_) {
+    if (state.drag === drag) cancelDrag(event)
+    return
+  }
+  if (state.drag !== drag) return
+  if (!bounds) {
+    cancelDrag(event)
+    return
+  }
+  drag.offset = { x: event.screenX - bounds.x, y: event.screenY - bounds.y }
+  if (drag.lastMove) moveDragTo(drag)
   logPetEvent('pet.pointer.down', {
     ...createPointDetails(event),
     button: event.button,
@@ -679,34 +708,41 @@ const onPointerDown = async (event) => {
     boundsWidth: bounds.width,
     boundsHeight: bounds.height
   }, { actor: 'user', message: 'Pointer down' })
-  state.drag = {
-    pointerId: event.pointerId,
-    offsetX: event.screenX - bounds.x,
-    offsetY: event.screenY - bounds.y,
-    moved: false
-  }
-  pet.setPointerCapture(event.pointerId)
-  pet.classList.add('dragging')
-  applyPetCursorStyle(true, { clientX: event.clientX, clientY: event.clientY }, true)
-  setMousePassthrough(false)
 }
 
-/** pointermove：持续更新窗口位置。moved 标志用于区分拖拽与点击。 */
+const moveDragTo = ({ offset, lastMove }) => {
+  window.petAPI.setPosition({ x: lastMove.screenX - offset.x, y: lastMove.screenY - offset.y })
+}
+
 const onPointerMove = (event) => {
-  if (!state.drag || event.pointerId !== state.drag.pointerId) return
-  state.drag.moved = true
-  window.petAPI.setPosition({ x: event.screenX - state.drag.offsetX, y: event.screenY - state.drag.offsetY })
+  const drag = state.drag
+  if (!drag || event.pointerId !== drag.pointerId) return
+  drag.lastMove = { screenX: event.screenX, screenY: event.screenY }
+  if (drag.offset) moveDragTo(drag)
+}
+
+const clearDrag = () => {
+  const drag = state.drag
+  if (!drag) return
+  state.drag = null
+  pet.classList.remove('dragging')
+  if (pet.hasPointerCapture?.(drag.pointerId)) pet.releasePointerCapture(drag.pointerId)
+}
+
+const cancelDrag = (event) => {
+  if (event.pointerId !== state.drag?.pointerId) return
+  clearDrag()
+  refreshMouseStateFromLastPoint()
 }
 
 /** pointerup：未移动 → 视为点击 → 触发 clickAction。 */
 const onPointerUp = (event) => {
   if (!state.drag || event.pointerId !== state.drag.pointerId) return
-  const wasClick = !state.drag.moved
-  const wasDrag = state.drag.moved
+  const wasClick = !state.drag.lastMove
+  const wasDrag = Boolean(state.drag.lastMove && state.drag.offset)
   const insideFrame = isPointInsideCurrentFrame(event.clientX, event.clientY)
   const insideCursorRegion = isPointInsideCursorRegion(event.clientX, event.clientY)
-  state.drag = null
-  pet.classList.remove('dragging')
+  clearDrag()
   if (wasDrag) window.petAPI.dragEnded?.()
   updateMousePassthroughFromPoint(event)
   logPetEvent('pet.pointer.up', {
@@ -728,130 +764,6 @@ const onPointerUp = (event) => {
 // ═══════════════════════════════════════════
 // 6. 右键菜单 — 主进程原生菜单 + 命令分发
 // ═══════════════════════════════════════════
-
-/**
- * 根据动作列表构建菜单 DOM：
- *   动作按钮 … | 分隔线 | 散步 设置 | 分隔线 | 退出
- */
-const renderMenu = (actions) => {
-  menu.textContent = ''
-  actions.forEach((a) => {
-    const b = document.createElement('button')
-    b.type = 'button'; b.dataset.action = a.id; b.textContent = a.label
-    menu.appendChild(b)
-  })
-  const mkDiv = () => { const d = document.createElement('div'); d.className = 'divider'; menu.appendChild(d) }
-  const mkBtn = (label, action) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.action = action; b.textContent = label; menu.appendChild(b) }
-  mkDiv(); mkBtn('散步', 'walk'); mkBtn('设置', 'settings'); mkDiv(); mkBtn('退出', 'quit')
-}
-
-const MENU_EDGE_MARGIN = 12
-const MENU_PET_GAP = 12
-
-const rectsOverlap = (a, b) => (
-  a.left < b.right &&
-  a.right > b.left &&
-  a.top < b.bottom &&
-  a.bottom > b.top
-)
-
-const getCatRectForWindow = (layout, windowSize) => {
-  if (!layout?.dims) return null
-  const width = Math.max(1, Math.round(layout.dims.width * state.scale))
-  const height = Math.max(1, Math.round(layout.dims.height * state.scale))
-  const left = layout.catLeft
-  const bottom = layout.catBottom
-  return {
-    left,
-    top: windowSize.height - bottom - height,
-    right: left + width,
-    bottom: windowSize.height - bottom,
-    width,
-    height
-  }
-}
-
-const clampMenuPosition = (candidate, menuSize, windowSize) => ({
-  left: Math.min(Math.max(MENU_EDGE_MARGIN, Math.round(candidate.left)), Math.max(MENU_EDGE_MARGIN, windowSize.width - menuSize.width - MENU_EDGE_MARGIN)),
-  top: Math.min(Math.max(MENU_EDGE_MARGIN, Math.round(candidate.top)), Math.max(MENU_EDGE_MARGIN, windowSize.height - menuSize.height - MENU_EDGE_MARGIN))
-})
-
-const chooseMenuPosition = (menuSize, windowSize) => {
-  const catRect = getCatRectForWindow(state.currentLayout, windowSize)
-  if (!catRect) return { left: windowSize.width - menuSize.width - MENU_EDGE_MARGIN, top: windowSize.height - menuSize.height - MENU_EDGE_MARGIN }
-  const verticalCenterTop = catRect.top + (catRect.height - menuSize.height) / 2
-  const horizontalCenterLeft = catRect.left + (catRect.width - menuSize.width) / 2
-  const candidates = [
-    { left: catRect.right + MENU_PET_GAP, top: verticalCenterTop },
-    { left: catRect.left - menuSize.width - MENU_PET_GAP, top: verticalCenterTop },
-    { left: horizontalCenterLeft, top: catRect.top - menuSize.height - MENU_PET_GAP },
-    { left: horizontalCenterLeft, top: catRect.bottom + MENU_PET_GAP },
-    { left: windowSize.width - menuSize.width - MENU_EDGE_MARGIN, top: MENU_EDGE_MARGIN },
-    { left: MENU_EDGE_MARGIN, top: MENU_EDGE_MARGIN }
-  ]
-  for (const candidate of candidates) {
-    const position = clampMenuPosition(candidate, menuSize, windowSize)
-    const menuRect = {
-      left: position.left,
-      top: position.top,
-      right: position.left + menuSize.width,
-      bottom: position.top + menuSize.height
-    }
-    if (!rectsOverlap(menuRect, catRect)) return position
-  }
-  return clampMenuPosition(candidates[0], menuSize, windowSize)
-}
-
-const getMenuViewport = () => {
-  if (!state.currentLayout?.viewport) return null
-  const menuRect = menu.getBoundingClientRect()
-  const menuSize = {
-    width: Math.ceil(menuRect.width),
-    height: Math.ceil(menuRect.height)
-  }
-  const currentSize = getScaledViewportSize(state.currentLayout.viewport)
-  const catSize = {
-    width: Math.max(1, Math.round(state.currentLayout.dims.width * state.scale)),
-    height: Math.max(1, Math.round(state.currentLayout.dims.height * state.scale))
-  }
-  const targetWidth = Math.max(currentSize.width, Math.ceil(catSize.width + (menuSize.width + MENU_PET_GAP + MENU_EDGE_MARGIN) * 2))
-  const targetHeight = Math.max(currentSize.height, Math.ceil(menuSize.height + MENU_EDGE_MARGIN * 2))
-  const scale = Math.max(state.scale, Number.EPSILON)
-  return {
-    width: Math.ceil(targetWidth / scale),
-    height: Math.ceil(targetHeight / scale),
-    padding: 0,
-    scale
-  }
-}
-
-const applyMenuViewport = () => {
-  const viewport = getMenuViewport()
-  if (!viewport) return null
-  const windowSize = getScaledViewportSize(viewport)
-  applyCatPositionForWindowWidth(state.currentLayout, windowSize.width)
-  const menuRect = menu.getBoundingClientRect()
-  const menuPosition = chooseMenuPosition({
-    width: Math.ceil(menuRect.width),
-    height: Math.ceil(menuRect.height)
-  }, windowSize)
-  menu.style.left = menuPosition.left + 'px'
-  menu.style.top = menuPosition.top + 'px'
-  menu.style.right = 'auto'
-  menu.style.bottom = 'auto'
-  window.petAPI.setViewport?.(viewport)
-  return { viewport, windowSize }
-}
-
-const restoreActionViewport = () => {
-  if (!state.currentLayout?.viewport) return
-  menu.style.left = ''
-  menu.style.top = ''
-  menu.style.right = ''
-  menu.style.bottom = ''
-  applyCatPositionForWindowWidth(state.currentLayout, getScaledViewportSize(state.currentLayout.viewport).width)
-  window.petAPI.setViewport?.(state.currentLayout.viewport)
-}
 
 const applyAnimationsConfig = ({ actions, defaultAction, clickAction }) => {
   state.defaultAction = defaultAction
@@ -883,14 +795,30 @@ const runMenuCommand = (payload) => {
 // ═══════════════════════════════════════════
 
 // 监听主进程推送的设置变更，同步到渲染状态
-window.petAPI.onSettingsChanged((s) => {
-  if (s.scale != null) {
-    const nextScale = normalizePetScale(s.scale)
-    if (nextScale !== state.scale) {
+const applyScaleSettings = ({ scale, scalePreview }) => {
+  if (scale == null) return
+  const nextScale = normalizePetScale(scale)
+  if (scalePreview === true) {
+    if (state.scale !== nextScale) {
       state.scale = nextScale
+      state.scalePreview = true
       freezeActionForScalePreview()
     }
+    return
   }
+  if (scalePreview !== false && state.scalePreview && nextScale === state.committedScale) return
+  state.committedScale = nextScale
+  const wasPreview = state.scalePreview
+  state.scalePreview = false
+  if (nextScale !== state.scale) {
+    state.scale = nextScale
+    applyCurrentActionScale()
+  }
+  if (wasPreview && state.animations[state.action]) scheduleFrameTick()
+}
+
+window.petAPI.onSettingsChanged((s) => {
+  applyScaleSettings(s)
   if (s.walkSpeed != null) state.walkSpeed = s.walkSpeed
   if (s.walkDuration != null) state.walkDuration = s.walkDuration
   if (s.bubbleDuration != null) state.bubbleDuration = s.bubbleDuration
@@ -949,6 +877,8 @@ pet.addEventListener('pointerdown', onPointerDown)
 pet.addEventListener('pointermove', updateMousePassthroughFromPoint)
 pet.addEventListener('pointermove', onPointerMove)
 pet.addEventListener('pointerup', onPointerUp)
+pet.addEventListener('pointercancel', cancelDrag)
+pet.addEventListener('lostpointercapture', cancelDrag)
 pet.addEventListener('pointerleave', clearPointerHoverState)
 pet.addEventListener('dblclick', onPetDoubleClick)
 pet.addEventListener('contextmenu', showContextMenu)
@@ -959,8 +889,10 @@ window.addEventListener('focus', () => {
 })
 window.addEventListener('blur', () => {
   state.windowFocused = false
+  clearDrag()
   clearPointerHoverState()
 })  // 窗口失焦时清理 hover 态
+window.addEventListener('resize', refreshMouseStateFromLastPoint)
 
 /**
  * 启动流程：

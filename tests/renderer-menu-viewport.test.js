@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { createPetRendererElements } = require('./fixtures/pet-renderer-elements')
 
 const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'apps', 'desktop', 'renderer.js'), 'utf-8')
 
@@ -20,7 +21,7 @@ const createClassList = () => ({
   contains(value) { return this.values.has(value) }
 })
 
-const createElement = (id = '', rect = { width: 0, height: 0 }) => ({
+const createElement = (id = '') => ({
   id,
   style: createStyle(),
   dataset: {},
@@ -34,44 +35,45 @@ const createElement = (id = '', rect = { width: 0, height: 0 }) => ({
     this.listeners[eventName].push(callback)
   },
   listeners: {},
-  getBoundingClientRect: () => rect,
-  setPointerCapture() {},
-  closest(selector) { return selector === '#menu' && id === 'menu' ? this : null }
+  setPointerCapture() {}
 })
 
 const dispatch = async (element, eventName, event = {}) => {
   for (const listener of element.listeners[eventName] || []) await listener(event)
 }
 
-const createRendererHarness = async ({ insideFrame = true } = {}) => {
+const createRendererHarness = async ({
+  insideFrame = true,
+  idleFrames,
+  getBounds = async () => ({ x: 0, y: 0, width: 58, height: 58 }),
+  getMovementState = async () => ({}),
+  moveBy = async () => ({})
+} = {}) => {
   const viewportCalls = []
   const contextMenuRequests = []
   const mousePassthroughCalls = []
   const openBubbleChatRequests = []
   const bubbleChatMessages = []
   const timers = []
+  const intervals = []
   const callbacks = {}
   const logs = []
-  const elements = {
-    pet: createElement('pet'),
-    cat: createElement('cat'),
-    bubble: createElement('bubble'),
-    menu: createElement('menu', { width: 180, height: 260 }),
-    'custom-cursor-overlay': createElement('custom-cursor-overlay')
-  }
+  const positions = []
+  const dragEnds = []
+  const elements = createPetRendererElements(createElement)
   const context = {
     console,
     document: {
       documentElement: { style: createStyle() },
       body: { style: createStyle() },
-      getElementById: (id) => elements[id],
+      getElementById: (id) => elements[id] ?? null,
       createElement: () => createElement()
     },
     window: {
       innerWidth: 58,
-      innerHeight: 58,
+      innerHeight: 122,
       OpenPetCursorStyle: { resolvePetCursorStyle: () => '', resolvePetCursorOverlayState: () => ({ visible: false, assetUrl: '', nativeCursor: '' }) },
-      OpenPetHitbox: {
+      OpenPetHitbox: idleFrames ? require('../packages/shared/src/pet-hitbox.cjs') : {
         getFrameHitbox: () => ({ left: 0, top: 0, right: 58, bottom: 58 }),
         getWindowHitbox: () => ({ left: 0, top: 0, right: 58, bottom: 58 }),
         getViewportHitbox: () => ({ left: 0, top: 0, right: 58, bottom: 58 }),
@@ -81,7 +83,7 @@ const createRendererHarness = async ({ insideFrame = true } = {}) => {
         if (timer) timer.cleared = true
       },
       addEventListener(eventName, callback) { callbacks[eventName] = callback },
-      setInterval: () => 0,
+      setInterval: (callback) => { intervals.push(callback); return intervals.length },
       setTimeout: (callback, delay) => {
         const timer = { callback, delay, cleared: false }
         timers.push(timer)
@@ -92,7 +94,7 @@ const createRendererHarness = async ({ insideFrame = true } = {}) => {
           defaultAction: 'idle',
           clickAction: 'feed',
           actions: [
-            { id: 'idle', label: 'Idle', loop: true, sprite: 'idle.png', frameWidth: 100, frameHeight: 100, frameCount: 4, frameMs: 100 },
+            { id: 'idle', label: 'Idle', loop: true, sprite: 'idle.png', frameWidth: 100, frameHeight: 100, frameCount: idleFrames?.length ?? 4, frameMs: 100, frames: idleFrames },
             { id: 'feed', label: 'Feed', loop: false, sprite: 'feed.png', frameWidth: 100, frameHeight: 100, frameCount: 4, frameMs: 100 }
           ]
         }),
@@ -101,14 +103,15 @@ const createRendererHarness = async ({ insideFrame = true } = {}) => {
         recordAppLog: (entry) => logs.push(entry),
         onSettingsChanged: () => {},
         onPetSay: () => {},
-        onPetAction: () => {},
+        onPetAction: (callback) => { callbacks.action = callback },
         onPetMenuCommand: (callback) => { callbacks.menuCommand = callback },
         onAnimationsChanged: () => {},
         showContextMenu: (point) => contextMenuRequests.push(point),
-        getBounds: async () => ({ x: 0, y: 0, width: 58, height: 58 }),
-        getMovementState: async () => ({}),
-        moveBy: async () => ({}),
-        setPosition: () => {},
+        getBounds,
+        getMovementState,
+        moveBy,
+        setPosition: ({ x, y }) => positions.push({ x, y }),
+        dragEnded: () => dragEnds.push(true),
         quit: () => {},
         openSettings: () => {},
         openBubbleChat: () => {
@@ -127,7 +130,7 @@ const createRendererHarness = async ({ insideFrame = true } = {}) => {
   vm.runInNewContext(rendererSource, context, { filename: 'renderer.js' })
   await Promise.resolve()
   await Promise.resolve()
-  return { bubbleChatMessages, callbacks, contextMenuRequests, elements, logs, mousePassthroughCalls, openBubbleChatRequests, timers, viewportCalls }
+  return { bubbleChatMessages, callbacks, contextMenuRequests, dragEnds, elements, intervals, logs, mousePassthroughCalls, openBubbleChatRequests, positions, timers, viewportCalls }
 }
 
 test('right-click delegates menu placement to the main-process menu', async () => {
@@ -294,4 +297,115 @@ test('single-click still runs the click action after the double-click window exp
   await new Promise((resolve) => setImmediate(resolve))
 
   assert.equal(bubbleChatMessages.some((payload) => payload.text === 'Feed'), true)
+})
+
+const pointer = { button: 0, pointerId: 1, clientX: 24, clientY: 30, screenX: 240, screenY: 320 }
+
+test('pointer release before bounds arrive clicks once and never resurrects the drag', async () => {
+  const bounds = Promise.withResolvers()
+  const { elements, positions, dragEnds, timers } = await createRendererHarness({ getBounds: () => bounds.promise })
+  const down = dispatch(elements.pet, 'pointerdown', pointer)
+  assert.equal(elements.pet.classList.contains('dragging'), true)
+  await dispatch(elements.pet, 'pointerup', pointer)
+  bounds.resolve({ x: 100, y: 200, width: 58, height: 122 })
+  await down
+  await dispatch(elements.pet, 'pointermove', { ...pointer, screenX: 300 })
+
+  assert.equal(elements.pet.classList.contains('dragging'), false)
+  assert.deepEqual(positions, [])
+  assert.deepEqual(dragEnds, [])
+  assert.equal(timers.filter((timer) => timer.delay === 220 && !timer.cleared).length, 1)
+})
+
+test('pointer cancellation and lost capture clean up without ending a drag or clicking', async () => {
+  for (const event of ['pointercancel', 'lostpointercapture']) {
+    const { elements, positions, dragEnds, timers } = await createRendererHarness()
+    await dispatch(elements.pet, 'pointerdown', pointer)
+    await dispatch(elements.pet, 'pointermove', { ...pointer, screenX: 250 })
+    await dispatch(elements.pet, event, pointer)
+    await dispatch(elements.pet, 'pointermove', { ...pointer, screenX: 280 })
+    await dispatch(elements.pet, 'pointerup', pointer)
+
+    assert.equal(elements.pet.classList.contains('dragging'), false)
+    assert.deepEqual(positions, [{ x: 10, y: 0 }])
+    assert.deepEqual(dragEnds, [])
+    assert.equal(timers.some((timer) => timer.delay === 220), false)
+  }
+})
+
+test('a drag uses the latest pointer position when its bounds reply arrives', async () => {
+  const bounds = Promise.withResolvers()
+  const { elements, positions, dragEnds } = await createRendererHarness({ getBounds: () => bounds.promise })
+  const down = dispatch(elements.pet, 'pointerdown', pointer)
+  await dispatch(elements.pet, 'pointermove', { ...pointer, screenX: 250 })
+  await dispatch(elements.pet, 'pointermove', { ...pointer, screenX: 260 })
+  assert.deepEqual(positions, [])
+  bounds.resolve({ x: 100, y: 200, width: 58, height: 122 })
+  await down
+  await dispatch(elements.pet, 'pointerup', pointer)
+
+  assert.deepEqual(positions, [{ x: 120, y: 200 }])
+  assert.deepEqual(dragEnds, [true])
+})
+
+test('an action aborts a walk whose movement-state reply has not arrived', async () => {
+  const movement = Promise.withResolvers()
+  const { callbacks, timers, bubbleChatMessages, elements } = await createRendererHarness({ getMovementState: () => movement.promise })
+  callbacks.menuCommand({ command: 'walk' })
+  callbacks.action({ actionId: 'feed' })
+  movement.resolve({ atLeft: true })
+  await new Promise(setImmediate)
+
+  assert.equal(timers.some((timer) => timer.delay === 15000), false)
+  assert.deepEqual(bubbleChatMessages, [])
+  assert.equal(elements.cat.style.backgroundImage, 'url(feed.png)')
+})
+
+test('old move replies and duration callbacks do not affect a restarted walk', async () => {
+  const staleMove = Promise.withResolvers()
+  const { callbacks, intervals, timers, bubbleChatMessages, elements } = await createRendererHarness({
+    getMovementState: async () => ({ atLeft: true }),
+    moveBy: () => staleMove.promise
+  })
+  callbacks.menuCommand({ command: 'walk' })
+  await new Promise(setImmediate)
+  const staleEnd = timers.find((timer) => timer.delay === 15000)
+  assert.ok(staleEnd)
+  const move = intervals[0]()
+  callbacks.menuCommand({ command: 'walk' })
+  callbacks.menuCommand({ command: 'walk' })
+  await new Promise(setImmediate)
+  staleMove.resolve({ hitX: true })
+  await move
+  staleEnd.callback()
+
+  assert.equal(elements.cat.style.values['--cat-direction'], '-1')
+  assert.deepEqual(bubbleChatMessages.map(({ text }) => text), ['出发', '休息一下', '出发'])
+  assert.equal(timers.filter((timer) => timer.delay === 15000 && !timer.cleared).length, 1)
+})
+
+test('stationary pointer hit testing follows new frames and the stopped pet faces the mirrored hitbox', async () => {
+  const { callbacks, elements, mousePassthroughCalls, timers } = await createRendererHarness({
+    idleFrames: [{ trim: { x: 10, y: 10, width: 10, height: 80 } }, { trim: { x: 80, y: 10, width: 10, height: 80 } }],
+    getMovementState: async () => ({ atLeft: true })
+  })
+  await dispatch(elements.pet, 'pointermove', { ...pointer, clientX: 46, clientY: 90 })
+  assert.equal(mousePassthroughCalls.at(-1), true)
+  timers.find((timer) => timer.delay === 100).callback()
+  assert.equal(mousePassthroughCalls.at(-1), false)
+
+  callbacks.menuCommand({ command: 'walk' })
+  await new Promise(setImmediate)
+  callbacks.menuCommand({ command: 'walk' })
+  assert.equal(elements.cat.style.values['--cat-direction'], '-1')
+  assert.equal(mousePassthroughCalls.at(-1), false)
+  await dispatch(elements.pet, 'pointermove', { ...pointer, clientX: 11, clientY: 90 })
+  assert.equal(mousePassthroughCalls.at(-1), true)
+})
+
+test('pointer leave and blur are safe with the production pet HTML', async () => {
+  const { callbacks, elements } = await createRendererHarness()
+  assert.equal(elements.menu, undefined)
+  await dispatch(elements.pet, 'pointerleave', pointer)
+  assert.doesNotThrow(() => callbacks.blur())
 })
