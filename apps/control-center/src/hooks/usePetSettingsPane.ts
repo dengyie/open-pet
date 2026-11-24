@@ -115,13 +115,16 @@ export function usePetSettingsPane() {
       snapshotVersion: snapshot.version,
       acceptedVersion: acceptedSettingsVersionRef.current,
     })) return
+    const previousSettings = snapshotRef.current ? originalRef.current : null
     acceptedSettingsVersionRef.current = snapshot.version
     snapshotRef.current = snapshot
     // The browser-only demo has no Shell host-effects channel. Supply the
     // deterministic capability status that the real host normally broadcasts.
     const nextSettings = withDemoRuntimeFields(settingsEnvelopeToViewModel(snapshot, runtimeStatus))
     originalRef.current = cloneSettings(nextSettings)
-    setSettings(cloneSettings(nextSettings))
+    setSettings((current) => cloneSettings(previousSettings
+      ? mergeSavedFields({ current, submitted: previousSettings, saved: nextSettings })
+      : nextSettings))
     setOriginalSettings(cloneSettings(nextSettings))
     setLoading(false)
   }
