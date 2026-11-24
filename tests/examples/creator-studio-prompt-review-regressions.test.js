@@ -117,6 +117,8 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
     '原地跑步，身体朝左',
     '原地跑步，同时身體朝螢幕左側',
     '原地跑，同时身体朝左但头向右看',
+    '原地跑，同时身体朝左：头向右看',
+    '原地跑，同时身体朝左（头向右看）',
     '原地跑，同時身體朝左側不過頭向右看'
   ]) {
     assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-left side profile', motionPrompt)
@@ -125,6 +127,8 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
     'Run right while the body faces right and the head faces left',
     'Run right with the head facing viewer-left',
     '向右跑，同时身体朝左边倾斜',
+    '向右跑，同时身体朝左和右交替倾斜',
+    '向右跑，同时身体朝左/右交替摆动',
     '向右跑，同时身体面向右边而头部面向左边'
   ]) {
     assert.equal(toProviderAction({ motionPrompt }).viewDirection, 'strict viewer-right side profile', motionPrompt)
@@ -132,8 +136,8 @@ test('locomotion keeps explicit facing qualifiers without treating them as wavin
 })
 
 test('paired locomotion directions do not become a single fixed profile', () => {
+  assert.equal(toProviderAction({ motionPrompt: '原地跑步，同时身体朝左/右交替摆动' }).viewDirection, undefined)
   for (const motionPrompt of [
-    '原地跑步，同时身体朝左/右交替摆动',
     '原地跑步，同时身體朝左側或右側',
     '原地跑步，同时朝左/右',
     '跑向屏幕左侧／右侧',

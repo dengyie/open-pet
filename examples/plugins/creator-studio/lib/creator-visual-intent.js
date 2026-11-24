@@ -77,7 +77,7 @@ const HAN_LOCOMOTION = /(?:走路|行走|跑(?:步)?|爬行|飞|飛)/u
 const HAN_HEADING = /(?:向|往|朝)[着著]?/u
 const HAN_BODY = /(?:身体|身體|身子|全身)\s*/u
 const HAN_FACING = `(?:${HAN_BODY.source})?(?:面向|面朝|朝向)[着著]?`
-const HAN_CLAUSE_END = /(?=\s*(?:$|[并並且而和但却卻]|不过|不過|然后|然後))/u
+const HAN_CLAUSE_END = /(?=\s*(?:$|[:(并並且而和但却卻]|不过|不過|然后|然後))/u
 const EN_TOWARD = /(?:to|towards?)\s+/u
 const EN_SIDE_JOIN = /(?:\s*(?:-to-|[/-])\s*|\s+(?:and|or|to)\s+)/u
 const HAN_SIDE_JOIN = /\s*(?:或者|[/和或与與及])?\s*/u
@@ -99,7 +99,7 @@ const LOCOMOTION_SIDES = Object.fromEntries(VIEWER_SIDES.map((direction) => {
   const anatomy = String.raw`\s+(?:(?:front|rear|hind)\s+)?(?:paws?|limbs?|legs?|arms?|eyes?|ears?|now)\b`
   const englishSide = `(?:${enViewerSide(otherSide)}${EN_SIDE_JOIN.source})?${enViewerSide(side)}`
   const hanSideOptions = `(?:${otherHanSide}${HAN_SIDE_JOIN.source})?${ownHanSide}(?:${HAN_SIDE_JOIN.source}${otherHanSide})?`
-  const hanBodySide = `(?:${ownHanSide}${HAN_CLAUSE_END.source}|${ownHanSide}${HAN_SIDE_JOIN.source}${otherHanSide}|${otherHanSide}${HAN_SIDE_JOIN.source}${ownHanSide})`
+  const hanBodySide = `${hanSideOptions}(?!${HAN_SIDE_JOIN.source}${hanEitherSide})${HAN_CLAUSE_END.source}`
   const hanHeading = `${HAN_HEADING.source}${hanSideOptions}`
   const hanModifiers = String.raw`\s*(?:(?:原地|就地|慢慢地?|缓慢地?|緩慢地?|快速地?|迅速地?)\s*)*`
   const hanFacingAnchor = String.raw`(?:^|${HAN_LOCOMOTION.source}\s*)`
