@@ -30,7 +30,17 @@ describe("dialog.request bridge", () => {
 		assert.equal(bridge.BACKEND_TO_SHELL_TYPES.includes("dialog.request"), true)
 		assert.equal(bridge.BACKEND_TO_SHELL_TYPES.includes("catalog.request"), true)
 		assert.equal(bridge.BACKEND_TO_SHELL_TYPES.includes("pet-packs.request"), true)
-		assert.equal(bridge.SHELL_TO_BACKEND_TYPES.length, 19, "settings, secrets, Catalog, Pet Pack, Creator, Actions, AI, bridge errors and pet command host results are part of the bridge contract")
+		assert.equal(bridge.SHELL_TO_BACKEND_TYPES.length, 20, "settings, secrets, Catalog, Pet Pack, Creator, Actions, AI, bridge errors and pet command host results are part of the bridge contract")
+	})
+
+	it("backend whitelist accepts all Shell reply types", () => {
+		for (const type of [
+			"actions.result", "ai.host.result", "ai.talk.result", "catalog.result", "creator.result", "dialog.result",
+			"pet.command.result", "pet-packs.result", "plugin.production.result", "secrets.persist.result",
+			"settings.apply.result", "settings.command.result",
+		]) {
+			assert.ok(bridge.SHELL_TO_BACKEND_TYPES.includes(type), `${type} must be accepted by the backend`)
+		}
 	})
 
 	it("request and dialog.result correlate with the same envelope id", async () => {
