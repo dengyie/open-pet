@@ -407,6 +407,24 @@ test('runner stops after a repeated transient Provider failure instead of spendi
   assert.equal(dispatches, 2)
 })
 
+for (const code of ['auth_failed', 'provider_rate_limited', 'candidate_asset_missing']) {
+  test(`runner stops on ${code} even if the provider marks it retryable`, async () => {
+    let dispatches = 0
+    const result = await runQualityFirstAction({
+      context: { actionId: 'waving' }, reserveCreativeDispatch: () => {},
+      generateCandidate: async () => {
+        dispatches++
+        throw Object.assign(new Error(code), { code, retryable: true })
+      },
+      processCandidate: async () => assert.fail('no generated asset'),
+      evaluateCandidate: async () => assert.fail('no generated asset'),
+      archiveCandidateRevision: async () => assert.fail('not a quality failure')
+    })
+    assert.equal(dispatches, 1)
+    assert.equal(result.failureCode, code)
+  })
+}
+
 test('an evaluator outage retains paid assets without requesting a new candidate', async () => {
   const generated = []
   const persisted = []

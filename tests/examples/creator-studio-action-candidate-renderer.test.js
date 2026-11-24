@@ -34,4 +34,6 @@ test('rig does not mask read/submission failures, runs only for supported repair
   const readabilityRender = createActionCandidateRenderer({ action: { actionId: 'running-right' }, characterClass: 'grounded-compact-character', generateVideo: async () => { calls.push('video') }, generateRig: async () => { calls.push('rig') } })
   await readabilityRender({ attemptKind: 'repair', failureCodes: ['visual-defect-action-unreadable'] })
   assert.equal(calls.at(-1), 'rig')
+  await readabilityRender({ attemptKind: 'repair', failureCodes: ['motion-is-static'] })
+  assert.equal(calls.at(-1), 'rig')
 })

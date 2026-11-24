@@ -52,9 +52,11 @@ const normalizeApiKey = (value) => {
 
 const requestError = (message, response, payload, apiKey) => {
   const status = Number(response?.status) || 0
-  const retryable = status === 408 || status === 429 || status >= 500
+  const retryable = status === 408 || status >= 500
   const code = status === 401 || status === 403
     ? 'video_provider_unauthorized'
+    : status === 429
+      ? 'video_provider_rate_limited'
     : status === 404
       ? 'video_provider_not_found'
       : retryable

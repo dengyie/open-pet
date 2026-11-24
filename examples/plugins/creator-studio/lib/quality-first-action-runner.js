@@ -34,8 +34,8 @@ const isHatchPetBudgetError = error => /^hatch_pet_.*_budget_exhausted$/.test(St
 const executionFailureCode = (error, fallback) => (
   String(error?.code || fallback).replace(/[^A-Za-z0-9:_-]/g, '_').slice(0, 120)
 )
-const isRetryableGenerationError = (error) => error?.retryable === true ||
-  (error?.retryable !== false && error?.code === 'provider_transport_failed')
+const RETRYABLE_TRANSPORT_CODES = new Set(['provider_transport_failed', 'provider_timeout', 'provider_request_error', 'PROVIDER_TIMEOUT'])
+const isRetryableGenerationError = (error) => error?.retryable !== false && RETRYABLE_TRANSPORT_CODES.has(error?.code)
 
 const runQualityFirstAction = async ({
   context = {},
@@ -68,7 +68,7 @@ const runQualityFirstAction = async ({
     const assignedCandidateId = `${candidateIdPrefix}-${dispatchIndex}`
     let generated
     try {
-      await reserveCreativeDispatch({ actionId, attemptKind, candidateId: assignedCandidateId, dispatchIndex })
+      await reserveCreativeDispatch({ actionId, attemptKind, candidateId: assignedCandidateId, dispatchIndex, failureCodes: repairCodes.slice() })
     } catch (error) {
       for (const candidate of allCandidates) await persistCandidate(candidate)
       throw error
@@ -226,7 +226,7 @@ const runQualityFirstAction = async ({
     await persistCandidate(candidate)
   }
   let selected = selectBestPassingCandidate({ candidates: evaluatedCandidates })
-  if (!selected && !stopDispatching && !evaluationFailureCode && (!generationFailureCode || failureCodes.length > 0)) {
+  if (!selected && !stopDispatching && !evaluationFailureCode && failureCodes.length > 0) {
     const repairCodes = unique(failureCodes)
     const archiveRelativePath = String(await archiveCandidateRevision({ actionId, reasonCodes: repairCodes }) || '').replace(/\\/g, '/')
     if (archiveRelativePath) {

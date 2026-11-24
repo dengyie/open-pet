@@ -406,6 +406,36 @@ test('production host can repair image-sheet quality with an audited rig without
   assert.notEqual(regenerated.selectedCandidate.candidateId, result.selectedCandidate.candidateId)
 })
 
+test('video running-right reports a rejected start pose before creating candidates', async (t) => {
+  const f = await fixture()
+  const { createQualityFirstHostRuntime } = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
+  const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
+  const plan = createSpriteAssetPlan({ character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId: 'running-right' }] })
+  const oldUrl = process.env.OPENPET_BRIDGE_URL
+  const oldToken = process.env.OPENPET_BRIDGE_TOKEN
+  process.env.OPENPET_BRIDGE_URL = 'http://127.0.0.1:1'
+  process.env.OPENPET_BRIDGE_TOKEN = 'test-only'
+  t.after(() => {
+    if (oldUrl == null) delete process.env.OPENPET_BRIDGE_URL
+    else process.env.OPENPET_BRIDGE_URL = oldUrl
+    if (oldToken == null) delete process.env.OPENPET_BRIDGE_TOKEN
+    else process.env.OPENPET_BRIDGE_TOKEN = oldToken
+  })
+  const calls = []
+  t.mock.method(global, 'fetch', async (url) => {
+    const route = new URL(url).pathname
+    calls.push(route)
+    if (route === '/creator/model-settings') return Response.json({ config: { model: 'gpt-image-2', videoGeneration: { hasApiKey: true, model: 'grok-imagine-video-1.5' } } })
+    assert.equal(route, '/creator/model-image-generate')
+    return Response.json({ result: { outputs: [] } })
+  })
+  const run = { runId: 'rig-preflight', input: { referenceImage: { relativePath: f.canonical.relativePath } } }
+  const runtime = await createQualityFirstHostRuntime({ dataDir: f.dataDir, run, planOverride: plan })
+  await assert.rejects(() => runtime.runAction({ actionId: 'running-right', canonical: f.canonical, profile: f.profile }), { code: 'video_start_frame_rejected' })
+  assert.deepEqual(calls, ['/creator/model-settings', '/creator/model-image-generate'])
+  assert.equal(fs.existsSync(path.join(f.dataDir, 'runs', run.runId, 'candidates', 'running-right')), false)
+})
+
 for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`production host repairs ${actionId} video drift with an audited rig, packages it and resumes without dispatch`, { skip: spawnSync('ffmpeg', ['-version']).status !== 0 || spawnSync('ffprobe', ['-version']).status !== 0 }, async () => {
   const f = actionId === 'running' ? await workingFixture() : await fixture()
   f.action = actionId === 'review' ? { actionId, anchorPolicy: 'action-relative-root-v1', frameCount: 6, layout: { columns: 3, rows: 2 } } : f.action

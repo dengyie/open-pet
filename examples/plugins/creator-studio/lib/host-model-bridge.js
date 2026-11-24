@@ -9,7 +9,7 @@ const { createProviderImageTask } = require('./provider-image-task')
 const { createVideoCandidateArtifacts, isVideoTechnicalFailure, runVideoAction } = require('./video-action-runner')
 const { isGrokVideoModel } = require('./video-provider-capabilities')
 const { renderCanonicalSupportRig, validateCanonicalRigRow, restoreCanonicalRigCandidate, exportCanonicalRigEvidence } = require('./canonical-support-rig')
-const { createActionCandidateRenderer } = require('./action-candidate-renderer')
+const { createActionCandidateRenderer, shouldUseCanonicalRig } = require('./action-candidate-renderer')
 const { compileProviderImagePrompt } = require('./provider-image-prompt-compiler')
 const { createSpriteAssetPlan } = require('./sprite-asset-plan')
 const { createCharacterAnchorGrid } = require('./character-anchor-grid')
@@ -3203,7 +3203,8 @@ const createVideoStartReferenceResolver = ({ dataDir, run, settings, action, can
     }).then((result) => {
       if (!result.ok || !result.referenceImage || !result.keyframe?.sha256) {
         throw Object.assign(new Error('Running video requires a quality-approved action start frame'), {
-          code: 'video_start_frame_rejected', modelAttempts: result.modelAttempts || []
+          code: result.modelAttempts?.at(-1)?.errorCode || 'video_start_frame_rejected',
+          modelAttempts: result.modelAttempts || []
         })
       }
       return { ...result.referenceImage, sha256: result.keyframe.sha256 }
@@ -3498,6 +3499,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       generateRig
     })
     if (useVideoActionPipeline) {
+      const startFrame = await resolveStartReference()
       const runner = await generateSelectedFullPetAction({
         context: {
           actionId,
@@ -3514,7 +3516,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
             run,
             action,
             canonical,
-            startFrame: await resolveStartReference(),
+            startFrame,
             model: videoModel,
             scaleProfile: actionProfile,
             attemptKind,
@@ -3602,7 +3604,11 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
         duplicateThresholds: { perceptualHashDistance: 4, identityDescriptorDistance: 0.08, alphaMaskDistance: 0.08 }
       },
       existingCandidates: retainedCandidates,
-      reserveCreativeDispatch: async () => {},
+      reserveCreativeDispatch: async (request) => {
+        if (actionId === 'running-right' && shouldUseCanonicalRig({ ...request, characterClass: plan.character.assetClass })) {
+          await resolveStartReference()
+        }
+      },
       generateCandidate: renderCandidate(async ({ candidateId, attemptKind, dispatchIndex, failureCodes }) => {
         const task = createQualityFirstActionCandidateTask({
           action: { ...action, actionId },
