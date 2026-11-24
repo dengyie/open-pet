@@ -222,6 +222,18 @@ test('directional one-shot gait requests a clear stop, not a seamless loop', () 
   assert.match(buildActionSpriteRowPrompt({ action: looping }).prompt, /seamless in-place locomotion cycle/i)
 })
 
+test('16-frame one-shot gait and idle sheets never blend in a loop-closing beat', () => {
+  for (const [name, lastPose] of [
+    ['Running gait', /supported stopping pose/i],
+    ['Idle blink', /settled pose without restarting the motion/i]
+  ]) {
+    const action = { name, frameCount: 16, actionContract: { loop: false, facing: 'reference', camera: 'locked' } }
+    const { prompt } = buildActionSpriteRowPrompt({ action })
+    assert.doesNotMatch(prompt, /seamless|loop.closing|wraparound transition that/i)
+    assert.match(prompt.split('\n').find((line) => /cell 16\b/i.test(line)), lastPose)
+  }
+})
+
 test('idle blink uses the specified facing for its start, peak, and loop return', () => {
   const action = {
     actionId: 'idle', name: 'Idle blink', frameCount: 5,

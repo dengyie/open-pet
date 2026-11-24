@@ -393,6 +393,8 @@ const expandPhases = (phases, count) => {
   })
 }
 
+const isLoopClosingPhase = (phase) => /\b(?:seamless|wraparound|loop[ -](?:clos\w+|compatible)|requested loop or stop)\b/i.test(phase)
+
 const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
   const count = Math.max(1, Number(frameCount) || 1)
   const custom = Array.isArray(action.framePlan) ? action.framePlan.map(stripFramePrefix).filter(Boolean) : []
@@ -406,14 +408,17 @@ const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
         : isWavingAction(action)
           ? ACTION_PHASES.wave
           : ACTION_PHASES[animationType] || ACTION_PHASES.reaction
-  const beats = expandPhases(phases, count)
-  if (count > 1 && resolveActionLoop(action) === false) {
+  let plannedPhases = phases
+  if (resolveActionLoop(action) === false) {
+    const oneShotPhases = phases.filter((phase) => !isLoopClosingPhase(phase))
     if (animationType === 'locomotion_loop') {
-      beats[count - 1] = 'finish the in-place gait in a settled, supported stopping pose'
-    } else if (/seamless|loop.close/i.test(beats[count - 1])) {
-      beats[count - 1] = 'finish the action in a settled pose without restarting the motion'
+      plannedPhases = [...oneShotPhases, 'finish the in-place gait in a settled, supported stopping pose']
+    } else if (oneShotPhases.length !== phases.length) {
+      plannedPhases = [...oneShotPhases, 'finish the action in a settled pose without restarting the motion']
     }
-  } else if (count > 1 && action.actionContract?.loop && ['pose_transition', 'reaction', 'emote'].includes(animationType)) {
+  }
+  const beats = expandPhases(plannedPhases, count)
+  if (count > 1 && action.actionContract?.loop && ['pose_transition', 'reaction', 'emote'].includes(animationType)) {
     beats[count - 1] = 'recover toward the first pose in a smooth wraparound transition'
   }
   return beats.map((description, index) => `Frame ${index + 1}: ${description}.`)
