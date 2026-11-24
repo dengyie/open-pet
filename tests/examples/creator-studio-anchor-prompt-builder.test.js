@@ -234,6 +234,36 @@ test('16-frame one-shot gait and idle sheets never blend in a loop-closing beat'
   }
 })
 
+test('one-shot plans keep custom poses that happen to use loop-related words', () => {
+  const pose = 'raised paw with a seamless sleeve cuff'
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: {
+      name: 'Lift a paw', frameCount: 6, loop: false,
+      framePlan: ['neutral stance', pose]
+    }
+  })
+  assert.match(prompt, new RegExp(pose))
+  assert.match(prompt.split('\n').find((line) => /cell 6\b/i.test(line)), /settled pose without restarting the motion/i)
+})
+
+test('a custom one-shot gait uses custom text as pose reference, not as playback instructions', () => {
+  const pose = 'start the next stride by raising the left foot'
+  const { prompt } = buildActionSpriteRowPrompt({
+    action: {
+      name: 'Running gait', frameCount: 6, loop: false,
+      framePlan: ['first contact with the right foot planted', pose]
+    }
+  })
+  const cells = prompt.split('\n').filter((line) => /^cell \d+\b/i.test(line))
+  assert.equal(cells.length, 6)
+  for (const line of cells.filter((line) => line.includes(pose))) {
+    assert.match(line, /visual pose only, no restart/i)
+  }
+  assert.ok(cells.some((line) => line.includes(pose)))
+  assert.match(cells.at(-1), /supported stopping pose/i)
+  assert.doesNotMatch(cells.at(-1), /start the next stride/i)
+})
+
 test('idle blink uses the specified facing for its start, peak, and loop return', () => {
   const action = {
     actionId: 'idle', name: 'Idle blink', frameCount: 5,

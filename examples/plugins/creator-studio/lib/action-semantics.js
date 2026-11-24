@@ -299,8 +299,7 @@ const ACTION_PHASES = Object.freeze({
     'match the canonical identity pose, viewpoint, silhouette, scale, markings, accessories, and lower-center root',
     'begin closing the eyelids while the body remains still',
     'close the eyelids for one blink while preserving the canonical silhouette',
-    'reopen the eyes without changing scale or viewpoint',
-    'settle back into the canonical starting pose for a seamless quiet loop'
+    'reopen the eyes without changing scale or viewpoint'
   ]),
   wave: Object.freeze([
     'neutral anchored pose with the selected waving appendage at rest',
@@ -315,8 +314,7 @@ const ACTION_PHASES = Object.freeze({
     'begin one small readable processing or scanning motion using visible attention features',
     'reach the clearest focused work-state moment without changing viewpoint or body root',
     'shift the small processing or scanning motion to its complementary position',
-    'return toward the neutral focused pose while preserving identity and scale',
-    'settle into the starting focused pose for a seamless stationary loop'
+    'return toward the neutral focused pose while preserving identity and scale'
   ]),
   locomotion_loop: Object.freeze([
     'first in-place contact pose with opposing visible locomotion appendages clearly separated',
@@ -325,8 +323,7 @@ const ACTION_PHASES = Object.freeze({
     'first up pose with a small body rise before the next contact',
     'opposite contact pose with the visible appendage pattern reversed',
     'opposite down pose with readable weight transfer',
-    'opposite passing pose with supporting and moving appendages exchanged',
-    'loop-closing up-to-contact transition that returns smoothly to the first pose'
+    'opposite passing pose with supporting and moving appendages exchanged'
   ]),
   vertical_bounce: Object.freeze([
     'grounded neutral pose at the original baseline',
@@ -350,17 +347,23 @@ const ACTION_PHASES = Object.freeze({
     'expression begins using only the permitted visible expressive features',
     'expression rises toward the requested emotion',
     'clearest expression peak',
-    'expression begins to recover while identity remains stable',
-    'loop-compatible return toward the neutral expression'
+    'expression begins to recover while identity remains stable'
   ]),
   reaction: Object.freeze([
     'neutral or anticipation pose with the character fully visible and anchored',
     'reaction begins in the permitted visible parts',
     'reaction rises toward the requested state',
     'clearest readable reaction peak',
-    'controlled recovery with the same root anchor and scale',
-    'settled ending pose compatible with the requested loop or stop'
+    'controlled recovery with the same root anchor and scale'
   ])
+})
+
+const ACTION_LOOP_ENDINGS = Object.freeze({
+  idle: 'settle back into the canonical starting pose for a seamless quiet loop',
+  work_state: 'settle into the starting focused pose for a seamless stationary loop',
+  locomotion_loop: 'loop-closing up-to-contact transition that returns smoothly to the first pose',
+  emote: 'loop-compatible return toward the neutral expression',
+  reaction: 'settled ending pose compatible with the requested loop or stop'
 })
 
 const stripFramePrefix = (value) => normalizeText(value).replace(/^Frame\s+\d+\s*:\s*/i, '').replace(/[.。]+$/, '')
@@ -372,8 +375,7 @@ const getIdlePhases = (action) => hasExplicitFacing(action)
       'match the quiet reference pose from the specified facing, with the same scale, markings, accessories, and lower-center root',
       ACTION_PHASES.idle[1],
       'close the eyelids for one blink while preserving the silhouette in the specified facing',
-      ACTION_PHASES.idle[3],
-      'settle back into the starting pose in the specified facing for a seamless quiet loop'
+      ACTION_PHASES.idle[3]
     ]
   : ACTION_PHASES.idle
 
@@ -393,31 +395,39 @@ const expandPhases = (phases, count) => {
   })
 }
 
-const isLoopClosingPhase = (phase) => /\b(?:seamless|wraparound|loop[ -](?:clos\w+|compatible)|requested loop or stop)\b/i.test(phase)
+const expandOneShotCustomPhases = (poses, count, ending) => {
+  const describePose = (pose) => `visual pose only, no restart: "${pose}"`
+  if (count === 1) return [`${ending}; ${describePose(poses.join('; '))}`]
+  const motionCount = count - 1
+  const motion = poses.length <= motionCount
+    ? expandPhases(poses, motionCount)
+    : Array.from({ length: motionCount }, (_, index) => poses.slice(
+      Math.floor(index * poses.length / motionCount),
+      Math.floor((index + 1) * poses.length / motionCount)
+    ).join('; '))
+  return [...motion.map(describePose), ending]
+}
 
 const buildActionFramePlan = ({ action = {}, frameCount = 6 } = {}) => {
   const count = Math.max(1, Number(frameCount) || 1)
   const custom = Array.isArray(action.framePlan) ? action.framePlan.map(stripFramePrefix).filter(Boolean) : []
   const animationType = inferAnimationType(action)
-  const phases = custom.length >= 2
-    ? custom
-    : isWorkStateAction(action)
-      ? ACTION_PHASES.work_state
-      : isIdleAction(action)
-        ? getIdlePhases(action)
-        : isWavingAction(action)
-          ? ACTION_PHASES.wave
-          : ACTION_PHASES[animationType] || ACTION_PHASES.reaction
-  let plannedPhases = phases
-  if (resolveActionLoop(action) === false) {
-    const oneShotPhases = phases.filter((phase) => !isLoopClosingPhase(phase))
-    if (animationType === 'locomotion_loop') {
-      plannedPhases = [...oneShotPhases, 'finish the in-place gait in a settled, supported stopping pose']
-    } else if (oneShotPhases.length !== phases.length) {
-      plannedPhases = [...oneShotPhases, 'finish the action in a settled pose without restarting the motion']
-    }
-  }
-  const beats = expandPhases(plannedPhases, count)
+  const oneShot = resolveActionLoop(action) === false
+  const phaseType = isWorkStateAction(action) ? 'work_state'
+    : isIdleAction(action) ? 'idle'
+      : isWavingAction(action) ? 'wave'
+        : Object.hasOwn(ACTION_PHASES, animationType) ? animationType : 'reaction'
+  const phases = phaseType === 'idle' ? getIdlePhases(action) : ACTION_PHASES[phaseType]
+  const loopEnding = phaseType === 'idle' && hasExplicitFacing(action)
+    ? 'settle back into the starting pose in the specified facing for a seamless quiet loop'
+    : ACTION_LOOP_ENDINGS[phaseType]
+  const oneShotEnding = animationType === 'locomotion_loop'
+    ? 'finish the in-place gait in a settled, supported stopping pose'
+    : 'finish the action in a settled pose without restarting the motion'
+  const ending = oneShot && loopEnding ? oneShotEnding : loopEnding
+  const beats = oneShot && custom.length
+    ? expandOneShotCustomPhases(custom, count, oneShotEnding)
+    : expandPhases(custom.length >= 2 ? custom : ending ? [...phases, ending] : phases, count)
   if (count > 1 && action.actionContract?.loop && ['pose_transition', 'reaction', 'emote'].includes(animationType)) {
     beats[count - 1] = 'recover toward the first pose in a smooth wraparound transition'
   }
