@@ -78,7 +78,7 @@ const MOTIONS = [
   ['Jumping', /\b(?:jump(?:s|ing)?|hops?|hopping|bounc(?:e|ing))\b|跳|蹦/u, 'vertical_bounce', 'jump and land on the original baseline', 'whole body'],
   ['Spinning', /\b(?:spin(?:s|ning)?|twirl(?:s|ing)?|turn(?:s|ing)? around)\b|转圈|轉圈|旋转|旋轉/u, 'reaction', 'turn in place around the fixed body root', 'whole-body turn'],
   ['Eye roll', /\b(?:roll(?:s|ed|ing)? (?:(?:its|their|the) )?eyes|eye[ -]roll(?:s|ing)?)\b|翻白眼|翻眼睛/u, 'emote', 'briefly roll the visible eyes upward while keeping the body still', 'visible eyes'],
-  ['Roll in place', /\broll(?:s|ed|ing)? (?:over|around|in place)\b|打滚|打滾|翻滚|翻滾/u, 'reaction', 'roll in place and recover without drifting', 'whole-body roll'],
+  ['Roll in place', /\broll(?:s|ed|ing)? (?:over|around|in place)\b|^(?:please\s+)?roll(?:\s+(?:gently|slowly|quickly))?$|打滚|打滾|翻滚|翻滾/u, 'reaction', 'roll in place and recover without drifting', 'whole-body roll'],
   ['Nodding', /\bnod(?:s|ding)?\b|点头|點頭/u, 'reaction', 'dip and lift the head in a nod', 'head tilt'],
   ['Head shake', /\bshak(?:e|es|ing) (?:its |the )?head\b|摇头|搖頭/u, 'reaction', 'shake the head gently from side to side', 'head tilt'],
   ['Stretching', /\bstretch(?:es|ing)?\b|伸懒腰|伸懶腰|伸展/u, 'pose_transition', 'stretch the visible limbs without changing body size', 'visible limbs'],

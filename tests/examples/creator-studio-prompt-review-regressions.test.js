@@ -74,11 +74,12 @@ test('eye rolls and whole-body rolls remain distinct in English and Chinese', ()
     assert.equal(action.name, 'Eye roll')
     assert.deepEqual(action.animatedParts, ['visible eyes'])
   }
-  for (const motionPrompt of ['Roll over', '原地打滚']) {
+  for (const motionPrompt of ['Roll', 'Roll gently', 'Roll over', '原地打滚']) {
     const action = toProviderAction({ motionPrompt })
     assert.equal(action.name, 'Roll in place')
     assert.deepEqual(action.animatedParts, ['whole-body roll'])
   }
+  assert.notEqual(toProviderAction({ motionPrompt: 'Roll a ball' }).name, 'Roll in place')
 })
 
 test('unknown image models use the conservative opaque cutout capability profile', () => {
