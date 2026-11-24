@@ -58,16 +58,20 @@ const createPetMovementPolicy = ({ screen }) => {
     || screen.getPrimaryDisplay()
   )
 
-  const getGroundYForDisplay = (display) => display.workArea.y + display.workArea.height - getGroundInset()
-
   const getAllowedLandingBounds = (display, windowBounds) => {
     const area = getDisplayWorkAreaBounds(display)
     return {
       minLandingX: area.minX + Math.round(windowBounds.width / 2),
       maxLandingX: area.maxX - Math.round(windowBounds.width / 2),
-      groundY: getGroundYForDisplay(display)
+      minLandingY: area.minY + windowBounds.height,
+      maxLandingY: area.maxY,
+      groundY: area.maxY - getGroundInset()
     }
   }
+
+  const clampLandingY = (y, bounds, grounded) => (
+    grounded ? bounds.groundY : Math.min(Math.max(y, bounds.minLandingY), bounds.maxLandingY)
+  )
 
   const getAllowedRange = (radius, anchorX) => ({
     min: Math.round(anchorX - HOME_RADIUS_PX[normalizePetHomeRadius(radius)]),
@@ -106,9 +110,7 @@ const createPetMovementPolicy = ({ screen }) => {
     }
 
     const clampedLandingX = Math.min(Math.max(requestedLanding.x, bounds.minLandingX), bounds.maxLandingX)
-    const clampedLandingY = normalizedSettings.grounded
-      ? bounds.groundY
-      : Math.min(Math.max(requestedLanding.y, display.workArea.y + windowBounds.height), display.workArea.y + display.workArea.height)
+    const clampedLandingY = clampLandingY(requestedLanding.y, bounds, normalizedSettings.grounded)
 
     const next = getTopLeftForLandingPoint({ x: clampedLandingX, y: clampedLandingY }, windowBounds)
     return {
@@ -146,7 +148,7 @@ const createPetMovementPolicy = ({ screen }) => {
     }
 
     const clampedLandingX = Math.min(Math.max(requestedLanding.x, minLandingX), maxLandingX)
-    const clampedLandingY = Math.min(Math.max(requestedLanding.y, display.workArea.y + windowBounds.height), bounds.groundY)
+    const clampedLandingY = clampLandingY(requestedLanding.y, bounds, normalizedSettings.grounded)
     const next = getTopLeftForLandingPoint({ x: clampedLandingX, y: clampedLandingY }, windowBounds)
 
     return {
@@ -180,7 +182,7 @@ const createPetMovementPolicy = ({ screen }) => {
 
     const nextLanding = {
       x: Math.min(Math.max(landingPoint.x, minLandingX), maxLandingX),
-      y: normalizedSettings.grounded ? bounds.groundY : Math.min(Math.max(landingPoint.y, display.workArea.y + windowBounds.height), bounds.groundY)
+      y: clampLandingY(landingPoint.y, bounds, normalizedSettings.grounded)
     }
 
     return {
