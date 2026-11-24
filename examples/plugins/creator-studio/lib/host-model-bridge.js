@@ -3204,6 +3204,7 @@ const createVideoStartReferenceResolver = ({ dataDir, run, settings, action, can
       if (!result.ok || !result.referenceImage || !result.keyframe?.sha256) {
         throw Object.assign(new Error('Running video requires a quality-approved action start frame'), {
           code: result.modelAttempts?.at(-1)?.errorCode || 'video_start_frame_rejected',
+          startFrameRejected: true,
           modelAttempts: result.modelAttempts || []
         })
       }

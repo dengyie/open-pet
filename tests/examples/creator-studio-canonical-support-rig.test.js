@@ -434,6 +434,35 @@ test('video running-right reports a rejected start pose before creating candidat
   await assert.rejects(() => runtime.runAction({ actionId: 'running-right', canonical: f.canonical, profile: f.profile }), { code: 'video_start_frame_rejected' })
   assert.deepEqual(calls, ['/creator/model-settings', '/creator/model-image-generate'])
   assert.equal(fs.existsSync(path.join(f.dataDir, 'runs', run.runId, 'candidates', 'running-right')), false)
+
+  const { runQualityFirstActionRepair } = require('../../examples/plugins/creator-studio/lib/backend-runner')
+  const { writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+  const packageDir = `runs/${run.runId}/quality-first/package`
+  fs.mkdirSync(path.join(f.dataDir, packageDir), { recursive: true })
+  const spritesheet = `${packageDir}/spritesheet.webp`
+  const bundle = `${packageDir}/pet.zip`
+  fs.writeFileSync(path.join(f.dataDir, spritesheet), 'unchanged sheet')
+  fs.writeFileSync(path.join(f.dataDir, bundle), 'unchanged bundle')
+  const retainedPackage = {
+    spritesheetRelativePath: spritesheet, spritesheetSha256: hash('unchanged sheet'),
+    bundleRelativePath: bundle, bundleSha256: hash('unchanged bundle'),
+    basicActions: { availableActionIds: ['idle'], omittedActionIds: ['running-right', 'running-left'] },
+    visualEvaluation: { gate: { ok: true } }
+  }
+  writeRun({ dataDir: f.dataDir, run: {
+    ...run, status: 'ready_for_review',
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
+    qualityFirst: {
+      acceptedCanonical: { ...f.canonical, candidateId: 'canonical-1' },
+      actionResults: { idle: { ok: true }, 'running-right': { ok: false } },
+      package: retainedPackage
+    }
+  } })
+  const repair = await runQualityFirstActionRepair({ dataDir: f.dataDir, runId: run.runId, actionId: 'running-right', runtime, plan, profile: { ...f.profile, hash: 'profile' } })
+  assert.equal(repair.run.status, 'ready_for_review')
+  assert.equal(repair.run.qualityFirst.actionResults['running-right'].failureCode, 'video_start_frame_rejected')
+  assert.deepEqual(repair.run.qualityFirst.package, retainedPackage)
+  assert.deepEqual(calls, ['/creator/model-settings', '/creator/model-image-generate', '/creator/model-image-generate'])
 })
 
 for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`production host repairs ${actionId} video drift with an audited rig, packages it and resumes without dispatch`, { skip: spawnSync('ffmpeg', ['-version']).status !== 0 || spawnSync('ffprobe', ['-version']).status !== 0 }, async () => {

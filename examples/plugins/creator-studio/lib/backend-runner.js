@@ -23,6 +23,7 @@ const { buildRealAtlasFromGeneratedImage } = require('./real-atlas-builder')
 const { loadPetGenerationGovernance } = require('./pet-generation-governance')
 const { getQualityFirstQualityProfile } = require('./pet-generation-quality-profile')
 const { FIXTURE_BACKEND, PROVIDER_BACKEND, normalizeCreatorBackend } = require('./backend-mode')
+const { executionFailureCode } = require('./quality-first-action-runner')
 const { GENERATED_FULL_PET_ACTION_IDS } = require('./full-pet-basic-actions')
 const { OFFICIAL_FULL_PET_ACTION_IDS } = require('./full-pet-row-contract')
 const {
@@ -1168,7 +1169,16 @@ const runQualityFirstActionRepair = async ({
   appendDiagnosticRunLog({ dataDir, runId, event: 'quality-first.action.repair-started', message: `Quality-first action ${normalizedActionId} repair started`, data: { actionId: normalizedActionId }, now })
   try {
     let effectiveProfile = profile
-    const result = await runtime.runAction({ actionId: normalizedActionId, canonical, profile: effectiveProfile, plan })
+    let result
+    try {
+      result = await runtime.runAction({ actionId: normalizedActionId, canonical, profile: effectiveProfile, plan })
+    } catch (error) {
+      if (normalizedActionId !== 'running-right' || error?.startFrameRejected !== true) throw error
+      result = {
+        ok: false, actionId: normalizedActionId, disposition: 'omitted', candidates: [],
+        failureCode: executionFailureCode(error, 'video_start_frame_rejected')
+      }
+    }
     if (normalizedActionId === 'idle' && result?.ok === true && !effectiveProfile?.hash) {
       effectiveProfile = await runtime.createCharacterScaleProfile({ canonical, idle: result })
       if (!effectiveProfile?.hash) throw new Error('Quality-first idle recovery produced an invalid scale profile')
