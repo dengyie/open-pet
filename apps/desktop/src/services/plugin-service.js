@@ -504,7 +504,7 @@ const assertStorageKey = (key) => {
   }
 }
 
-const createPluginService = ({ settingsService, petService, actionService, actionImportService, petPackService, aiService, aiTalkService, imageGenerationModelService, videoGenerationModelService = null, secretService = null, hatchPetAgentService = null, fetchImpl = globalThis.fetch, resolveAddress, pluginNetworkConnect = connectPinnedHttps, pluginNetworkTimeoutMs = 10000, serviceHealthTimeoutMs, healthCheckTimeoutMs = serviceHealthTimeoutMs ?? PLUGIN_SERVICE_HEALTH_TIMEOUT_MS, serviceStopGracePeriodMs = PLUGIN_SERVICE_STOP_GRACE_PERIOD_MS, commandProcessTimeoutMs = LOCAL_PLUGIN_COMMAND_TIMEOUT_MS, openExternal = async () => { throw new Error('Dashboard opener is not available') }, selectCreatorAssetFrameFolder = async () => { throw new Error('Creator asset folder picker is not available') }, onPetPackActivated = () => {}, spawnServiceProcess = spawn, spawnSetupProcess = spawnServiceProcess, spawnCommandProcess = spawnServiceProcess, killServiceProcess = process.kill, signalServiceProcessTree = defaultServiceProcessTree.signalServiceProcessTree, setServiceHealthTimer = setTimeout, clearServiceHealthTimer = clearTimeout, probeAgentAwarenessActivity = defaultProbeAgentAwarenessActivity, setAgentAwarenessAutostartTimer = setInterval, clearAgentAwarenessAutostartTimer = clearInterval, agentAwarenessAutostartIntervalMs = DEFAULT_AGENT_AWARENESS_AUTOSTART_INTERVAL_MS, pluginDirs = [], officialPlugins = [], getPluginBlockStatus = () => ({ blocked: false, reasons: [] }) }) => {
+const createPluginService = ({ settingsService, petService, actionService, actionImportService, petPackService, aiService, aiTalkService, imageGenerationModelService, videoGenerationModelService = null, secretService = null, hatchPetAgentService = null, fetchImpl = globalThis.fetch, resolveAddress, pluginNetworkConnect = connectPinnedHttps, pluginNetworkTimeoutMs = 10000, serviceHealthTimeoutMs, healthCheckTimeoutMs = serviceHealthTimeoutMs ?? PLUGIN_SERVICE_HEALTH_TIMEOUT_MS, serviceStopGracePeriodMs = PLUGIN_SERVICE_STOP_GRACE_PERIOD_MS, commandProcessTimeoutMs = LOCAL_PLUGIN_COMMAND_TIMEOUT_MS, openExternal = async () => { throw new Error('Dashboard opener is not available') }, selectCreatorAssetFrameFolder = async () => { throw new Error('Creator asset folder picker is not available') }, onPetPackActivated = () => {}, spawnServiceProcess = spawn, spawnSetupProcess = spawnServiceProcess, spawnCommandProcess = spawnServiceProcess, killServiceProcess = process.kill, signalServiceProcessTree = defaultServiceProcessTree.signalServiceProcessTree, setServiceHealthTimer = setTimeout, clearServiceHealthTimer = clearTimeout, probeAgentAwarenessActivity = defaultProbeAgentAwarenessActivity, setAgentAwarenessAutostartTimer = setInterval, clearAgentAwarenessAutostartTimer = clearInterval, agentAwarenessAutostartIntervalMs = DEFAULT_AGENT_AWARENESS_AUTOSTART_INTERVAL_MS, pluginDirs = [], officialPlugins = [], readCreatorNativeApproval, getPluginBlockStatus = () => ({ blocked: false, reasons: [] }) }) => {
   let effectiveHatchPetAgentService = hatchPetAgentService
   if (!settingsService) throw new Error('settingsService is required')
   if (!petService) throw new Error('petService is required')
@@ -1259,9 +1259,9 @@ const createPluginService = ({ settingsService, petService, actionService, actio
 
   const isNativeExecutionApproved = (pluginId) => getNativeExecutionApprovalMap()[pluginId] === true
 
-  const assertNativeExecutionAllowed = (manifestOrId) => {
+  const assertNativeExecutionAllowed = (manifestOrId, approved) => {
     const pluginId = typeof manifestOrId === 'string' ? manifestOrId : manifestOrId?.id
-    if (!isNativeExecutionApproved(pluginId)) {
+    if ((approved ?? isNativeExecutionApproved(pluginId)) !== true) {
       throw new Error('Plugin native execution is not approved. Enable native process execution for this plugin in the Control Center before running its commands, services, or setup.')
     }
   }
@@ -2069,7 +2069,10 @@ const createPluginService = ({ settingsService, petService, actionService, actio
           config: getPluginConfig(plugin.manifest.id, plugin.configSchema)
         })
       } else if (plugin.manifest.entries?.commands?.length) {
-        assertNativeExecutionAllowed(plugin.manifest)
+        const approved = pluginId === CREATOR_STUDIO_PLUGIN_ID && readCreatorNativeApproval
+          ? (await readCreatorNativeApproval(pluginId)) === true
+          : undefined
+        assertNativeExecutionAllowed(plugin.manifest, approved)
         const commandEntry = getCommandEntry(plugin, commandId)
         result = await runCommandEntryProcess({
           plugin,

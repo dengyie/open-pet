@@ -456,6 +456,13 @@ const createOpenPetRuntime = ({
     createPluginGithubImportService: factories.createPluginGithubImportService,
     createPluginService: factories.createPluginService,
     createCatalogService: factories.createCatalogService,
+    readCreatorNativeApproval: async (pluginId) => {
+      const backend = sidecarRuntimeCoordinator.getBackend()
+      if (!backend) return false
+      const snapshot = await settingsSidecarBridge.fetchSnapshot(backend)
+      return sidecarRuntimeCoordinator.getBackend()?.sessionToken === backend.sessionToken &&
+        snapshot.values.plugins?.nativeExecutionApproved?.[pluginId] === true
+    },
     reloadAndSendAnimations,
     onActivePetPackChanged: () => ipcRuntimeHelpers.broadcastActivePetPackChanged({ source: 'plugin-service:onPetPackActivated' })
   })

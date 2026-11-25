@@ -6362,6 +6362,43 @@ test('plugin service blocks native entries execution until explicitly approved',
   assert.equal(spawned.length, 1)
 })
 
+test('Creator Studio native commands use live Backend approval instead of Shell settings', async () => {
+  const pluginId = 'openpet.creator-studio'
+  const settingsService = createBareSettingsService({ plugins: { enabled: { [pluginId]: true } } })
+  let backendApproved = false
+  let spawnCount = 0
+  const child = createFakeServiceProcess()
+  const service = createPluginService({
+    settingsService,
+    petService: createBridgeAwarePetService(),
+    pluginDirs: [createDeclarationOnlyPluginDir({ pluginId })],
+    readCreatorNativeApproval: async (id) => {
+      assert.equal(id, pluginId)
+      return backendApproved
+    },
+    spawnCommandProcess: () => {
+      spawnCount += 1
+      return child
+    }
+  })
+
+  await assert.rejects(service.runCommand(pluginId, 'announce'), /native execution is not approved/)
+  assert.equal(spawnCount, 0)
+
+  backendApproved = true
+  const command = service.runCommand(pluginId, 'announce')
+  await waitFor(() => child.listenerCount('exit') > 0)
+  child.stdout.write('{"ok":true}\n')
+  child.emit('exit', 0, null)
+  assert.equal((await command).ok, true)
+  assert.equal(settingsService.get().plugins.nativeExecutionApproved, undefined)
+
+  service.setNativeExecutionApproved(pluginId, true)
+  backendApproved = false
+  await assert.rejects(service.runCommand(pluginId, 'announce'), /native execution is not approved/)
+  assert.equal(spawnCount, 1)
+})
+
 test('plugin service blocks local plugin sdk calls without permission', async () => {
   const service = createPluginService({
     settingsService: createSettingsService({

@@ -42,6 +42,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   const saveSettingsCalls = []
   const persistenceRequests = []
   const fetchCalls = []
+  let creatorNativeApproved = false
   let failNextSettingsPatch = false
   let holdNextSettingsRead
   const fetchImpl = async (url, init = {}) => {
@@ -53,7 +54,12 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
     }
     const response = new Response(JSON.stringify({ ok: true, data: {
       version: 1,
-      values: { ...settings, customCursorScope: 'system', petBehavior: { home: { enabled: true, anchor: { displayId: 'old-display', x: 1, y: 2 } } } }
+      values: {
+        ...settings,
+        plugins: { nativeExecutionApproved: { 'openpet.creator-studio': creatorNativeApproved } },
+        customCursorScope: 'system',
+        petBehavior: { home: { enabled: true, anchor: { displayId: 'old-display', x: 1, y: 2 } } }
+      }
     } }), { status: 200, headers: { 'content-type': 'application/json' } })
     if (!init.method && holdNextSettingsRead) {
       const hold = holdNextSettingsRead
@@ -223,7 +229,8 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
           return getPluginBlockStatus(candidate)
         }
       }),
-      createPluginService: ({ getPluginBlockStatus, selectCreatorAssetFrameFolder }) => ({
+      createPluginService: ({ getPluginBlockStatus, selectCreatorAssetFrameFolder, readCreatorNativeApproval }) => ({
+        readCreatorNativeApproval,
         readBlockStatus: (candidate) => {
           pluginServiceCandidates.push(candidate)
           return getPluginBlockStatus(candidate)
@@ -372,6 +379,11 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   assert.equal(ipcDependencies.creatorWorkflowService.id, 'creator-workflow')
   assert.deepEqual(ipcDependencies.pluginInstallService.readBlockStatus('blocked-plugin'), { blocked: true, reasons: ['policy'] })
   assert.deepEqual(ipcDependencies.pluginService.readBlockStatus('allowed-plugin'), { blocked: false, reasons: [] })
+  assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), false)
+  creatorNativeApproved = true
+  assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), true)
+  creatorNativeApproved = false
+  assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), false)
   assert.deepEqual(await ipcDependencies.pluginService.pickFrames(), { canceled: false, sourceDir: '/tmp/frames' })
   assert.equal(dialogCalls.length, 1)
   assert.deepEqual(pluginInstallCandidates, ['blocked-plugin'])
