@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { controlCenterAPI as api } from '../api/control-center-api'
 import { creatorApi, resolveCreatorJob, type CreatorJobResolution } from '../features/creator/api.ts'
+import { pluginServiceApi } from '../features/plugins/api.ts'
 import { cloneCreatorState, defaultCreatorState } from '../lib/defaults'
 import { ensureCreatorStudioServiceReady } from '../lib/creator-studio-dashboard'
 import { messageFromError } from '../lib/errors'
@@ -284,7 +285,7 @@ export function useCreatorPane(active: boolean) {
     setOpeningDashboard(true)
     try {
       const readiness = await ensureCreatorStudioServiceReady({
-        api,
+        api: pluginServiceApi,
         pluginId: dashboard.pluginId,
         serviceId: 'studio',
         serviceStatus: dashboard.serviceStatus,
