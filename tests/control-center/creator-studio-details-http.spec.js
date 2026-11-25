@@ -3,7 +3,7 @@ const { test, expect } = require('@playwright/test')
 const pluginId = 'openpet.creator-studio'
 const runId = 'details-regression'
 const run = { runId, state: 'review-required', mode: 'single-action' }
-const dashboard = { available: true, pluginId, dashboardId: 'main', serviceStatus: 'stopped' }
+const dashboard = { available: true, pluginId, dashboardId: 'main' }
 const plugin = {
   id: pluginId,
   name: 'Creator Studio',
@@ -13,14 +13,16 @@ const plugin = {
   requiresNativeExecution: true,
   nativeExecutionApproved: true,
   entries: {
-    services: [{ id: 'studio', runtime: { status: 'stopped' } }],
+    services: [{ id: 'studio' }],
     dashboards: [{ id: 'main', title: 'Creator Studio' }]
   }
 }
 
-for (const pane of ['Create', 'Plugins']) {
-  test(`${pane} starts Creator Studio over HTTP before opening its native dashboard`, async ({ page }) => {
+for (const [pane, initiallyRunning] of [['Create', false], ['Plugins', false], ['Create', true], ['Plugins', true]]) {
+  const scenario = initiallyRunning ? 'opens the native dashboard without restarting Creator Studio' : 'starts Creator Studio over HTTP before opening its native dashboard'
+  test(`${pane} ${scenario}`, async ({ page }) => {
     const operations = []
+    let running = initiallyRunning
     await page.route('**/api/v1/**', async (route) => {
       const request = route.request()
       const url = new URL(request.url())
@@ -28,7 +30,7 @@ for (const pane of ['Create', 'Plugins']) {
       let data
       let status = 200
       if (path === '/creator/state') {
-        data = { ok: true, provider: { ready: true }, hatchPetAgent: {}, editableTarget: {}, editableReference: {}, dashboard }
+        data = { ok: true, provider: { ready: true }, hatchPetAgent: {}, editableTarget: {}, editableReference: {}, dashboard: { ...dashboard, serviceStatus: running ? 'running' : 'stopped' } }
       } else if (path === '/creator/sprites/generate') {
         data = { jobId: runId }
         status = 202
@@ -41,9 +43,17 @@ for (const pane of ['Create', 'Plugins']) {
       } else if (path === `/plugins/${pluginId}/logs`) {
         data = { items: [] }
       } else if (path === `/plugins/${pluginId}/start`) {
-        operations.push([request.method(), url.searchParams.get('operation'), request.postDataJSON()])
-        const health = { status: url.searchParams.has('operation') ? 'healthy' : 'unknown' }
-        data = { ok: true, pluginId, serviceId: 'studio', health, runtime: { status: 'running', health } }
+        const operation = url.searchParams.get('operation')
+        operations.push([request.method(), operation, request.postDataJSON()])
+        if (operation === null && running) {
+          return route.fulfill({
+            status: 503,
+            json: { ok: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'Plugin production request failed' } }
+          })
+        }
+        if (operation === null) running = true
+        const health = { status: running ? (operation === 'health' ? 'healthy' : 'unknown') : 'unhealthy' }
+        data = { ok: true, pluginId, serviceId: 'studio', health, runtime: { status: running ? 'running' : 'stopped', health } }
       } else {
         return route.abort()
       }
@@ -70,14 +80,17 @@ for (const pane of ['Create', 'Plugins']) {
       await page.getByLabel('Action name').fill('Wave')
       await page.getByLabel('Motion prompt').fill('Wave once')
       await page.getByTestId('creator-generate-existing-action').click()
-      await page.getByRole('button', { name: '启动并打开 Creator Studio 详情' }).click()
+      await page.getByRole('button', { name: initiallyRunning ? '打开 Creator Studio 详情' : '启动并打开 Creator Studio 详情' }).click()
     } else {
       await page.getByRole('button', { name: '启动并查看任务详情' }).click()
     }
 
+    const health = ['POST', 'health', { serviceId: 'studio' }]
+    const start = ['POST', null, { serviceId: 'studio' }]
     await expect.poll(() => operations).toEqual([
-      ['POST', null, { serviceId: 'studio' }],
-      ['POST', 'health', { serviceId: 'studio' }],
+      ...(!initiallyRunning && pane === 'Plugins' ? [health] : []),
+      ...(!initiallyRunning ? [start] : []),
+      health,
       ['dashboard', pluginId, 'main', pane === 'Create' ? { query: { runId } } : undefined]
     ])
   })

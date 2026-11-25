@@ -7,7 +7,7 @@ import { isBackendUnavailableBeforeDispatch, pluginHttpApi, pluginServiceApi, sh
 import type { JsonObject, JsonValue, PluginDashboardOpenOptions, PluginViewState } from '@openpet/shared/src/openpet-contracts.ts'
 
 const CREATOR = 'openpet.creator-studio'
-const serviceStatus = (plugin: PluginViewState | null) => plugin?.entries?.services?.find((service) => service.id === 'studio')?.runtime?.status || 'stopped'
+const serviceStatus = (plugin: PluginViewState | null) => plugin?.entries?.services?.find((service) => service.id === 'studio')?.runtime?.status
 const find = (items: PluginViewState[], id: string) => items.find((item) => item.id === id) || null
 const parsePayload = (draft: string): JsonObject | undefined => { if (!draft.trim()) return undefined; const parsed = JSON.parse(draft); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('命令 Payload 必须是 JSON 对象'); return parsed as JsonObject }
 

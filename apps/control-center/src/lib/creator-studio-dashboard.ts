@@ -13,7 +13,7 @@ interface EnsureCreatorStudioServiceReadyOptions {
   api: CreatorStudioServiceApi
   pluginId: string
   serviceId: string
-  serviceStatus: string
+  serviceStatus?: string
   onProgress?: (message: string) => void
   onRuntime?: (runtime: PluginServiceRuntimeViewState) => void
   maxHealthAttempts?: number
@@ -46,7 +46,16 @@ export const ensureCreatorStudioServiceReady = async ({
   healthRetryDelayMs = 250,
   delay = wait
 }: EnsureCreatorStudioServiceReadyOptions): Promise<CreatorStudioServiceReadiness> => {
-  const normalizedStatus = String(serviceStatus || 'stopped').trim().toLowerCase()
+  let normalizedStatus = String(serviceStatus || '').trim().toLowerCase()
+  if (!normalizedStatus) {
+    onProgress('正在检查 Creator Studio 详情服务…')
+    const { runtime, health } = await api.checkPluginServiceHealth(pluginId, serviceId)
+    normalizedStatus = runtime.status
+    onRuntime(runtime)
+    if (normalizedStatus === 'running' && health.status === 'healthy') {
+      return { started: false, runtime, health }
+    }
+  }
   if (normalizedStatus === 'stopping') {
     throw new Error('Creator Studio Service 正在停止，请稍后重试')
   }
