@@ -2,7 +2,7 @@ import * as v from '../../../../desktop/src/shared/browser-validation.ts';
 import { backendClient } from '../../api/backend-client.ts';
 import { controlCenterAPI } from '../../api/control-center-api.ts';
 import type { ApiClient } from '../../api/client.ts';
-import type { JsonObject } from '@openpet/shared/src/openpet-contracts.ts';
+import type { ControlCenterApi, JsonObject } from '@openpet/shared/src/openpet-contracts.ts';
 export type PluginJobCreated = {
     jobId: string;
 };
@@ -197,4 +197,9 @@ export const pluginHttpApi: PluginApi = {
     clearLogs: () => usePluginDemoApi()
         ? controlCenterAPI.clearPluginLogs()
         : pluginHttpApiTransport.clearLogs(),
+};
+
+export const pluginServiceApi: Pick<ControlCenterApi, 'startPluginService' | 'checkPluginServiceHealth'> = {
+    startPluginService: (pluginId, serviceId) => pluginHttpApi.service(pluginId, serviceId, 'start'),
+    checkPluginServiceHealth: (pluginId, serviceId) => pluginHttpApi.service(pluginId, serviceId, 'health'),
 };
