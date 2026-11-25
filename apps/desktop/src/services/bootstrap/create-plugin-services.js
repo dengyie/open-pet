@@ -44,6 +44,7 @@ const createPluginServices = ({
   createPluginGithubImportService,
   createPluginService,
   createCatalogService,
+  readCreatorNativeApproval,
   reloadAndSendAnimations,
   onActivePetPackChanged = () => {}
 }) => {
@@ -81,6 +82,7 @@ const createPluginServices = ({
     imageGenerationModelService,
     videoGenerationModelService,
     secretService,
+    readCreatorNativeApproval,
     pluginDirs: [pluginDir],
     officialPlugins: [createBasicBehaviorPlugin()],
     openExternal: (url) => shell.openExternal(url),
