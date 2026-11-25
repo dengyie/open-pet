@@ -12,6 +12,8 @@ const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$/
 const SAFE_PATH = /^[^\\/][^\0]*$/
 const MAX_NAME = 160
 const MAX_PROMPT = 8_000
+// Allow the 12h 5m Creator Studio run-step deadline plus time for preflight and setup.
+const GENERATE_CHARACTER_TIMEOUT_MS = (12 * 60 + 15) * 60_000
 const CREATOR_OPERATION_SET = new Set([
 	"pick-reference",
 	"upload-reference",
@@ -197,7 +199,11 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 		try {
 			reply = await shell.request(
 				{ type: "creator.request", operation, payload: redact(payload, "", { allowReferenceTokens: true }) },
-				{ expectedType: "creator.result", expectedOperation: operation },
+				{
+					expectedType: "creator.result",
+					expectedOperation: operation,
+					...(operation === "generate-character" ? { timeoutMs: GENERATE_CHARACTER_TIMEOUT_MS } : {}),
+				},
 			)
 		} catch (cause) {
 			if (cause instanceof ApiError) throw cause

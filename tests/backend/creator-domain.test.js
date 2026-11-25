@@ -118,6 +118,68 @@ test("Creator state resolves through the Shell bridge and preserves structured e
 	await rejected
 })
 
+test("Desktop Creator job stays running past the dialog deadline and returns importable actions", { timeout: 5_000 }, async (t) => {
+	const [
+		{ openDatabase }, { migrate }, { createCreatorDomain }, { createShellClient }, { DIALOG_RESULT_TIMEOUT_MS },
+		{ createCreatorJobHandlers }, { createJobsRepository }, { createQueue }, { createRunner },
+	] = await Promise.all([
+		import("../../services/backend/store/db.js"),
+		import("../../services/backend/store/migrate.js"),
+		import("../../services/backend/domains/creator/index.js"),
+		import("../../services/backend/bridge/shell-client.js"),
+		import("../../services/backend/bridge/message-schema.js"),
+		import("../../services/backend/jobs/handlers/creator.js"),
+		import("../../services/backend/store/repositories/jobs.js"),
+		import("../../services/backend/jobs/queue.js"),
+		import("../../services/backend/jobs/runner.js"),
+	])
+	const db = await openDatabase({ file: ":memory:" })
+	t.after(() => db.close())
+	migrate({ db })
+	t.mock.timers.enable({ apis: ["setTimeout"] })
+
+	const result = {
+		state: "preview-ready",
+		run: { runId: "slow-character", mode: "full-pet", state: "preview-ready" },
+		availableActionIds: ["idle"],
+	}
+	const { promise: dispatched, resolve: dispatch } = Promise.withResolvers()
+	const { promise: started, resolve: start } = Promise.withResolvers()
+	const shell = createShellClient({ send: dispatch })
+	t.after(() => shell.dispose())
+	const handler = createMessageHandler({
+		send: shell.receive,
+		onCreatorRequest: async ({ operation }) => {
+			assert.equal(operation, "generate-character")
+			const generation = new Promise((resolve) => setTimeout(resolve, DIALOG_RESULT_TIMEOUT_MS + 1_000))
+			start()
+			await generation
+			return result
+		},
+	})
+	const repo = createJobsRepository({ db })
+	const queue = createQueue({ repo })
+	const creator = createCreatorDomain({ db, shell, enqueueJob: (input) => queue.enqueue(input) })
+	const runner = createRunner({ repo, queue, handlers: createCreatorJobHandlers({ creator }) })
+
+	const { jobId } = creator.enqueueCharacter({ characterName: "Cat", referenceImageToken: "opaque-token" })
+	const running = runner.run()
+	const handling = handler.handle(await dispatched)
+	await started
+	t.mock.timers.tick(DIALOG_RESULT_TIMEOUT_MS + 1)
+	await new Promise((resolve) => setImmediate(resolve))
+	assert.equal(repo.byId(jobId).status, "running")
+
+	t.mock.timers.tick(999)
+	assert.equal(await handling, true)
+	assert.equal((await running).status, "succeeded")
+	assert.deepEqual(repo.byId(jobId).result, result)
+
+	const shortRequest = assert.rejects(creator.getState(), { code: "PROVIDER_TIMEOUT" })
+	t.mock.timers.tick(DIALOG_RESULT_TIMEOUT_MS)
+	await shortRequest
+})
+
 test("Creator asset preview round-trips without bypassing metadata redaction", async (t) => {
 	const [
 		{ openDatabase }, { migrate }, { createCreatorDomain }, { createShellClient },
