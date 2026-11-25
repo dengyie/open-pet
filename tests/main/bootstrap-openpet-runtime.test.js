@@ -43,6 +43,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   const persistenceRequests = []
   const fetchCalls = []
   let creatorNativeApproved = false
+  let creatorEnabled = true
   let failNextSettingsPatch = false
   let holdNextSettingsRead
   const fetchImpl = async (url, init = {}) => {
@@ -56,7 +57,10 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
       version: 1,
       values: {
         ...settings,
-        plugins: { nativeExecutionApproved: { 'openpet.creator-studio': creatorNativeApproved } },
+        plugins: {
+          enabled: { 'openpet.creator-studio': creatorEnabled },
+          nativeExecutionApproved: { 'openpet.creator-studio': creatorNativeApproved }
+        },
         customCursorScope: 'system',
         petBehavior: { home: { enabled: true, anchor: { displayId: 'old-display', x: 1, y: 2 } } }
       }
@@ -381,6 +385,10 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   assert.deepEqual(ipcDependencies.pluginService.readBlockStatus('allowed-plugin'), { blocked: false, reasons: [] })
   assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), false)
   creatorNativeApproved = true
+  assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), true)
+  creatorEnabled = false
+  await assert.rejects(ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), /Plugin is disabled/)
+  creatorEnabled = true
   assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), true)
   creatorNativeApproved = false
   assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), false)
