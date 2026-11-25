@@ -106,6 +106,15 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 		return null
 	}
 
+	function takePending(id) {
+		const awaiting = pending.get(id)
+		if (awaiting) {
+			pending.delete(id)
+			awaiting.cleanup()
+		}
+		return awaiting
+	}
+
 	function receive(raw) {
 		if (disposed) return
 
@@ -125,17 +134,13 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 		}
 
 		const envelope = parsed.envelope
-		const awaiting = pending.get(envelope.id)
+		const awaiting = takePending(envelope.id)
 		if (awaiting !== undefined && envelope.body.type === "bridge.error") {
-			pending.delete(envelope.id)
-			clearTimeout(awaiting.timer)
 			awaiting.reject(new ApiError(envelope.body.code, envelope.body.message || "Remote Shell bridge unavailable"))
 			return
 		}
 		const validationError = awaiting && validateExpectedResponse(envelope, awaiting.expectedType, awaiting.expectedOperation)
 		if (awaiting !== undefined && validationError) {
-			pending.delete(envelope.id)
-			clearTimeout(awaiting.timer)
 			awaiting.reject(awaiting.expectedType === "ai.talk.result"
 				? new ApiError("INTERNAL", "Shell AI talk response is invalid")
 				: new Error(validationError))
@@ -144,8 +149,6 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 		const bodyResult = shellToBackendSchema.safeParse(envelope.body)
 		if (!bodyResult.success) {
 			if (awaiting !== undefined) {
-				pending.delete(envelope.id)
-				clearTimeout(awaiting.timer)
 				awaiting.reject(awaiting.expectedType === "ai.talk.result"
 					? new ApiError("INTERNAL", "Shell AI talk response is invalid")
 					: new Error("Shell response payload does not match the bridge contract"))
@@ -156,8 +159,6 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 		}
 
 		if (awaiting !== undefined) {
-			pending.delete(envelope.id)
-			clearTimeout(awaiting.timer)
 			awaiting.resolve(envelope)
 			return
 		}
@@ -213,6 +214,8 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 
 	function request(body, options = {}) {
 		const timeoutMs = options.timeoutMs ?? DIALOG_RESULT_TIMEOUT_MS
+		const { signal } = options
+		if (signal?.aborted) return Promise.reject(signal.reason)
 		// Bind host requests to their response type as well as their envelope id.
 		const expectedType = options.expectedType ?? ({
 			"settings.apply.request": "settings.apply.result",
@@ -229,32 +232,31 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 		if (envelope === null) return Promise.reject(new Error("shellClient 已销毁"))
 
 		return new Promise((resolve, reject) => {
+			const rejectPending = (error) => takePending(envelope.id)?.reject(error)
+			const onAbort = () => rejectPending(signal.reason)
 			const timer = setTimeout(() => {
-				pending.delete(envelope.id)
 				// ⚠️ 03 篇定的是 504,而 504 对应的码叫 PROVIDER_TIMEOUT。Shell 弹窗不是
 				// provider,语义别扭;但错误码表是冻结契约,新增 SHELL_TIMEOUT 要走 §10
 				// 的冻结点流程。先按 504 实现。
-				reject(
+				rejectPending(
 					new ApiError("PROVIDER_TIMEOUT", "Shell 在 " + timeoutMs + "ms 内没有回复 " + body.type, {
 						details: { type: body.type, envelopeId: envelope.id },
 					}),
 				)
 			}, timeoutMs)
 			timer.unref?.()
-			pending.set(envelope.id, { resolve, reject, timer, expectedType, expectedOperation })
+			const cleanup = () => {
+				clearTimeout(timer)
+				signal?.removeEventListener("abort", onAbort)
+			}
+			pending.set(envelope.id, { resolve, reject, cleanup, expectedType, expectedOperation })
+			signal?.addEventListener("abort", onAbort, { once: true })
 			try {
 				send(envelope, (error) => {
-					if (!error) return
-					const awaiting = pending.get(envelope.id)
-					if (!awaiting) return
-					pending.delete(envelope.id)
-					clearTimeout(awaiting.timer)
-					awaiting.reject(error)
+					if (error) rejectPending(error)
 				})
 			} catch (error) {
-				pending.delete(envelope.id)
-				clearTimeout(timer)
-				reject(error)
+				rejectPending(error)
 			}
 		})
 	}
@@ -283,11 +285,9 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 
 	function dispose() {
 		disposed = true
-		for (const awaiting of pending.values()) {
-			clearTimeout(awaiting.timer)
-			awaiting.reject(new Error("shellClient 已销毁"))
+		for (const id of pending.keys()) {
+			takePending(id).reject(new Error("shellClient 已销毁"))
 		}
-		pending.clear()
 		for (const bucket of waiters.values()) {
 			for (const waiter of bucket) {
 				clearTimeout(waiter.timer)

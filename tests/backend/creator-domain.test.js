@@ -118,7 +118,7 @@ test("Creator state resolves through the Shell bridge and preserves structured e
 	await rejected
 })
 
-test("Desktop Creator job stays running past the dialog deadline and returns importable actions", { timeout: 5_000 }, async (t) => {
+test("Desktop Creator jobs can finish after the dialog deadline or be canceled while the shell is busy", { timeout: 5_000 }, async (t) => {
 	const [
 		{ openDatabase }, { migrate }, { createCreatorDomain }, { createShellClient }, { DIALOG_RESULT_TIMEOUT_MS },
 		{ createCreatorJobHandlers }, { createJobsRepository }, { createQueue }, { createRunner },
@@ -145,14 +145,20 @@ test("Desktop Creator job stays running past the dialog deadline and returns imp
 	}
 	const { promise: dispatched, resolve: dispatch } = Promise.withResolvers()
 	const { promise: started, resolve: start } = Promise.withResolvers()
-	const shell = createShellClient({ send: dispatch })
+	const { promise: cancelDispatched, resolve: dispatchCancelable } = Promise.withResolvers()
+	const { promise: cancelStarted, resolve: startCancelable } = Promise.withResolvers()
+	const shell = createShellClient({ send: (envelope) => {
+		if (envelope.body.payload.characterName === "Cancel Cat") dispatchCancelable(envelope)
+		else dispatch(envelope)
+	} })
 	t.after(() => shell.dispose())
 	const handler = createMessageHandler({
 		send: shell.receive,
-		onCreatorRequest: async ({ operation }) => {
+		onCreatorRequest: async ({ operation, payload }) => {
 			assert.equal(operation, "generate-character")
 			const generation = new Promise((resolve) => setTimeout(resolve, DIALOG_RESULT_TIMEOUT_MS + 1_000))
-			start()
+			if (payload.characterName === "Cancel Cat") startCancelable()
+			else start()
 			await generation
 			return result
 		},
@@ -178,6 +184,24 @@ test("Desktop Creator job stays running past the dialog deadline and returns imp
 	const shortRequest = assert.rejects(creator.getState(), { code: "PROVIDER_TIMEOUT" })
 	t.mock.timers.tick(DIALOG_RESULT_TIMEOUT_MS)
 	await shortRequest
+
+	const { jobId: canceledJobId } = creator.enqueueCharacter({
+		characterName: "Cancel Cat",
+		referenceImageToken: "opaque-token",
+	})
+	const cancelable = runner.run()
+	const lateHandling = handler.handle(await cancelDispatched)
+	await cancelStarted
+	const cancellation = runner.cancel(canceledJobId)
+	await new Promise((resolve) => setImmediate(resolve))
+	assert.equal(repo.byId(canceledJobId).status, "canceled")
+	assert.equal((await cancellation).status, "canceled")
+	await cancelable
+
+	t.mock.timers.tick(DIALOG_RESULT_TIMEOUT_MS + 1_000)
+	assert.equal(await lateHandling, true)
+	assert.equal(repo.byId(canceledJobId).status, "canceled")
+	assert.equal(repo.byId(canceledJobId).result, null)
 })
 
 test("Creator asset preview round-trips without bypassing metadata redaction", async (t) => {
