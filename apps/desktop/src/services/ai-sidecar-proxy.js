@@ -101,14 +101,8 @@ function createAiSidecarProxy({ getBackend, getActivePetPackId, fetchImpl = glob
       return clone(snapshot.hatchConfig)
     },
     saveConfig: (input) => mutate('/ai/hatch/config', { config: input }, 'PATCH'),
-    saveApiKey: async (apiKey) => {
-      const result = await mutate('/ai/providers/ai.hatch-pet/key', { apiKey }, 'PUT')
-      return { apiKeyRef: 'ai.hatch-pet', hasApiKey: result.configured, updatedAt: new Date().toISOString() }
-    },
-    clearApiKey: async () => {
-      const result = await mutate('/ai/providers/ai.hatch-pet/key', undefined, 'DELETE')
-      return { apiKeyRef: 'ai.hatch-pet', hasApiKey: result.configured, updatedAt: new Date().toISOString() }
-    },
+    saveApiKey: (apiKey) => mutate('/ai/hatch/key', { apiKey }, 'PUT'),
+    clearApiKey: () => mutate('/ai/hatch/key', undefined, 'DELETE'),
   }
   const hatchAiService = {
     ...aiService,

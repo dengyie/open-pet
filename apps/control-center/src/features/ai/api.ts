@@ -19,6 +19,7 @@ const secret = v.object({ configured: v.boolean(), maskedTail: v.nullable(v.stri
 const messages = v.array(v.object({ role: v.picklist(['user', 'assistant']), content: v.string() }));
 const chatResult = v.custom<AiChatResponse>((value) => object(value) && typeof value.reply === 'string');
 const hatchConfig = v.custom<HatchPetAgentConfigView>((value) => object(value) && typeof value.enabled === 'boolean' && typeof value.hasApiKey === 'boolean' && object(value.budgets));
+const hatchKey = v.strictObject({ apiKeyRef: v.string(), hasApiKey: v.boolean(), updatedAt: v.optional(v.string()) });
 export function createAiHttpApi(client: ApiClient = backendClient) {
     const send = <T>(method: string, path: string, responseSchema: v.GenericSchema<unknown, T>, body?: unknown) => body === undefined
         ? client.request({ method, path, responseSchema, retry: false, timeoutMs: 120000 })
@@ -35,8 +36,8 @@ export function createAiHttpApi(client: ApiClient = backendClient) {
         clearAiVisionApiKey: () => key('ai.vision', null),
         getHatchPetAgentConfig: () => send('GET', '/ai/hatch/config', hatchConfig),
         saveHatchPetAgentConfig: (input: Parameters<ControlCenterApi['saveHatchPetAgentConfig']>[0]) => send('PATCH', '/ai/hatch/config', hatchConfig, { config: input }),
-        saveHatchPetAgentApiKey: (value: string) => key('ai.hatch-pet', value),
-        clearHatchPetAgentApiKey: () => key('ai.hatch-pet', null),
+        saveHatchPetAgentApiKey: (apiKey: string) => send('PUT', '/ai/hatch/key', hatchKey, { apiKey }),
+        clearHatchPetAgentApiKey: () => send('DELETE', '/ai/hatch/key', hatchKey),
         testAiConnection: () => send('POST', '/ai/providers/chat/test', connection),
         discoverAiModels: () => send('GET', '/ai/providers/chat/models', models),
         discoverAiVisionModels: () => send('GET', '/ai/providers/vision/models', models),
