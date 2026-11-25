@@ -10,8 +10,71 @@ const { spawnSidecar, stopSidecar } = require("../../apps/desktop/src/sidecar/sp
 const { createMessageHandler } = require("../../apps/desktop/src/sidecar/message-handler.js")
 const { createSettingsSidecarBridge } = require("../../apps/desktop/src/services/settings-sidecar-bridge.js")
 const { createSettingsHostEffect } = require("../../apps/desktop/src/services/settings-host-effects.js")
+const { createSecretService } = require("../../apps/desktop/src/services/secret-service.js")
+const { createAiSidecarProxy } = require("../../apps/desktop/src/services/ai-sidecar-proxy.js")
 
 const repoRoot = path.resolve(__dirname, "../..")
+
+test("the dedicated Hatch Pet Agent key persists across sidecar restart", async () => {
+	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpet-hatch-key-"))
+	const settingsFile = path.join(userDataDir, "backend", "settings.json")
+	const storePath = path.join(userDataDir, "backend", "secrets", "providers.enc")
+	const petPackId = "fixture-cat"
+	let backend
+
+	async function start() {
+		const secretService = createSecretService({ storePath })
+		const sidecar = await spawnSidecar({
+			entry: path.join(repoRoot, "services/backend/index.js"),
+			initBody: { userDataDir, providerKeys: secretService.listProviderKeys() },
+			logger: { info() {}, warn() {}, error() {} },
+		})
+		const handler = createMessageHandler({
+			send: (envelope) => sidecar.child.send(envelope),
+			secretService,
+			onAiHostRequest: () => ({ pack: { manifest: { id: petPackId, displayName: "Fixture Cat", actions: [] } } }),
+		})
+		sidecar.child.on("message", (envelope) => {
+			if (["secrets.persist.request", "ai.host.request"].includes(envelope?.body?.type)) void handler.handle(envelope)
+		})
+		return sidecar
+	}
+
+	async function getHatchConfig() {
+		const response = await fetch(`${backend.baseUrl}/ai/hatch/config`, { headers: { authorization: `Bearer ${backend.sessionToken}` } })
+		assert.equal(response.status, 200)
+		return (await response.json()).data
+	}
+
+	const proxy = createAiSidecarProxy({ getBackend: () => backend, getActivePetPackId: () => petPackId })
+	try {
+		fs.mkdirSync(path.dirname(settingsFile), { recursive: true })
+		fs.writeFileSync(settingsFile, JSON.stringify({ version: 1, values: { ai: { hatchPet: { configMode: "override" } } } }))
+		backend = await start()
+		assert.equal((await getHatchConfig()).hasApiKey, false)
+
+		const fixtureKey = "fixture-hatch-agent-key"
+		const saved = await proxy.hatchConfiguration.saveApiKey(fixtureKey)
+		assert.deepEqual(saved, { apiKeyRef: "ai.hatch-pet", hasApiKey: true, updatedAt: saved.updatedAt })
+		assert.doesNotMatch(fs.readFileSync(settingsFile, "utf8"), /fixture-hatch-agent-key/)
+
+		await stopSidecar(backend.child)
+		backend = await start()
+		const reloaded = await getHatchConfig()
+		assert.equal(reloaded.configMode, "override")
+		assert.equal(reloaded.hasApiKey, true)
+		assert.equal(createSecretService({ storePath }).getSecretValue("ai.hatch-pet"), fixtureKey)
+
+		const cleared = await proxy.hatchConfiguration.clearApiKey()
+		assert.deepEqual(cleared, { apiKeyRef: "ai.hatch-pet", hasApiKey: false, updatedAt: cleared.updatedAt })
+		assert.equal((await getHatchConfig()).hasApiKey, false)
+		assert.equal(createSecretService({ storePath }).getSecretValue("ai.hatch-pet"), "")
+	} finally {
+		proxy.aiTalkService.dispose()
+		if (backend?.child) await stopSidecar(backend.child)
+		fs.rmSync(userDataDir, { recursive: true, force: true })
+	}
+})
 
 test("sidecar routes use runtime dependencies initialized before ready", async () => {
 	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpet-runtime-bindings-"))

@@ -31,6 +31,25 @@ test('Control Center wraps the Hatch Pet Agent settings PATCH in config', async 
   ])
 })
 
+test('Control Center saves and clears the dedicated Hatch key using the Hatch endpoint', async () => {
+  const { createAiHttpApi } = await import('../../apps/control-center/src/features/ai/api.ts')
+  const { parse } = await import('../../apps/desktop/src/shared/browser-validation.ts')
+  const calls = []
+  const saved = { apiKeyRef: 'ai.hatch-pet', hasApiKey: true, updatedAt: '2026-01-01T00:00:00.000Z' }
+  const cleared = { ...saved, hasApiKey: false }
+  const api = createAiHttpApi({ request: async ({ method, path, body, responseSchema }) => {
+    calls.push({ method, path, body })
+    return parse(responseSchema, method === 'PUT' ? saved : cleared)
+  } })
+
+  assert.deepEqual(await api.saveHatchPetAgentApiKey('fixture-key'), saved)
+  assert.deepEqual(await api.clearHatchPetAgentApiKey(), cleared)
+  assert.deepEqual(calls, [
+    { method: 'PUT', path: '/ai/hatch/key', body: { apiKey: 'fixture-key' } },
+    { method: 'DELETE', path: '/ai/hatch/key', body: undefined }
+  ])
+})
+
 test('AiPane presents quality-first Hatch-pet readiness, budgets, identity checkpoint, and secret reference without secret values', () => {
   const source = read('apps/control-center/src/panes/AiPane.tsx')
   assert.match(source, /质量优先角色生成会在创建 run 前检查此模型的结构化工具能力/)
