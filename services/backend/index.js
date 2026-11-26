@@ -533,6 +533,16 @@ await initializeBackendRuntime({
 				return runtime.plugins.runtimeDirs(pluginId).dataDir
 			}
 			const creatorBridge = {
+				repair: async ({ command, runId, actionId } = {}, { signal } = {}) => {
+					if (command !== "retry-action" && command !== "retry-identity") throw new ApiError("VALIDATION_FAILED", "Invalid Creator repair command")
+					if (typeof runId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(runId)) throw new ApiError("VALIDATION_FAILED", "Invalid Creator repair run id")
+					if (command === "retry-action" && (typeof actionId !== "string" || !/^[a-z][a-z-]*$/.test(actionId))) {
+						throw new ApiError("VALIDATION_FAILED", "Invalid Creator repair action id")
+					}
+					await getHatchAgent().renewBudgetWindow({ runId, reason: command, force: true })
+					const { result } = await runtime.plugins.runCreatorBackendCommand(command, { runId, ...(command === "retry-action" ? { actionId } : {}) }, { signal })
+					return result
+				},
 				modelSettings: (pluginId) => {
 					if (!runtime.ai?.getConfig) throw new ApiError("BACKEND_UNAVAILABLE", "Image model settings are unavailable")
 					const config = runtime.ai.getConfig()

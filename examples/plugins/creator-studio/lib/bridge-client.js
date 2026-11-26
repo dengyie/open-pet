@@ -1,6 +1,7 @@
 const callBridge = async (route, payload = {}, { signal } = {}) => {
-  const baseUrl = process.env.OPENPET_BRIDGE_URL
-  const token = process.env.OPENPET_BRIDGE_TOKEN
+  const hasCommandBridge = process.env.OPENPET_BRIDGE_URL && process.env.OPENPET_BRIDGE_TOKEN
+  const baseUrl = hasCommandBridge ? process.env.OPENPET_BRIDGE_URL : process.env.OPENPET_SERVICE_BRIDGE_URL
+  const token = hasCommandBridge ? process.env.OPENPET_BRIDGE_TOKEN : process.env.OPENPET_SERVICE_BRIDGE_TOKEN
   if (!baseUrl || !token) throw new Error('OpenPet bridge is not available')
   const response = await fetch(`${baseUrl}${route}`, {
     method: 'POST',

@@ -13,7 +13,8 @@ const SAFE_PATH = /^[^\\/][^\0]*$/
 const MAX_NAME = 160
 const MAX_PROMPT = 8_000
 // Allow the 12h 5m Creator Studio run-step deadline plus time for preflight and setup.
-const GENERATE_CHARACTER_TIMEOUT_MS = (12 * 60 + 15) * 60_000
+const CREATOR_GENERATION_TIMEOUT_MS = (12 * 60 + 15) * 60_000
+const LONG_CREATOR_OPERATIONS = new Set(["generate-character", "generate-action", "retry-action", "retry-identity", "accept-identity"])
 const CREATOR_OPERATION_SET = new Set([
 	"pick-reference",
 	"upload-reference",
@@ -202,7 +203,7 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 				{
 					expectedType: "creator.result",
 					expectedOperation: operation,
-					...(operation === "generate-character" ? { timeoutMs: GENERATE_CHARACTER_TIMEOUT_MS, signal } : {}),
+					...(LONG_CREATOR_OPERATIONS.has(operation) ? { timeoutMs: CREATOR_GENERATION_TIMEOUT_MS, signal } : {}),
 				},
 			)
 		} catch (cause) {
@@ -636,7 +637,7 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 	}
 	const runAction = async (input, ctx = {}) => {
 		ctx.report?.({ phase: "preparing", percent: 5 })
-		const result = await authority("generate-action", input)
+		const result = await authority("generate-action", input, ctx.signal)
 		ctx.report?.({ phase: "generating", percent: 65 })
 		return ctx.finalize ? ctx.finalize(() => syncResult(result, input.flowId || null)) : syncResult(result, input.flowId || null)
 	}
@@ -663,7 +664,7 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 			}
 			return ctx.finalize ? await ctx.finalize(finish) : finish()
 		}
-		const result = await authority(operation, input)
+		const result = await authority(operation, input, ctx.signal)
 		ctx.report?.({ phase: "running", percent: 75 })
 		return ctx.finalize ? ctx.finalize(() => syncResult(result, input.flowId || null)) : syncResult(result, input.flowId || null)
 	}
