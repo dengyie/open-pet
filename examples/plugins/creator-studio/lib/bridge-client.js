@@ -39,6 +39,7 @@ const callBridge = async (route, payload = {}, { signal } = {}) => {
     if (Array.isArray(body?.errorDetails?.modelAttempts)) {
       error.modelAttempts = body.errorDetails.modelAttempts
     }
+    if (body?.errorDetails?.completionError) error.completionError = body.errorDetails.completionError
     throw error
   }
   return body

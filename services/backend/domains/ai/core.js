@@ -1,6 +1,6 @@
 import { createRequire } from "node:module"
 import { randomUUID } from "node:crypto"
-import { createAiService } from "./provider.js"
+import { createAiService, StructuredToolArgumentsError } from "./provider.js"
 import { createAiTalkService } from "./talk.js"
 import { createAiTalkStore } from "./talk-store.js"
 import { ApiError } from "../../http/middleware.js"
@@ -9,6 +9,17 @@ const require = createRequire(import.meta.url)
 const { createPetUtteranceLogService } = require("../../../../apps/desktop/src/services/pet-utterance-log-service.js")
 const { createBehaviorOrchestratorService } = require("../../../../apps/desktop/src/services/behavior-orchestrator-service.js")
 const { resolveHatchPetCompletionConfig, createHatchPetAgentPublicConfig } = require("../../../../apps/desktop/src/services/hatch-pet-agent-contracts.js")
+
+function classifyCompletionError(error) {
+  const { providerStatus } = error || {}
+  if (Number.isInteger(providerStatus) && providerStatus >= 400 && providerStatus <= 599) {
+    return { category: "provider_http", upstreamStatus: providerStatus }
+  }
+  if (error?.name === "TimeoutError") return { category: "provider_timeout" }
+  if (error?.name === "ProviderResponseParseError") return { category: "provider_invalid_response" }
+  if (error instanceof StructuredToolArgumentsError) return { category: "tool_arguments" }
+  return { category: "internal" }
+}
 
 export function createAiSettingsAdapter({ settings, mutationAuthority }) {
   const update = (updater) => {
@@ -147,7 +158,16 @@ export function createAiDomain({ settings, secrets, repository, getActivePetPack
         ? provider.getEffectiveVisionConfig()
         : null
     const input = { ...request, signal, ...(configOverride ? { configOverride } : {}) }
-    try { return await provider[method](input) } finally { publishSnapshot() }
+    try {
+      return await provider[method](input)
+    } catch (error) {
+      if (error instanceof ApiError || signal?.aborted) throw error
+      const completionError = classifyCompletionError(error)
+      logger?.warn?.("AI completion failed", { method, capability, completionError })
+      throw new ApiError("INTERNAL", "后端内部错误", { cause: error, details: { completionError } })
+    } finally {
+      publishSnapshot()
+    }
   }
   const dispose = async () => {
     for (const controller of requests.values()) controller.abort()

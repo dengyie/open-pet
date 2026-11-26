@@ -30,7 +30,14 @@ function createAiSidecarProxy({ getBackend, getActivePetPackId, fetchImpl = glob
   const json = async (path, options) => {
     const response = await request(path, options)
     const payload = await response.json()
-    if (!response.ok || payload?.ok !== true) throw Object.assign(new Error(payload?.error?.message || 'AI backend request failed'), { code: payload?.error?.code || 'BACKEND_UNAVAILABLE' })
+    if (!response.ok || payload?.ok !== true) {
+      const error = new Error(payload?.error?.message || 'AI backend request failed')
+      error.code = payload?.error?.code || 'BACKEND_UNAVAILABLE'
+      if (path === '/ai/completions' && payload?.error?.details?.completionError) {
+        error.completionError = payload.error.details.completionError
+      }
+      throw error
+    }
     return payload.data
   }
   const hydrate = async () => {

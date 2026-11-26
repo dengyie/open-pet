@@ -195,7 +195,10 @@ const runQualityFirstAction = async ({
         }
         evaluationFailureCode = executionFailureCode(error, 'candidate-evaluation-failed')
         evaluatorUnavailable = evaluationFailureCode !== 'invalid_sprite_evaluation'
-        Object.assign(candidate, withQa, { gate: { ok: false, outcome: 'cannot-evaluate', failures: [evaluationFailureCode], error: errorSummary(error) } })
+        Object.assign(candidate, withQa, { gate: {
+          ok: false, outcome: 'cannot-evaluate', failures: [evaluationFailureCode], error: errorSummary(error),
+          ...(error?.completionError ? { completionError: error.completionError } : {})
+        } })
         return null
       }
     } else failureCodes.push(...(withQa.qa?.failures || []))

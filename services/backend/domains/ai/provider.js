@@ -169,17 +169,19 @@ const parseChatResult = (data) => {
   }
 }
 
+export class StructuredToolArgumentsError extends Error {}
+
 const parseNamedToolCall = (data, toolName) => {
   const message = data?.choices?.[0]?.message || {}
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls : []
   const match = calls.find((call) => call?.function?.name === toolName)
-  if (!match) throw new Error(`AI provider did not return required tool call: ${toolName}`)
+  if (!match) throw new StructuredToolArgumentsError(`AI provider did not return required tool call: ${toolName}`)
   try {
     const parsed = JSON.parse(String(match.function.arguments || ''))
     if (!isPlainObject(parsed)) throw new Error('arguments must be an object')
     return parsed
   } catch (_) {
-    throw new Error(`AI provider returned invalid tool arguments for ${toolName}`)
+    throw new StructuredToolArgumentsError(`AI provider returned invalid tool arguments for ${toolName}`)
   }
 }
 
@@ -1340,10 +1342,7 @@ const createAiService = ({
           providerCode: error?.providerCode || '',
           durationMs: Date.now() - startedAt,
           elapsedMs: Date.now() - startedAt,
-          errorName: sanitizeDiagnosticText(error?.name || 'Error'),
-          errorMessage: error?.providerStatus
-            ? 'AI provider returned an error response'
-            : sanitizeDiagnosticText(error?.diagnosticMessage || error?.message)
+          errorName: sanitizeDiagnosticText(error?.name || 'Error')
         }
       })
       throw error
@@ -1749,6 +1748,7 @@ const createAiService = ({
           })
         }), linkedSignal)
         const parsed = await readJsonBody(response, linkedSignal, responseLimits.jsonBytes)
+        if (response.ok && !parsed.ok) throw createProviderResponseParseError()
         data = parsed.body
       } catch (error) {
         if (error?.name === 'AbortError' && linkedSignal.isTimeout()) {
@@ -1761,7 +1761,6 @@ const createAiService = ({
 
       if (!response.ok) {
         throw createProviderError({
-          message: data?.error?.message || `AI provider request failed with status ${response.status}`,
           status: response.status,
           code: data?.error?.code
         })
@@ -1792,12 +1791,7 @@ const createAiService = ({
         details: {
           ...baseDetails,
           status: error?.providerStatus || response?.status || 0,
-          providerCode: error?.providerCode || '',
-          elapsedMs: Date.now() - startedAt,
-          errorName: sanitizeDiagnosticText(error?.name || 'Error'),
-          errorMessage: error?.providerStatus
-            ? 'AI provider returned an error response'
-            : sanitizeDiagnosticText(error?.message)
+          elapsedMs: Date.now() - startedAt
         }
       })
       throw error

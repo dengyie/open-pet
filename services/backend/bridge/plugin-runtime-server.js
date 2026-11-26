@@ -334,6 +334,8 @@ export function createPluginRuntimeServer({ shell, plugins, settings, jobs, netw
 				error: error?.message ?? "Plugin runtime request failed",
 				code: error?.code ?? "INTERNAL",
 				...(typeof error?.retryable === "boolean" ? { retryable: error.retryable } : {}),
+				...(error instanceof ApiError && error.details?.completionError
+					? { errorDetails: { completionError: error.details.completionError } } : {}),
 			})
 		} finally {
 			request.off("aborted", abort)

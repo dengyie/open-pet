@@ -66,11 +66,16 @@ const sanitizeQuality = (value) => {
 }
 const sanitizeGate = (value) => {
   if (!value || typeof value !== 'object') return undefined
+  const { category, upstreamStatus } = value.completionError || {}
+  const completionError = category === 'provider_http'
+    ? (Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus <= 599 ? { category, upstreamStatus } : null)
+    : (['provider_timeout', 'provider_invalid_response', 'tool_arguments', 'internal'].includes(category) ? { category } : null)
   return {
     ok: value.ok === true,
     outcome: ['pass', 'repair', 'reject', 'cannot-evaluate'].includes(value.outcome) ? value.outcome : (value.ok === true ? 'pass' : 'reject'),
     failures: sanitizeFailures(value.failures),
-    ...(value.error ? { error: String(value.error).replace(/\s+/g, ' ').slice(0, 240) } : {})
+    ...(value.error ? { error: String(value.error).replace(/\s+/g, ' ').slice(0, 240) } : {}),
+    ...(completionError && value.outcome === 'cannot-evaluate' ? { completionError } : {})
   }
 }
 const sanitizeModelAttempts = (value) => Array.isArray(value) ? value.slice(0, 16).map((attempt) => {
