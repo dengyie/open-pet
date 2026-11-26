@@ -2,12 +2,8 @@ const http = require('http')
 const fs = require('fs')
 const path = require('path')
 const { appendRunLog, listRuns, readRun, readRunLogs, recoverStaleGeneratingRuns, updateRunStatus } = require('../lib/run-store')
-const {
-  runGenerationStep,
-  runQualityFirstActionRepair,
-  runQualityFirstIdentityRetry
-} = require('../lib/backend-runner')
-const { createQualityFirstHostRuntime } = require('../lib/host-model-bridge')
+const { runGenerationStep } = require('../lib/backend-runner')
+const { callBridge } = require('../lib/bridge-client')
 const { repairActionFrameFromGeneratedImage } = require('../lib/action-frame-builder')
 const { assertRunActionFrameQaPassed } = require('../lib/action-frame-qa')
 const { assertRunFullPetQaPassed } = require('../lib/full-pet-qa')
@@ -1925,14 +1921,7 @@ const handlePost = async ({ request, response, dataDir, url }) => {
     if (retryActionMatch) {
       const runId = decodeURIComponent(retryActionMatch[1])
       const actionId = decodeURIComponent(retryActionMatch[2])
-      const run = readRun({ dataDir, runId })
-      if (run.generationTask?.pipeline !== 'quality-first-v1') throw new Error('Legacy full-pet action repair has been removed')
-      const plan = JSON.parse(fs.readFileSync(path.join(dataDir, 'runs', runId, 'sprite-plan.json'), 'utf8'))
-      const profilePath = path.join(dataDir, 'runs', runId, 'character-scale-profile.json')
-      if (actionId !== 'idle' && !fs.existsSync(profilePath)) throw new Error('Quality-first non-idle action repair requires a scale profile')
-      const profile = fs.existsSync(profilePath) ? JSON.parse(fs.readFileSync(profilePath, 'utf8')) : null
-      const runtime = await createQualityFirstHostRuntime({ dataDir, run, planOverride: plan })
-      const output = await runQualityFirstActionRepair({ dataDir, runId, actionId, runtime, plan, profile })
+      const { result: output } = await callBridge('/creator/repair', { command: 'retry-action', runId, actionId })
       sendJson(response, 200, {
         ok: true,
         run: createPublicRun({ dataDir, run: output.run }),
@@ -1947,11 +1936,7 @@ const handlePost = async ({ request, response, dataDir, url }) => {
     const retryIdentityMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/identity\/retry$/)
     if (retryIdentityMatch) {
       const runId = decodeURIComponent(retryIdentityMatch[1])
-      const run = readRun({ dataDir, runId })
-      if (run.generationTask?.pipeline !== 'quality-first-v1') throw new Error('Legacy full-pet identity repair has been removed')
-      const plan = JSON.parse(fs.readFileSync(path.join(dataDir, 'runs', runId, 'sprite-plan.json'), 'utf8'))
-      const runtime = await createQualityFirstHostRuntime({ dataDir, run, planOverride: plan })
-      const output = await runQualityFirstIdentityRetry({ dataDir, runId, orchestrator: runtime.orchestrator, plan, sourceReference: runtime.sourceReference })
+      const { result: output } = await callBridge('/creator/repair', { command: 'retry-identity', runId })
       sendJson(response, 200, {
         ok: true,
         run: createPublicRun({ dataDir, run: output.run }),

@@ -11,6 +11,7 @@ const { sanitizeLogText } = require("../../../apps/desktop/src/services/log-safe
 const HOST = "127.0.0.1"
 const NETWORK_RESPONSE_MAX_BYTES = 128 * 1024
 const CAPABILITY_HEADER = "x-openpet-capability"
+const CREATOR_STUDIO_PLUGIN_ID = "openpet.creator-studio"
 const CAPABILITIES = Object.freeze([
 	"pet:say",
 	"pet:play-action",
@@ -288,6 +289,12 @@ export function createPluginRuntimeServer({ shell, plugins, settings, jobs, netw
 				return
 			}
 			const pathname = new URL(request.url, `http://${HOST}`).pathname
+			if (pathname === "/creator/repair" && session.pluginId === CREATOR_STUDIO_PLUGIN_ID && !request.headers[CAPABILITY_HEADER]) {
+				authorizedPlugin(session.pluginId, "creator:model-image-generate")
+				const result = await requireMethod(creator, "repair", "Creator repair is unavailable")(await readJsonBody(request), { signal: controller.signal })
+				sendJson(response, 200, { ok: true, result })
+				return
+			}
 			const legacyCapability = {
 				"/pet/say": "pet:say",
 				"/pet/action": "pet:play-action",

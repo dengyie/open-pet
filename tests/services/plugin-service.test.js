@@ -4690,6 +4690,55 @@ test('plugin service bridge exposes service-scoped pet routes and expires when s
   assert.deepEqual(expired.body, { ok: false, error: 'Bridge token expired' })
 })
 
+test('Creator Studio dashboard retries through its service bridge and the host command', { timeout: 5_000 }, async (t) => {
+  const pluginId = 'openpet.creator-studio'
+  const serviceChild = createFakeServiceProcess()
+  const commandChild = createFakeServiceProcess({ pid: 4322 })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-studio-repair-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const renewals = []
+  let serviceEnv
+  const command = Promise.withResolvers()
+  const service = createPluginService({
+    settingsService: createSettingsService({ plugins: { enabled: { [pluginId]: true } } }),
+    petService: createBridgeAwarePetService(),
+    officialPlugins: [],
+    pluginDirs: [path.resolve(__dirname, '../../examples/plugins')],
+    hatchPetAgentService: { renewBudgetWindow: (input) => renewals.push(input) },
+    spawnServiceProcess: (_file, _args, { env }) => { serviceEnv = env; return serviceChild },
+    spawnCommandProcess: (file, args) => { command.resolve({ file, args }); return commandChild }
+  })
+  t.after(() => service.stopAllServices())
+  await service.startService(pluginId, 'studio')
+  assert.equal(serviceEnv.OPENPET_BRIDGE_URL, undefined)
+  t.mock.property(process, 'env', serviceEnv)
+  const { createCreatorStudioServer } = require('../../examples/plugins/creator-studio/service/studio-service')
+  const dashboard = createCreatorStudioServer({ dataDir: dir })
+  await new Promise((resolve) => dashboard.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => dashboard.close(resolve)))
+  const run = { runId: 'retained-run', status: 'ready_for_review', input: {} }
+  const pending = fetch(`http://127.0.0.1:${dashboard.address().port}/api/runs/${run.runId}/actions/jumping/retry`, {
+    method: 'POST',
+    body: '{}',
+    headers: { 'content-type': 'application/json' }
+  })
+  const dispatch = await Promise.race([command.promise, pending.then(async (response) => {
+    throw new Error(`Dashboard ended before starting the repair command: ${response.status} ${await response.clone().text()}`)
+  })])
+  const context = JSON.parse(commandChild.stdin.read())
+  const repair = { scope: 'action', actionId: 'jumping' }
+  commandChild.stdout.write(`${JSON.stringify({ ok: true, run, repair })}\n`)
+  commandChild.emit('exit', 0, null)
+  const response = await pending
+  const body = await response.json()
+  assert.ok(dispatch.args.some((arg) => arg.endsWith('commands/retry-action.js')))
+  assert.equal(context.commandId, 'retry-action')
+  assert.deepEqual(context.payload, { runId: run.runId, actionId: 'jumping' })
+  assert.deepEqual(renewals, [{ runId: run.runId, reason: 'retry-action', force: true }])
+  assert.equal(response.status, 200, body.error)
+  assert.deepEqual(body.repair, repair)
+})
+
 test('plugin service bridge pet routes enforce manifest permissions', async () => {
   const spawned = []
   const service = createPluginService({

@@ -111,7 +111,7 @@ const DEFAULT_AGENT_AWARENESS_SIGNAL_MAX_DEPTH = 5
 
 const LOOPBACK_HEALTH_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
 const defaultServiceProcessTree = createServiceProcessTree()
-const SERVICE_BRIDGE_ROUTE_PATTERN = /^\/plugins\/bridge\/([^/]+)\/([^/]+)\/([^/]+)(\/context|\/pet\/say|\/pet\/action|\/pet\/event|\/pet\/attention|\/ai\/chat)$/
+const SERVICE_BRIDGE_ROUTE_PATTERN = /^\/plugins\/bridge\/([^/]+)\/([^/]+)\/([^/]+)(\/context|\/pet\/say|\/pet\/action|\/pet\/event|\/pet\/attention|\/ai\/chat|\/creator\/repair)$/
 const SERVICE_BRIDGE_READ_ONLY_ROUTES = new Map([
   ['/context', 'context']
 ])
@@ -120,7 +120,8 @@ const SERVICE_BRIDGE_JSON_ROUTES = new Map([
   ['/pet/action', 'petAction'],
   ['/pet/event', 'petEvent'],
   ['/pet/attention', 'petAttention'],
-  ['/ai/chat', 'aiChat']
+  ['/ai/chat', 'aiChat'],
+  ['/creator/repair', 'creatorRepair']
 ])
 
 const getDirectoryByteSize = (folderPath) => {
@@ -1165,6 +1166,20 @@ const createPluginService = ({ settingsService, petService, actionService, actio
   const createPluginServiceBridgeHandlers = (plugin, serviceId, bridgeRunId = '') => {
     return {
       ...createPluginPetBridgeHandlers(plugin, `service:${serviceId}`),
+      creatorRepair: async ({ command, runId, actionId } = {}) => {
+        if (plugin.manifest.id !== CREATOR_STUDIO_PLUGIN_ID || serviceId !== 'studio') {
+          throw new Error(`Plugin ${plugin.manifest.id} does not have Creator Studio repair ownership`)
+        }
+        assertPermission(plugin.manifest, 'model:image-generate')
+        if (command !== 'retry-action' && command !== 'retry-identity') throw new Error('Invalid Creator repair command')
+        if (typeof runId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(runId)) throw new Error('Invalid Creator repair run id')
+        if (command === 'retry-action' && (typeof actionId !== 'string' || !/^[a-z][a-z-]*$/.test(actionId))) {
+          throw new Error('Invalid Creator repair action id')
+        }
+        await effectiveHatchPetAgentService?.renewBudgetWindow?.({ runId, reason: command, force: true })
+        const { result } = await runCommand(plugin.manifest.id, command, { runId, ...(command === 'retry-action' ? { actionId } : {}) })
+        return { ok: true, result }
+      },
       aiChat: async (payload = {}, { signal = null } = {}) => {
         assertPermission(plugin.manifest, 'ai:chat')
         if (!aiTalkService?.chatFromEntrypoint) throw new Error('AI talk service is not available')

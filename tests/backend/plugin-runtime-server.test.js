@@ -270,6 +270,24 @@ test("listen exposes a token-bound loopback endpoint and close expires it", asyn
 	await assert.rejects(() => requestJson(listening.url), /ECONNREFUSED|ECONNRESET|socket hang up/)
 })
 
+test("only the Creator Studio service token can request a dashboard repair", async (t) => {
+	const creatorId = "openpet.creator-studio"
+	const otherId = "openpet.other"
+	const calls = []
+	const server = createPluginRuntimeServer({
+		plugins: { get: (id) => ({ id, permissions: ["model:image-generate"] }) },
+		creator: { repair: (payload) => { calls.push(payload); return { repair: true } } },
+	})
+	t.after(() => server.close())
+	const studio = await server.listen({ pluginId: creatorId, token: "creator-token" })
+	const other = await server.listen({ pluginId: otherId, token: "other-token" })
+	const options = { capability: "", path: "/creator/repair", body: { command: "retry-action", runId: "retained", actionId: "jumping" } }
+	assert.equal((await requestJson(other.url, { ...options, token: other.token })).status, 404)
+	assert.equal((await requestJson(studio.url, { ...options, token: studio.token, capability: "creator:model-image-generate" })).status, 404)
+	assert.deepEqual(await requestJson(studio.url, { ...options, token: studio.token }), { status: 200, body: { ok: true, result: { repair: true } } })
+	assert.deepEqual(calls, [options.body])
+})
+
 test("supports concurrent plugin sessions and invalidates only the stopped plugin", async () => {
 	const first = createHarness(["pet:say"])
 	const second = createHarness(["pet:say"])

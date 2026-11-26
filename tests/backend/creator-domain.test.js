@@ -204,6 +204,43 @@ test("Desktop Creator jobs can finish after the dialog deadline or be canceled w
 	assert.equal(repo.byId(canceledJobId).result, null)
 })
 
+test("Retained Desktop Creator action repairs outlive the dialog deadline and can be canceled", async (t) => {
+	const { db } = await fixture()
+	t.after(() => db.close())
+	const [{ createCreatorDomain }, { createShellClient }, { DIALOG_RESULT_TIMEOUT_MS }] = await Promise.all([
+		import("../../services/backend/domains/creator/index.js"),
+		import("../../services/backend/bridge/shell-client.js"),
+		import("../../services/backend/bridge/message-schema.js"),
+	])
+	t.mock.timers.enable({ apis: ["setTimeout"] })
+	let sent
+	const shell = createShellClient({ send: (envelope) => { sent = envelope } })
+	t.after(() => shell.dispose())
+	const runId = "retained-shell-run"
+	const result = { run: { runId, mode: "full-pet", state: "preview-ready" }, availableActionIds: ["jumping"] }
+	const handler = createMessageHandler({
+		send: shell.receive,
+		onCreatorRequest: async ({ operation, payload }) => {
+			assert.equal(operation, "retry-action")
+			assert.equal(payload.runId, runId)
+			return result
+		},
+	})
+	const creator = createCreatorDomain({ db, shell })
+	const input = { operation: "retry-action", runId, actionId: "jumping" }
+	const repair = creator.runWorkflow(input)
+	void repair.catch(() => {})
+	t.mock.timers.tick(DIALOG_RESULT_TIMEOUT_MS + 1)
+	assert.equal(await handler.handle(sent), true)
+	assert.deepEqual(await repair, result)
+
+	const controller = new AbortController()
+	const canceled = assert.rejects(creator.runWorkflow(input, { signal: controller.signal }), { name: "AbortError" })
+	controller.abort()
+	t.mock.timers.tick(DIALOG_RESULT_TIMEOUT_MS)
+	await canceled
+})
+
 test("Creator asset preview round-trips without bypassing metadata redaction", async (t) => {
 	const [
 		{ openDatabase }, { migrate }, { createCreatorDomain }, { createShellClient },
