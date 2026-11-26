@@ -1,7 +1,11 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 
 const { runQualityFirstAction } = require('../../examples/plugins/creator-studio/lib/quality-first-action-runner')
+const { writeCandidateRecord } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
 
 const descriptors = (perceptualHash, offset = 0) => ({
   perceptualHash,
@@ -466,6 +470,26 @@ test('an evaluator outage retains paid assets without requesting a new candidate
   assert.equal(result.failureCode, 'evaluator_unavailable')
   assert.deepEqual(generated, ['candidate-1', 'candidate-2'])
   assert.deepEqual(persisted, generated)
+})
+
+test('cannot-evaluate persists the completion classification without extra diagnostic fields', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-candidate-evaluation-'))
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }))
+  const result = await runQualityFirstAction({
+    context: { actionId: 'waving' }, reserveCreativeDispatch: () => {},
+    generateCandidate: async ({ dispatchIndex }) => ({ descriptors: descriptors(dispatchIndex === 1 ? 'ffff' : '0f0f', dispatchIndex) }),
+    processCandidate: async () => ({ qa: { ok: true, failures: [] } }),
+    evaluateCandidate: async () => {
+      throw Object.assign(new Error('后端内部错误'), {
+        completionError: { category: 'provider_http', upstreamStatus: 503, raw: 'private provider payload' }
+      })
+    },
+    persistCandidate: (candidate) => writeCandidateRecord({ dataDir, runId: 'test-run', scope: 'action-waving', candidate }),
+  })
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'runs/test-run/candidates/action-waving/candidate-1/candidate.json'), 'utf8'))
+  assert.equal(result.failureCode, 'candidate-evaluation-failed')
+  assert.equal(stored.candidate.gate.outcome, 'cannot-evaluate')
+  assert.deepEqual(stored.candidate.gate.completionError, { category: 'provider_http', upstreamStatus: 503 })
 })
 
 test('an invalid evaluation on one idle board does not discard another paid candidate', async () => {
