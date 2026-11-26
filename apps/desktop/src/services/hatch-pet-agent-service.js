@@ -66,6 +66,7 @@ const normalizeText = (value, maxChars = 2000) => String(value || '')
   .slice(0, maxChars)
 
 const sanitizeErrorMessage = (error) => sanitizeLogText(error?.message || error || 'Unknown error', { maxChars: 240 })
+const getCompletionCause = (error) => error?.details?.completionError && error.cause instanceof Error ? error.cause : error
 const createInvalidSpriteEvaluationError = (message) => Object.assign(new Error(`Invalid sprite evaluation: ${message}`), { code: 'invalid_sprite_evaluation' })
 const isInvalidModelDecisionError = (error) => {
   const message = error?.message || ''
@@ -525,7 +526,7 @@ const createHatchPetAgentService = ({
           elapsedMs: Date.now() - startedAt
         }
       } catch (error) {
-        if (attempt < HATCH_PET_CAPABILITY_ATTEMPT_LIMIT && isTransientStructuredProviderError(error)) {
+        if (attempt < HATCH_PET_CAPABILITY_ATTEMPT_LIMIT && isTransientStructuredProviderError(getCompletionCause(error))) {
           recordLog({
             level: 'warn',
             event: 'hatch-pet.capability.retrying',
@@ -798,13 +799,14 @@ const createHatchPetAgentService = ({
           budgetLedger: ledger
         }
       } catch (error) {
-        if (signal?.aborted || error?.name === 'AbortError') throw error
+        const cause = getCompletionCause(error)
+        if (signal?.aborted || cause?.name === 'AbortError') throw error
         const canRetry = attempt + 1 < attemptLimit
-        if (isInvalidSpriteEvaluationError(error) && canRetry) {
-          repairReason = error.message
+        if (isInvalidSpriteEvaluationError(cause) && canRetry) {
+          repairReason = cause.message
           continue
         }
-        if (isTransientStructuredProviderError(error) && canRetry && !transientRetryUsed) {
+        if (isTransientStructuredProviderError(cause) && canRetry && !transientRetryUsed) {
           transientRetryUsed = true
           useVisionCapability = false
           recordLog({
@@ -874,12 +876,13 @@ const createHatchPetAgentService = ({
           budgetLedger: ledger
         }
       } catch (error) {
-        if (signal?.aborted || error?.name === 'AbortError') throw error
-        if (!isInvalidSpritePlanError(error) || attempt === 1) {
+        const cause = getCompletionCause(error)
+        if (signal?.aborted || cause?.name === 'AbortError') throw error
+        if (!isInvalidSpritePlanError(cause) || attempt === 1) {
           error.budgetLedger = ledger
           throw error
         }
-        repairReason = error.message
+        repairReason = cause.message
       }
     }
     throw new Error('Sprite planner exhausted its repair attempts')
@@ -1008,14 +1011,15 @@ const createHatchPetAgentService = ({
       try {
         requested = await requestDecision({ snapshot, legalDecisions, completionConfig, signal })
       } catch (error) {
-        if (!isInvalidModelDecisionError(error)) throw error
+        const cause = getCompletionCause(error)
+        if (!isInvalidModelDecisionError(cause)) throw error
         reserveShadowPlannerCall()
         requested = await requestDecision({
           snapshot,
           legalDecisions,
           completionConfig,
           signal,
-          repairReason: error.message
+          repairReason: cause.message
         })
       }
 
@@ -1076,7 +1080,7 @@ const createHatchPetAgentService = ({
       // 预算耗尽与模型返回非法是两类不同的失败：分开上报，运维才能区分
       // "用满配额"和"模型不合规"。
       const budgetCode = String(error?.code || '')
-      const resultCode = isInvalidModelDecisionError(error)
+      const resultCode = isInvalidModelDecisionError(getCompletionCause(error))
         ? 'invalid_model_decision'
         : (budgetCode.startsWith('hatch_pet_') && budgetCode.includes('budget') ? budgetCode : 'hatch_pet_shadow_failed')
       try {

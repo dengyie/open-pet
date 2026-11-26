@@ -1,11 +1,16 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const { createServer } = require('node:http')
+const fs = require('node:fs/promises')
+const os = require('node:os')
+const path = require('node:path')
+const sharp = require('sharp')
 const { createAiSidecarProxy } = require('../../apps/desktop/src/services/ai-sidecar-proxy')
+const { createHatchPetAgentService } = require('../../apps/desktop/src/services/hatch-pet-agent-service')
 const { createPluginCommandBridgeServer, createPluginBridgeKey } = require('../../apps/desktop/src/services/plugin-command-bridge-server')
 const { callBridge } = require('../../examples/plugins/creator-studio/lib/bridge-client')
 
-async function setup(t, { providerResponse } = {}) {
+async function setup(t, { providerResponse, hatchEnabled = false } = {}) {
   const { createAiDomain } = await import('../../services/backend/domains/ai/core.js')
   const { createEmptyState } = await import('../../services/backend/domains/ai/talk-store.js')
   const { createRouter } = await import('../../services/backend/http/router.js')
@@ -17,6 +22,7 @@ async function setup(t, { providerResponse } = {}) {
     provider: 'openai-compatible',
     baseUrl: 'https://chat.example/v1',
     model: 'chat-model',
+    hatchPet: { enabled: hatchEnabled },
     vision: { mode: 'override', provider: 'openai-compatible', baseUrl: 'https://vision.example/v1', model: 'vision-model', apiKeyRef: 'ai.vision' }
   } } }
   const calls = []
@@ -161,5 +167,49 @@ test('Creator evaluator bridge preserves completion categories in Desktop and re
     else process.env.OPENPET_BRIDGE_URL = previousUrl
     if (previousToken === undefined) delete process.env.OPENPET_BRIDGE_TOKEN
     else process.env.OPENPET_BRIDGE_TOKEN = previousToken
+  }
+})
+
+test('resident Hatch evaluation still falls back on upstream 503 and repairs bad tool arguments', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openpet-resident-evaluator-'))
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }))
+  const boardPath = path.join(dataDir, 'board.png')
+  await sharp({ create: { width: 8, height: 8, channels: 4, background: '#fff' } }).png().toFile(boardPath)
+  const scores = { identity: 96, silhouette: 94, smallScale: 90, completeness: 98, style: 92, overall: 94 }
+  const scoreEvidence = Object.fromEntries(Object.keys(scores).map(key => [key, { regionId: 'source', observation: 'Visible on review board' }]))
+  const toolResponse = (args) => Response.json({ choices: [{ message: { tool_calls: [{
+    function: { name: 'hatch_pet_sprite_evaluation', arguments: args },
+  }] } }] })
+  const validArguments = JSON.stringify({ schemaVersion: 1, recommendation: 'pass', confidence: 0.95, scores, scoreEvidence, defects: [] })
+
+  for (const [label, firstResponse, retryModel] of [
+    ['upstream-503', () => new Response(null, { status: 503 }), 'chat-model'],
+    ['bad-arguments', () => toolResponse('{'), 'vision-model'],
+  ]) {
+    await t.test(label, async (t) => {
+      let attempt = 0
+      const { domain, calls } = await setup(t, { hatchEnabled: true, providerResponse: () => attempt++ === 0 ? firstResponse() : toolResponse(validArguments) })
+      const complete = (capability) => ({ signal, configOverride: _ignored, ...request }) => domain.complete({ method: 'completeStructuredTool', capability, request }, { signal })
+      const service = createHatchPetAgentService({
+        aiService: {
+          completeStructuredTool: complete('hatch-pet'),
+          completeStructuredVisionTool: complete('hatch-pet-vision'),
+        },
+        configuration: {
+          getAiConfig: () => domain.provider.getConfig(),
+          getConfig: () => domain.getHatchConfig(),
+        },
+        pluginService: { getPluginCreatorDataDir: () => dataDir },
+      })
+      const result = await service.evaluateSprite({
+        runId: label, scope: 'canonical',
+        board: { path: boardPath, sha256: 'a'.repeat(64), regions: [{ regionId: 'source' }, { regionId: 'candidate-1' }] },
+        qa: { ok: true },
+      })
+      assert.equal(result.gate.outcome, 'pass')
+      assert.equal(result.budgetLedger.usage.evaluatorCalls, 2)
+      assert.deepEqual(calls.map(({ options }) => JSON.parse(options.body).model), ['vision-model', retryModel])
+      if (label === 'bad-arguments') assert.match(calls[1].options.body, /previous evaluation was invalid/i)
+    })
   }
 })
