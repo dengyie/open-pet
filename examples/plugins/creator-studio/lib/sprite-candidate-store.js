@@ -69,7 +69,7 @@ const sanitizeGate = (value) => {
   const { category, upstreamStatus } = value.completionError || {}
   const completionError = category === 'provider_http'
     ? (Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus <= 599 ? { category, upstreamStatus } : null)
-    : (['provider_timeout', 'tool_arguments', 'internal'].includes(category) ? { category } : null)
+    : (['provider_timeout', 'provider_invalid_response', 'tool_arguments', 'internal'].includes(category) ? { category } : null)
   return {
     ok: value.ok === true,
     outcome: ['pass', 'repair', 'reject', 'cannot-evaluate'].includes(value.outcome) ? value.outcome : (value.ok === true ? 'pass' : 'reject'),

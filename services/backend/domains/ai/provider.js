@@ -1748,6 +1748,7 @@ const createAiService = ({
           })
         }), linkedSignal)
         const parsed = await readJsonBody(response, linkedSignal, responseLimits.jsonBytes)
+        if (response.ok && !parsed.ok) throw createProviderResponseParseError()
         data = parsed.body
       } catch (error) {
         if (error?.name === 'AbortError' && linkedSignal.isTimeout()) {

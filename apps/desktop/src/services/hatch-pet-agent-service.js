@@ -70,14 +70,16 @@ const getCompletionCause = (error) => error?.details?.completionError && error.c
 const createInvalidSpriteEvaluationError = (message) => Object.assign(new Error(`Invalid sprite evaluation: ${message}`), { code: 'invalid_sprite_evaluation' })
 const isInvalidModelDecisionError = (error) => {
   const message = error?.message || ''
-  return /^Invalid hatch-pet decision:/.test(message) ||
+  return error?.name === 'ProviderResponseParseError' ||
+    /^Invalid hatch-pet decision:/.test(message) ||
     message === `AI provider did not return required tool call: ${HATCH_PET_DECISION_TOOL_NAME}` ||
     message === `AI provider returned invalid tool arguments for ${HATCH_PET_DECISION_TOOL_NAME}`
 }
 
 const isInvalidSpriteEvaluationError = (error) => {
   const message = error?.message || ''
-  return error?.code === 'invalid_sprite_evaluation' ||
+  return error?.name === 'ProviderResponseParseError' ||
+    error?.code === 'invalid_sprite_evaluation' ||
     /^Invalid sprite evaluation:/.test(message) ||
     message === 'AI provider did not return required tool call: hatch_pet_sprite_evaluation' ||
     message === 'AI provider returned invalid tool arguments for hatch_pet_sprite_evaluation'
@@ -120,7 +122,8 @@ const createInvalidSpritePlanError = (message) => {
 }
 const isInvalidSpritePlanError = (error) => {
   const message = error?.message || ''
-  return error?.code === 'invalid_sprite_plan' ||
+  return error?.name === 'ProviderResponseParseError' ||
+    error?.code === 'invalid_sprite_plan' ||
     /^Invalid sprite plan:/.test(message) ||
     message === `AI provider did not return required tool call: ${HATCH_PET_SPRITE_PLAN_TOOL_NAME}` ||
     message === `AI provider returned invalid tool arguments for ${HATCH_PET_SPRITE_PLAN_TOOL_NAME}`

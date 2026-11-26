@@ -16,6 +16,7 @@ function classifyCompletionError(error) {
     return { category: "provider_http", upstreamStatus: providerStatus }
   }
   if (error?.name === "TimeoutError") return { category: "provider_timeout" }
+  if (error?.name === "ProviderResponseParseError") return { category: "provider_invalid_response" }
   if (error instanceof StructuredToolArgumentsError) return { category: "tool_arguments" }
   return { category: "internal" }
 }

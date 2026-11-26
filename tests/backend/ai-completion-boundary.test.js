@@ -104,6 +104,7 @@ test('Hatch completions distinguish upstream HTTP failures from invalid tool arg
   const responses = [
     [Response.json({ error: { message: 'private provider payload' } }, { status: 503 }), { category: 'provider_http', upstreamStatus: 503 }],
     [Response.json({ error: { message: 'private provider payload' } }, { status: 429 }), { category: 'provider_http', upstreamStatus: 429 }],
+    [new Response('<html>private provider payload</html>', { status: 200 }), { category: 'provider_invalid_response' }],
     [Response.json({ choices: [{ message: { tool_calls: [{ function: { name: 'inspect', arguments: 'private provider payload' } }] } }] }), { category: 'tool_arguments' }],
     [Object.assign(new Error('private provider payload'), { name: 'TimeoutError' }), { category: 'provider_timeout' }],
     [new Error('private provider payload'), { category: 'internal' }],
@@ -185,6 +186,7 @@ test('resident Hatch evaluation still falls back on upstream 503 and repairs bad
   for (const [label, firstResponse, retryModel] of [
     ['upstream-503', () => new Response(null, { status: 503 }), 'chat-model'],
     ['bad-arguments', () => toolResponse('{'), 'vision-model'],
+    ['non-json-response', () => new Response('<html>not JSON</html>', { status: 200 }), 'vision-model'],
   ]) {
     await t.test(label, async (t) => {
       let attempt = 0
@@ -209,7 +211,7 @@ test('resident Hatch evaluation still falls back on upstream 503 and repairs bad
       assert.equal(result.gate.outcome, 'pass')
       assert.equal(result.budgetLedger.usage.evaluatorCalls, 2)
       assert.deepEqual(calls.map(({ options }) => JSON.parse(options.body).model), ['vision-model', retryModel])
-      if (label === 'bad-arguments') assert.match(calls[1].options.body, /previous evaluation was invalid/i)
+      if (retryModel === 'vision-model') assert.match(calls[1].options.body, /previous evaluation was invalid/i)
     })
   }
 })
