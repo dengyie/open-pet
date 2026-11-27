@@ -296,8 +296,19 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 
 	const syncResult = (result, flowId = null) => {
 		const candidate = result?.run || result?.result?.run || result
-		if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate.runId || candidate.id)) saveRun(candidate, flowId)
+		if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && (candidate.runId || candidate.id)) {
+			saveRun(result?.state === "cancelled" ? { ...candidate, status: "cancelled" } : candidate, flowId)
+		}
 		return redact(result)
+	}
+	const finishShellWorkflow = (result, flowId, ctx, progress) => {
+		const sync = () => syncResult(result, flowId || null)
+		if (result?.state === "cancelled" && result.code === "native_execution_revoked") {
+			const cancellation = sync()
+			return ctx.cancelWithResult ? ctx.cancelWithResult(cancellation) : cancellation
+		}
+		ctx.report?.(progress)
+		return ctx.finalize ? ctx.finalize(sync) : sync()
 	}
 
 	const listFlows = () => db.prepare("SELECT * FROM creator_flows WHERE owner = ? ORDER BY updated_at DESC, id ASC").all(owner).map(publicFlow)
@@ -632,14 +643,12 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 		}
 		ctx.report?.({ phase: "preparing", percent: 5 })
 		const result = await authority("generate-character", input, ctx.signal)
-		ctx.report?.({ phase: "generating", percent: 65 })
-		return ctx.finalize ? ctx.finalize(() => syncResult(result, input.flowId || null)) : syncResult(result, input.flowId || null)
+		return finishShellWorkflow(result, input.flowId, ctx, { phase: "generating", percent: 65 })
 	}
 	const runAction = async (input, ctx = {}) => {
 		ctx.report?.({ phase: "preparing", percent: 5 })
 		const result = await authority("generate-action", input, ctx.signal)
-		ctx.report?.({ phase: "generating", percent: 65 })
-		return ctx.finalize ? ctx.finalize(() => syncResult(result, input.flowId || null)) : syncResult(result, input.flowId || null)
+		return finishShellWorkflow(result, input.flowId, ctx, { phase: "generating", percent: 65 })
 	}
 	const runWorkflow = async (input, ctx = {}) => {
 		ctx.report?.({ phase: "running", percent: 10 })
@@ -665,8 +674,7 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 			return ctx.finalize ? await ctx.finalize(finish) : finish()
 		}
 		const result = await authority(operation, input, ctx.signal)
-		ctx.report?.({ phase: "running", percent: 75 })
-		return ctx.finalize ? ctx.finalize(() => syncResult(result, input.flowId || null)) : syncResult(result, input.flowId || null)
+		return finishShellWorkflow(result, input.flowId, ctx, { phase: "running", percent: 75 })
 	}
 	const runExport = async (input, ctx = {}) => {
 		const runId = safeId(input.runId, "runId")

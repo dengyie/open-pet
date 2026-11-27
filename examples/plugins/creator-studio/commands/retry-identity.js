@@ -10,7 +10,7 @@ runCommand(async (context) => {
   const runId = resolveRunId({
     dataDir: process.env.OPENPET_DATA_DIR,
     runId: context.payload?.runId,
-    statuses: ['failed', 'ready_for_review', 'recovery-required', 'awaiting_identity_review'],
+    statuses: ['failed', 'cancelled', 'ready_for_review', 'recovery-required', 'awaiting_identity_review'],
     description: 'failed or reviewable full-pet'
   })
   const run = readRun({ dataDir: process.env.OPENPET_DATA_DIR, runId })

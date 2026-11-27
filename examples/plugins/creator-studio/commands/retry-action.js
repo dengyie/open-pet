@@ -10,7 +10,7 @@ runCommand(async (context) => {
   const runId = resolveRunId({
     dataDir: process.env.OPENPET_DATA_DIR,
     runId: context.payload?.runId,
-    statuses: ['failed', 'ready_for_review', 'recovery-required'],
+    statuses: ['failed', 'cancelled', 'ready_for_review', 'recovery-required'],
     description: 'failed or reviewable full-pet'
   })
   const actionId = String(context.payload?.actionId || '').trim()

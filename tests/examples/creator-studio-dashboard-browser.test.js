@@ -1524,6 +1524,40 @@ test('creator studio dashboard shows imported action handoff failure details', a
   }
 })
 
+for (const scenario of ['with a packaged atlas', 'without a packaged atlas', 'before idle recovery']) test(`creator studio dashboard retains targeted repair controls for a cancelled run ${scenario}`, async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-cancelled-repair-'))
+  const run = await seedImportedFullPetRun(dataDir)
+  const idlePending = scenario === 'before idle recovery'
+  const runDir = path.join(dataDir, 'runs', run.runId)
+  fs.writeFileSync(path.join(runDir, 'sprite-plan.json'), '{}')
+  if (!idlePending) fs.writeFileSync(path.join(runDir, 'character-scale-profile.json'), JSON.stringify({ hash: 'a'.repeat(64) }))
+  const previousRun = readRun({ dataDir, runId: run.runId })
+  writeRun({ dataDir, run: {
+    ...previousRun,
+    status: 'cancelled',
+    currentStep: 'generate',
+    importStatus: 'not-imported',
+    importedPackId: '',
+    activatedPackId: '',
+    generationTask: { ...previousRun.generationTask, pipeline: 'quality-first-v1' },
+    qualityFirst: {
+      acceptedCanonical: { candidateId: 'canonical-1', sha256: 'a'.repeat(64) },
+      actionResults: idlePending
+        ? {}
+        : { idle: { ok: true }, waving: { ok: false, failureCode: 'identity-descriptor-distance-high' } },
+      omittedActionIds: idlePending ? ['idle', 'waving'] : ['waving']
+    },
+    artifacts: scenario === 'with a packaged atlas' ? previousRun.artifacts : {}
+  } })
+  const server = await openDashboardServer(dataDir, t)
+  const { page } = await openDashboardPage(server, t)
+  const panel = page.locator('#full-pet-review-panel')
+
+  assert.equal(await panel.locator('[data-retry-pet-action="waving"]').count(), idlePending ? 0 : 1)
+  assert.equal(await panel.locator('[data-retry-pet-action="idle"]').count(), idlePending ? 1 : 0)
+  assert.equal(await panel.locator('[data-retry-pet-identity]').count(), 1)
+})
+
 test('creator studio dashboard shows imported full-pet review completion details', async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-browser-imported-full-pet-'))
   await seedImportedFullPetRun(dataDir)
@@ -2224,6 +2258,17 @@ test('creator studio dashboard enables retry generation for failed legacy runs w
     await browser.close()
     await new Promise((resolve) => server.close(resolve))
   }
+})
+
+test('creator studio dashboard directs a cancelled provider generation back to Create', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-browser-cancelled-provider-'))
+  const run = seedLegacyFailedRunWithoutTask(dataDir)
+  updateRunStatus({ dataDir, runId: run.runId, status: 'cancelled', patch: { generationTask: run.generationTask } })
+  const server = await openDashboardServer(dataDir, t)
+  const { page } = await openDashboardPage(server, t)
+
+  assert.equal(await page.locator('#generate-button').isDisabled(), true)
+  assert.match(await page.locator('#next-step-panel').textContent(), /Control Center.*Create/)
 })
 
 test('creator studio dashboard enables retry generation for failed legacy full-pet runs without generationTask', async (t) => {

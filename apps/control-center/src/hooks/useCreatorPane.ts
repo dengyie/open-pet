@@ -87,6 +87,7 @@ const formatWorkflowStateFallback = (state: CreatorWorkflowResult['state'] | str
   if (state === 'generating') return '进行中'
   if (state === 'provider-not-ready') return 'Provider 未就绪'
   if (state === 'hatch-pet-not-ready') return '生成前置检查失败'
+  if (state === 'cancelled') return '已取消'
   if (state === 'review-required') return '需要复查'
   if (state === 'preview-ready') return '预览就绪'
   if (state === 'import-failed') return '导入失败'
@@ -168,7 +169,41 @@ export function useCreatorPane(active: boolean) {
   }, [active, running])
 
   const syncAfterWorkflow = async (nextResult: CreatorWorkflowResult) => {
-    setResult(nextResult)
+    setResult((current) => {
+      const cancelledRetry = nextResult.state === 'cancelled' &&
+        nextResult.code === 'native_execution_revoked' &&
+        nextResult.run?.commandId === 'retry-action'
+      if (cancelledRetry && current?.run?.mode === 'full-pet' &&
+        current.run.runId && current.run.runId === nextResult.run?.runId &&
+        ['review-required', 'preview-ready', 'completed', 'import-failed'].includes(current.state)) {
+        const progress = nextResult.diagnostics?.progress
+        if (progress) {
+          const repaired = new Set([
+            ...(nextResult.availableActionIds || progress.availableActionIds || []),
+            ...(progress.actions || []).filter((action) => action.status === 'passed' || action.status === 'mirrored')
+              .map((action) => action.actionId)
+          ])
+          const failedActionIds = [...new Set([
+            ...(nextResult.failedActionIds || progress.failedActionIds || []),
+            ...(current.failedActionIds || []),
+            ...(current.diagnostics?.progress?.failedActionIds || []),
+            ...(current.basicActions?.omittedActionIds || []),
+            ...(current.basicActions?.missingRequiredOfficialActionIds || [])
+          ])].filter((actionId) => !repaired.has(actionId))
+          return {
+            ...nextResult,
+            state: current.state,
+            activePet: current.activePet,
+            importedAction: current.importedAction,
+            clickAction: current.clickAction,
+            clickActionChange: current.clickActionChange,
+            failedActionIds
+          }
+        }
+        return { ...current, message: nextResult.message }
+      }
+      return nextResult
+    })
     setStatus(nextResult.message || '')
     setCreatorState((current) => cloneCreatorState({
       ...current,

@@ -8,7 +8,7 @@ const { inferAnimationType, isWorkStateAction } = require('../../../../examples/
 const { normalizeSingleActionContract } = require('../../../../examples/plugins/creator-studio/lib/single-action-contract.js')
 const { getQualityFirstQualityProfile } = require('../../../../examples/plugins/creator-studio/lib/pet-generation-quality-profile.js')
 const {
-  failGeneratingRunAfterCommandTermination
+  settleGeneratingRunAfterCommandTermination
 } = require('../../../../examples/plugins/creator-studio/lib/run-store.js')
 
 const CREATOR_STUDIO_PLUGIN_ID = 'openpet.creator-studio'
@@ -22,6 +22,7 @@ const CREATOR_STUDIO_ACCEPT_IDENTITY_COMMAND_ID = 'accept-identity'
 const CREATOR_STUDIO_ACCEPT_ACTION_CANDIDATE_COMMAND_ID = 'accept-action-candidate'
 const CREATOR_STUDIO_RETRY_ACTION_COMMAND_ID = 'retry-action'
 const CREATOR_STUDIO_RETRY_IDENTITY_COMMAND_ID = 'retry-identity'
+const CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE = '已撤销 Creator Studio 的本机执行授权，生成已取消。'
 
 const EDITABLE_TARGET_TYPE = 'editable-action-host'
 const EDITABLE_TARGET_ID = 'legacy-editable-host'
@@ -1368,6 +1369,7 @@ const createStageViews = ({
   const review = normalizeText(reviewStatus)
   const imported = normalizeText(importStatus)
   const failed = status === 'failed'
+  const cancelled = status === 'cancelled'
   const readyForReview = status === 'ready_for_review'
   const approved = status === 'approved'
   const isImported = status === 'imported' || imported === 'imported'
@@ -1375,6 +1377,7 @@ const createStageViews = ({
     task === 'confirmed' &&
     !readyForReview &&
     !failed &&
+    !cancelled &&
     !approved &&
     !isImported &&
     (status === 'draft' || status === '' || step === 'generate')
@@ -1393,7 +1396,7 @@ const createStageViews = ({
     import: 'pending'
   }
 
-  if (confirmed && !readyForReview && !approved && !isImported && !failed) {
+  if (confirmed && !readyForReview && !approved && !isImported && !failed && !cancelled) {
     stageStatus.generate = generating || step === 'generate' ? 'active' : 'pending'
   }
 
@@ -1420,6 +1423,9 @@ const createStageViews = ({
       stageStatus.review = 'pending'
       stageStatus.import = 'skipped'
     }
+  }
+  if (cancelled) {
+    stageStatus.generate = 'skipped'
   }
 
   return WORKFLOW_STAGE_DEFS.map((stage) => ({
@@ -1890,7 +1896,7 @@ const createRunFailureReason = (run = {}) => {
   const status = normalizeText(run?.status)
   const backendState = normalizeText(run?.backendStatus?.state)
   const generatedFailure = run?.artifacts?.generatedImage?.failure?.message
-  const rawFailure = generatedFailure || run?.error || (
+  const rawFailure = status === 'cancelled' ? run?.backendStatus?.message || run?.error : generatedFailure || run?.error || (
     status === 'failed' || backendState === 'failed'
       ? run?.backendStatus?.message
       : ''
@@ -2025,7 +2031,9 @@ const createWorkflowProgressView = ({
   const runningAction = actions.find((action) => action.status === 'running')
 
   let summary = ''
-  if (qualityFirst?.phase === 'planning-failed') {
+  if (runStatus === 'cancelled') {
+    summary = failureReason || '生成已取消'
+  } else if (qualityFirst?.phase === 'planning-failed') {
     summary = `动作规划失败（${qualityFirst.failureCode}）；可在恢复规划服务后重试生成`
   } else if (qualityFirst?.phase === 'awaiting_identity_review') {
     summary = `等待人工确认 canonical identity（${qualityFirst.eligibleCandidateCount}/${qualityFirst.candidateCount} 个候选可用）`
@@ -2073,16 +2081,18 @@ const createWorkflowProgressView = ({
       : 'full'
 
   return {
-    phase: qualityFirst?.phase || normalizeText(activeStage?.id) || 'generate',
-    phaseLabel: qualityFirst?.phase === 'planning' || qualityFirst?.phase === 'planning-failed'
-      ? '动作规划'
-      : qualityFirst?.phase === 'awaiting_identity_review'
-        ? '身份候选审查'
-        : qualityFirst?.phase === 'identity-generation-failed'
-          ? '身份候选生成失败'
-          : qualityFirst?.phase === 'recovery-required'
-            ? '资产恢复'
-            : normalizeText(activeStage?.label) || '生成资源',
+    phase: runStatus === 'cancelled' ? 'cancelled' : qualityFirst?.phase || normalizeText(activeStage?.id) || 'generate',
+    phaseLabel: runStatus === 'cancelled'
+      ? '已取消'
+      : qualityFirst?.phase === 'planning' || qualityFirst?.phase === 'planning-failed'
+        ? '动作规划'
+        : qualityFirst?.phase === 'awaiting_identity_review'
+          ? '身份候选审查'
+          : qualityFirst?.phase === 'identity-generation-failed'
+            ? '身份候选生成失败'
+            : qualityFirst?.phase === 'recovery-required'
+              ? '资产恢复'
+              : normalizeText(activeStage?.label) || '生成资源',
     summary: sanitizeProgressReason(summary) || '生成进度更新中',
     stages,
     actions,
@@ -2571,6 +2581,30 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         setLastRun(result.run)
       }
       return result
+    } catch (error) {
+      if (error?.code !== 'CREATOR_NATIVE_APPROVAL_REVOKED') throw error
+      const { runId, commandId } = activeWorkflow
+      const reason = CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE
+      let diagnostics = null
+      if (runId) {
+        const pluginDataDir = pluginService.getPluginCreatorDataDir(CREATOR_STUDIO_PLUGIN_ID)
+        settleGeneratingRunAfterCommandTermination({
+          dataDir: pluginDataDir,
+          runId,
+          cancellationReason: reason,
+          now: () => new Date(nowMs()).toISOString()
+        })
+        diagnostics = readWorkflowDiagnostics({ pluginDataDir, runId })
+      }
+      const result = createWorkflowResult({
+        state: 'cancelled',
+        code: 'native_execution_revoked',
+        message: reason,
+        run: runId ? createRunView({ state: 'cancelled', mode, runId, commandId, message: reason, diagnostics }) : null,
+        diagnostics
+      })
+      setLastRun(result.run)
+      return result
     } finally {
       clearWorkflow()
     }
@@ -2700,11 +2734,12 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           decisionId: normalizeText(hatchPetAgentShadow.decisionId).slice(0, 128)
         }
       : null
-    const getWorkflowDiagnostics = ({ settleTerminatedCommand = false } = {}) => {
+    const getWorkflowDiagnostics = ({ settleTerminatedCommand = false, cancellationReason } = {}) => {
       if (settleTerminatedCommand && runId) {
-        failGeneratingRunAfterCommandTermination({
+        settleGeneratingRunAfterCommandTermination({
           dataDir: pluginDataDir,
           runId,
+          cancellationReason,
           now: () => new Date(nowMs()).toISOString()
         })
       }
@@ -2965,26 +3000,34 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         'image_prompt_contract_invalid',
         'image_prompt_internal_term'
       ])
-      const failureCode = contractFailureCodes.has(normalizeText(error?.code))
-        ? normalizeText(error.code)
-        : 'workflow_failed'
+      const approvalRevoked = error?.code === 'CREATOR_NATIVE_APPROVAL_REVOKED'
+      const state = approvalRevoked ? 'cancelled' : 'review-required'
+      const failureCode = approvalRevoked
+        ? 'native_execution_revoked'
+        : contractFailureCodes.has(normalizeText(error?.code)) ? normalizeText(error.code) : 'workflow_failed'
+      const reason = approvalRevoked ? CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE : error.message
+      const diagnostics = getWorkflowDiagnostics({
+        settleTerminatedCommand: true,
+        cancellationReason: approvalRevoked ? reason : undefined
+      })
       const result = createWorkflowResult({
-        state: 'review-required',
+        state,
         code: failureCode,
-        message: runId
-          ? `生成流程在 run ${runId} 失败：${error.message || '未知错误'}。可到 Creator Studio 查看详情。`
-          : (error.message || 'Creator workflow failed'),
+        message: approvalRevoked ? reason : runId
+          ? `生成流程在 run ${runId} 失败：${reason || '未知错误'}。可到 Creator Studio 查看详情。`
+          : (reason || 'Creator workflow failed'),
         run: runId
           ? createRunView({
-              state: 'review-required',
+              state,
               mode,
               runId,
               commandId: activeCommandId || lastCommandResult?.commandId,
-              message: error.message || getCommandMessage(lastCommandResult, 'Workflow failed')
+              message: reason || getCommandMessage(lastCommandResult, 'Workflow failed'),
+              ...(approvalRevoked ? { diagnostics } : {})
             })
           : null,
         reference: creatorReferenceService.getReference(referenceTarget),
-        diagnostics: getWorkflowDiagnostics({ settleTerminatedCommand: true })
+        diagnostics
       })
       setLastRun(result.run)
       return result

@@ -273,6 +273,14 @@ const createCreatorStudioDefaultFlowService = ({
           errorMessage: sanitizeLogText(error?.message || '', { maxChars: 240 })
         }
       })
+      if (error?.code === 'CREATOR_NATIVE_APPROVAL_REVOKED') {
+        return createStructuredResult({
+          state: 'cancelled',
+          runId: lastRunId,
+          lastCommandResult,
+          message: '已撤销 Creator Studio 的本机执行授权，生成已取消。'
+        })
+      }
       if (lastRunId) {
         return createStructuredResult({
           state: 'needs_details',

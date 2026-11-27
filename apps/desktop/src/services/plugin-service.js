@@ -58,6 +58,11 @@ const MIN_PLUGIN_SERVICE_HEALTH_INTERVAL_MS = 15000
 const DEFAULT_PLUGIN_SERVICE_HEALTH_INTERVAL_MS = 30000
 const MAX_PLUGIN_SERVICE_HEALTH_INTERVAL_MS = 300000
 const CREATOR_STUDIO_PLUGIN_ID = 'openpet.creator-studio'
+const CREATOR_NATIVE_APPROVAL_REVOKED = {
+  reason: 'Creator Studio native execution approval was revoked',
+  code: 'CREATOR_NATIVE_APPROVAL_REVOKED',
+  signal: 'SIGKILL'
+}
 const TRIGGER_PROPOSAL_TYPES = new Set(['manual', 'click', 'random', 'state', 'event', 'unbound'])
 const createPluginServiceKey = (pluginId, serviceId) => `${pluginId}:${serviceId}`
 const parsePluginServiceKey = (key) => {
@@ -67,7 +72,6 @@ const parsePluginServiceKey = (key) => {
 
 const ACTIVE_SERVICE_STATUSES = ACTIVE_PLUGIN_RUNTIME_STATUSES
 const ACTIVE_SETUP_STATUSES = ACTIVE_PLUGIN_RUNTIME_STATUSES
-const ACTIVE_COMMAND_STATUSES = ACTIVE_PLUGIN_RUNTIME_STATUSES
 const AGENT_AWARENESS_PLUGIN_ID = 'openpet.agent-awareness'
 const AGENT_AWARENESS_SERVICE_ID = 'agent-awareness'
 const sanitizePluginHealthDetailLabel = (value = '') => sanitizePluginCommandText(value, {
@@ -982,7 +986,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       appendLog({ pluginId: plugin.manifest.id, commandId, level: 'info', message: 'Bridge creator.model-health-check invoked' })
       return { ok: true, result: await imageGenerationModelService.checkHealth({}) }
     },
-    creatorModelImageGenerate: async (payload = {}) => {
+    creatorModelImageGenerate: async (payload = {}, { signal } = {}) => {
       assertPermission(plugin.manifest, 'model:image-generate')
       if (!imageGenerationModelService?.generateImage) throw new Error('Creator model image generation is not available')
       appendLog({ pluginId: plugin.manifest.id, commandId, level: 'info', message: 'Bridge creator.model-image-generate invoked' })
@@ -1026,6 +1030,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       try {
         result = await imageGenerationModelService.generateImage({
           ...providerPayload,
+          signal,
           referenceImages: sanitizeCreatorModelReferenceImages(plugin.manifest, payload.referenceImages),
           output: {
             ...(payload.output || {}),
@@ -1759,6 +1764,14 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     commandRuntimeRegistry.stopPlugin(pluginId, options)
   }
 
+  let creatorApprovalEpoch = 0
+  const revokeCreatorNativeExecution = () => {
+    creatorApprovalEpoch += 1
+    stopPluginCommands(CREATOR_STUDIO_PLUGIN_ID, CREATOR_NATIVE_APPROVAL_REVOKED)
+    stopPluginServices(CREATOR_STUDIO_PLUGIN_ID)
+    stopPluginSetups(CREATOR_STUDIO_PLUGIN_ID)
+  }
+
   const setEnabled = (pluginId, enabled) => {
     if (enabled) assertPluginAllowed(pluginId)
     if (!enabled) {
@@ -1791,7 +1804,9 @@ const createPluginService = ({ settingsService, petService, actionService, actio
   // processes for that plugin immediately.
   const setNativeExecutionApproved = (pluginId, approved) => {
     if (approved) assertPluginAllowed(pluginId)
-    if (!approved) {
+    if (!approved && pluginId === CREATOR_STUDIO_PLUGIN_ID) {
+      revokeCreatorNativeExecution()
+    } else if (!approved) {
       stopPluginCommands(pluginId)
       stopPluginServices(pluginId)
       stopPluginSetups(pluginId)
@@ -2018,11 +2033,10 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     }
   }
 
-  const runCommandEntryProcess = async ({ plugin, commandEntry, commandId, payload, config }) => {
+  const runCommandEntryProcess = async ({ plugin, commandEntry, commandId, payload, config, beforeSpawn }) => {
     const pluginId = plugin.manifest.id
     const runtimeKey = createPluginServiceKey(pluginId, commandId)
-    const existingRuntime = commandRuntimeRegistry.getRuntime(pluginId, commandId)
-    if (ACTIVE_COMMAND_STATUSES.has(existingRuntime?.status)) throw new Error('Plugin command is already running')
+    commandRuntimeRegistry.assertNotActive(pluginId, commandId)
     const bridgeState = {
       importedActionIds: new Set()
     }
@@ -2043,6 +2057,10 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       createPluginCreatorDirs: ensurePluginCreatorDirs,
       cloneJsonValue,
       resolveCommandCwd,
+      beforeSpawn: () => {
+        beforeSpawn?.()
+        commandRuntimeRegistry.assertNotActive(pluginId, commandId)
+      },
       spawnCommandProcess,
       stopRuntimeProcessWithFallback,
       resolveStopWaiter,
@@ -2084,9 +2102,17 @@ const createPluginService = ({ settingsService, petService, actionService, actio
           config: getPluginConfig(plugin.manifest.id, plugin.configSchema)
         })
       } else if (plugin.manifest.entries?.commands?.length) {
-        const approved = pluginId === CREATOR_STUDIO_PLUGIN_ID && readCreatorNativeApproval
+        const isCreator = pluginId === CREATOR_STUDIO_PLUGIN_ID
+        const approvalEpoch = creatorApprovalEpoch
+        const assertCreatorApprovalCurrent = isCreator ? () => {
+          if (approvalEpoch !== creatorApprovalEpoch) {
+            throw Object.assign(new Error(CREATOR_NATIVE_APPROVAL_REVOKED.reason), { code: CREATOR_NATIVE_APPROVAL_REVOKED.code })
+          }
+        } : undefined
+        const approved = isCreator && readCreatorNativeApproval
           ? (await readCreatorNativeApproval(pluginId)) === true
           : undefined
+        assertCreatorApprovalCurrent?.()
         assertNativeExecutionAllowed(plugin.manifest, approved)
         const commandEntry = getCommandEntry(plugin, commandId)
         result = await runCommandEntryProcess({
@@ -2094,7 +2120,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
           commandEntry,
           commandId,
           payload,
-          config: getPluginConfig(plugin.manifest.id, plugin.configSchema)
+          config: getPluginConfig(plugin.manifest.id, plugin.configSchema),
+          beforeSpawn: assertCreatorApprovalCurrent
         })
       } else {
         throw new Error('Plugin is not runnable')
@@ -2733,6 +2760,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     exportLogs: exportLogEntries,
     clearLogs,
     setNativeExecutionApproved,
+    revokeCreatorNativeExecution,
     maybeAutostartAgentAwareness,
     pollAgentAwarenessAutostart,
     getPluginDefinition,

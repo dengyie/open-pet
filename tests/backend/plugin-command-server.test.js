@@ -986,6 +986,29 @@ test("Creator Studio backend commands require the bundled plugin, enablement, ap
 	await assert.rejects(lifecycle.runCreatorBackendCommand("create-run", {}), { code: "CONFLICT" })
 })
 
+test("Creator Studio Backend revocation notifies the Shell after persisting approval and also stops Backend commands", async () => {
+	const { createPluginLifecycle } = await import("../../services/backend/domains/plugins/lifecycle.js")
+	const creator = "openpet.creator-studio"
+	const approvals = { [creator]: false, other: true }
+	const notifications = []
+	const stopped = []
+	const lifecycle = createPluginLifecycle({
+		registry: {
+			definition: () => ({}),
+			get: (id) => ({ id, nativeExecutionApproved: approvals[id] }),
+			setNativeExecutionApproved: (id, approved) => { approvals[id] = approved },
+		},
+		bridge: { send: (body) => notifications.push({ body, approved: approvals[creator] }) },
+		commandServer: { stopPlugin: async (id) => { stopped.push(id) } },
+	})
+	await lifecycle.setNativeExecutionApproved(creator, true)
+	await lifecycle.setNativeExecutionApproved("other", false)
+	assert.deepEqual(notifications, [])
+	assert.equal((await lifecycle.setNativeExecutionApproved(creator, false)).nativeExecutionApproved, false)
+	assert.deepEqual(notifications, [{ body: { type: "creator.native-approval-revoked" }, approved: false }])
+	assert.deepEqual(stopped, ["other", creator])
+})
+
 test("T27 route to Job handler executes in the backend and cancellation removes the real child process", { timeout: 8_000 }, async () => {
 	const [
 		{ createPluginCommandServer },

@@ -185,6 +185,7 @@ export function createPluginLifecycle({ registry, bridge, commandServer, process
 	const setNativeExecutionApproved = (id, approved) => serialize(id, async () => {
 		registry.setNativeExecutionApproved(id, approved)
 		if (!approved) {
+			if (id === "openpet.creator-studio") bridge?.send?.({ type: "creator.native-approval-revoked" })
 			if (ACTIVE.has(status(id).status)) await stopUnlocked(id)
 			else await commandServer?.stopPlugin?.(id)
 		}

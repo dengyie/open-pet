@@ -142,6 +142,7 @@ const createOpenPetRuntime = ({
       return { sshAlias: config.sshAlias || 'gz-cvm', hostPort: Number(config.backendPort) || 48330 }
     },
     onSettingsChanged: (message) => settingsSidecarBridge?.handle(message),
+    onCreatorNativeApprovalRevoked: () => pluginService?.revokeCreatorNativeExecution(),
     onSettingsApplyRequest: (message) => settingsSidecarBridge?.handle(message),
     onSettingsCommandRequest: (request) => ipcRuntimeHelpers.handleSettingsCommand(request),
     onCatalogRequest: (request) => {

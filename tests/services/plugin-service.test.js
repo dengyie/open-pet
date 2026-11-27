@@ -1033,6 +1033,53 @@ test('Creator Studio Hatch planning receives bridge cancellation after the HTTP 
   }
 })
 
+test('revocation aborts pending Creator Studio image bridge requests before the command exits', async (t) => {
+  const pluginId = 'openpet.creator-studio'
+  const spawned = []
+  const child = createSlowStoppingServiceProcess()
+  const signals = []
+  const waiters = []
+  const service = createPluginService({
+    settingsService: createSettingsService({ plugins: { enabled: { [pluginId]: true } } }),
+    petService: createBridgeAwarePetService(),
+    pluginDirs: [path.resolve(__dirname, '../../examples/plugins')],
+    spawnCommandProcess: (_file, _args, options) => { spawned.push(options); return child },
+    signalServiceProcessTree: () => false,
+    imageGenerationModelService: {
+      generateImage: ({ signal }) => new Promise((resolve, reject) => {
+        signals.push(signal)
+        waiters.push(resolve)
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    }
+  })
+
+  const command = service.runCommand(pluginId, 'create-run')
+  const commandStopped = assert.rejects(command, { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+  let requests = []
+  try {
+    await waitFor(() => spawned.length === 1)
+    const { OPENPET_BRIDGE_URL: url, OPENPET_BRIDGE_TOKEN: token } = spawned[0].env
+    const referenceDir = fs.mkdtempSync(path.join(service.getPluginCreatorDataDir(pluginId), 'bridge-cancel-'))
+    t.after(() => fs.rmSync(referenceDir, { recursive: true, force: true }))
+    const relativePath = `${path.basename(referenceDir)}/reference.png`
+    fs.writeFileSync(path.join(referenceDir, 'reference.png'), 'reference-image')
+    requests = [1, 2].map(() => requestBridge(`${url}/creator/model-image-generate`, {
+      method: 'POST', token, body: { runId: 'bridge-cancel', referenceImages: [{ relativePath }] }
+    }))
+    await waitFor(() => signals.length === 2)
+    service.revokeCreatorNativeExecution()
+    assert.deepEqual(signals.map((signal) => signal?.aborted), [true, true])
+    assert.deepEqual(signals.map((signal) => signal.reason.code), ['CREATOR_NATIVE_APPROVAL_REVOKED', 'CREATOR_NATIVE_APPROVAL_REVOKED'])
+  } finally {
+    for (const resolve of waiters) resolve({})
+    service.revokeCreatorNativeExecution()
+    child.emit('exit', null, 'SIGKILL')
+    await Promise.allSettled([...requests, commandStopped])
+    await service.stopAllServices()
+  }
+})
+
 test('Creator Studio video generation is accounted in the Hatch-pet Provider budget', async () => {
   const spawned = []
   const child = createFakeServiceProcess()
@@ -3489,6 +3536,33 @@ test('plugin service times out stalled declaration command processes', async () 
     /Plugin command timed out after 1ms/
   )
   assert.deepEqual(child.killCalls, ['SIGTERM'])
+})
+
+test('concurrent declaration command starts cannot replace a process tracked for revocation', async () => {
+  const pluginId = 'openpet.creator-studio'
+  const child = createSlowStoppingServiceProcess()
+  let spawnCount = 0
+  const service = createPluginService({
+    settingsService: createBareSettingsService({
+      plugins: { enabled: { [pluginId]: true }, nativeExecutionApproved: { [pluginId]: true } }
+    }),
+    petService: createBridgeAwarePetService(),
+    pluginDirs: [createDeclarationOnlyPluginDir({ pluginId })],
+    spawnCommandProcess: () => {
+      spawnCount += 1
+      return child
+    },
+    signalServiceProcessTree: () => false
+  })
+
+  const running = service.runCommand(pluginId, 'announce')
+  await assert.rejects(service.runCommand(pluginId, 'announce'), /Plugin command is already running/)
+  service.setNativeExecutionApproved(pluginId, false)
+  assert.deepEqual(child.killCalls, ['SIGKILL'])
+  child.emit('exit', 0, 'SIGKILL')
+  await assert.rejects(running, { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+  assert.equal(spawnCount, 1)
+  await service.stopAllServices()
 })
 
 test('plugin service stops running declaration commands when a plugin is disabled', async () => {
@@ -6446,6 +6520,74 @@ test('Creator Studio native commands use live Backend approval instead of Shell 
   backendApproved = false
   await assert.rejects(service.runCommand(pluginId, 'announce'), /native execution is not approved/)
   assert.equal(spawnCount, 1)
+})
+
+test('revoking Creator Studio approval stops the running process tree and blocks pending and new commands', async () => {
+  const pluginId = 'openpet.creator-studio'
+  const settingsService = createBareSettingsService({ plugins: { enabled: { [pluginId]: true } } })
+  let backendApproved = true
+  let pendingApproval
+  let spawnCount = 0
+  const treeSignals = []
+  const child = createSlowStoppingServiceProcess()
+  const service = createPluginService({
+    settingsService,
+    petService: createBridgeAwarePetService(),
+    pluginDirs: [createDeclarationOnlyPluginDir({ pluginId })],
+    readCreatorNativeApproval: () => pendingApproval || backendApproved,
+    spawnCommandProcess: () => {
+      spawnCount += 1
+      return child
+    },
+    signalServiceProcessTree: (pid, signal) => {
+      treeSignals.push({ pid, signal })
+      return true
+    }
+  })
+
+  const running = service.runCommand(pluginId, 'announce')
+  await waitFor(() => child.listenerCount('exit') > 0)
+  let resolveApproval
+  pendingApproval = new Promise((resolve) => { resolveApproval = resolve })
+  const pending = service.runCommand(pluginId, 'announce')
+
+  backendApproved = false
+  service.revokeCreatorNativeExecution()
+  assert.deepEqual(treeSignals, [{ pid: child.pid, signal: 'SIGKILL' }])
+  assert.deepEqual(child.killCalls, [])
+  child.emit('exit', 0, 'SIGKILL')
+  await assert.rejects(running, { code: 'CREATOR_NATIVE_APPROVAL_REVOKED', message: /approval was revoked/ })
+
+  pendingApproval = null
+  resolveApproval(true)
+  await assert.rejects(pending, { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+  await assert.rejects(service.runCommand(pluginId, 'announce'), /native execution is not approved/)
+  assert.equal(spawnCount, 1)
+  assert.equal(settingsService.get().plugins.nativeExecutionApproved, undefined)
+  await service.stopAllServices()
+})
+
+test('Shell Creator Studio revocation also blocks a command waiting for its bridge before spawning', async () => {
+  const pluginId = 'openpet.creator-studio'
+  let spawnCount = 0
+  const service = createPluginService({
+    settingsService: createBareSettingsService({
+      plugins: { enabled: { [pluginId]: true }, nativeExecutionApproved: { [pluginId]: true } }
+    }),
+    petService: createBridgeAwarePetService(),
+    pluginDirs: [createDeclarationOnlyPluginDir({ pluginId })],
+    spawnCommandProcess: () => {
+      spawnCount += 1
+      return createFakeServiceProcess()
+    }
+  })
+
+  const pending = service.runCommand(pluginId, 'announce')
+  service.setNativeExecutionApproved(pluginId, false)
+  await assert.rejects(pending, { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+  await assert.rejects(service.runCommand(pluginId, 'announce'), /native execution is not approved/)
+  assert.equal(spawnCount, 0)
+  await service.stopAllServices()
 })
 
 test('plugin service blocks local plugin sdk calls without permission', async () => {

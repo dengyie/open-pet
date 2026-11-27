@@ -77,6 +77,7 @@ const formatWorkflowState = (state: CreatorWorkflowResult['state']) => {
   if (state === 'recovery-required') return '需要资产恢复'
   if (state === 'provider-not-ready') return 'Provider 未就绪'
   if (state === 'hatch-pet-not-ready') return '生成前置检查失败'
+  if (state === 'cancelled') return '已取消'
   if (state === 'review-required') return '需要复查'
   if (state === 'preview-ready') return '预览就绪'
   if (state === 'import-failed') return '导入失败'
@@ -438,7 +439,7 @@ const WorkflowProgressPanel = ({ progress }: { progress: CreatorWorkflowProgress
     </div>
     {progress.summary ? <span data-testid="creator-progress-summary">{progress.summary}</span> : null}
     {progress.failureReason ? (
-      <span data-testid="creator-progress-failure"><strong>失败原因</strong> {progress.failureReason}</span>
+      <span data-testid="creator-progress-failure"><strong>{progress.runStatus === 'cancelled' ? '取消原因' : '失败原因'}</strong> {progress.failureReason}</span>
     ) : null}
     {progress.stages?.length ? (
       <div className="creator-result-grid" data-testid="creator-progress-stages">
@@ -1009,7 +1010,7 @@ const ResultCard = ({
           {diagnostics.generatedAt ? <span><strong>Generated</strong> {formatTimestamp(diagnostics.generatedAt)}</span> : null}
           {diagnostics.failedAt ? <span><strong>Failed</strong> {formatTimestamp(diagnostics.failedAt)}</span> : null}
           {conditioning ? <span><strong>Reference inputs</strong> {conditioningReferences}</span> : null}
-          {diagnostics.failureReason ? <span><strong>Failure reason</strong> {diagnostics.failureReason}</span> : null}
+          {diagnostics.failureReason ? <span><strong>{diagnostics.runStatus === 'cancelled' ? 'Cancellation reason' : 'Failure reason'}</strong> {diagnostics.failureReason}</span> : null}
         </div>
       ) : null}
       {hatchPetAgent ? (

@@ -18,6 +18,120 @@ const plugin = {
   }
 }
 
+for (const scenario of ['keeps the review and recovery controls', 'shows saved repairs', 'keeps preview and pending retries']) test(`Create ${scenario} after native approval is revoked during action retry`, async ({ page }) => {
+  const repairSaved = scenario === 'shows saved repairs'
+  const retainedPreview = scenario === 'keeps preview and pending retries'
+  const reviewRun = { runId, state: retainedPreview ? 'completed' : 'review-required', mode: 'full-pet' }
+  const cancelledRun = { ...reviewRun, state: 'cancelled', commandId: 'retry-action' }
+  let retried = false
+  let retryPayload
+  await page.route('**/api/v1/**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname.replace('/api/v1', '')
+    let data
+    let status = 200
+    switch (pathname) {
+      case '/creator/state':
+        data = {
+          ok: true, provider: { ready: true }, editableTarget: {}, dashboard,
+          hatchPetAgent: { ok: true },
+          lastRun: retried ? cancelledRun : reviewRun
+        }
+        break
+      case '/creator/characters/generate':
+        status = 202
+        data = { jobId: 'review-job' }
+        break
+      case '/jobs/review-job':
+        data = {
+          jobId: 'review-job', status: 'succeeded',
+          result: {
+            ok: true, state: reviewRun.state, code: 'review_required', message: 'Ready for review',
+            run: reviewRun, availableActionIds: ['idle'], failedActionIds: ['waving'],
+            ...(retainedPreview ? { clickAction: 'idle', importedAction: { actionId: 'idle', label: 'Idle' } } : {})
+          }
+        }
+        break
+      case `/creator/runs/${runId}/retry-action`:
+        retryPayload = request.postDataJSON()
+        retried = true
+        status = 202
+        data = { jobId: 'retry-job' }
+        break
+      case '/jobs/retry-job':
+        data = {
+          jobId: 'retry-job', status: 'canceled',
+          result: {
+            ok: true, state: 'cancelled', code: 'native_execution_revoked',
+            message: 'Native execution approval was revoked; generation cancelled.',
+            run: cancelledRun,
+            ...(repairSaved || retainedPreview ? {
+              availableActionIds: repairSaved ? ['idle', 'waving'] : ['idle'],
+              failedActionIds: [],
+              diagnostics: {
+                progress: {
+                  runStatus: 'cancelled',
+                  failureReason: 'Native execution approval was revoked; generation cancelled.',
+                  actions: [
+                    { actionId: 'idle', status: 'passed', importable: true },
+                    repairSaved ? {
+                      actionId: 'waving', status: 'passed', importable: true,
+                      assets: [{ kind: 'row', relativePath: `runs/${runId}/waving/repaired.png`, label: 'Saved waving candidate' }]
+                    } : { actionId: 'waving', status: 'pending', importable: false }
+                  ]
+                }
+              }
+            } : {})
+          }
+        }
+        break
+      default:
+        return route.abort()
+    }
+    await route.fulfill({ status, json: { ok: true, data, meta: { requestId: 'retry-http-test', elapsedMs: 1 } } })
+  })
+  await page.addInitScript(() => {
+    window.openpetBackend = { getBackend: () => ({ baseUrl: location.origin + '/api/v1', sessionToken: 'retry-http-test' }) }
+  })
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const { demoControlCenterAPI } = await import('/src/api/demo-control-center-api.ts')
+    window.controlCenterAPI = demoControlCenterAPI
+  })
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  await page.getByLabel('Character name').fill('Retry Cat')
+  await page.getByTestId('creator-new-reference-input').click()
+  await page.getByTestId('creator-generate-new-character').click()
+
+  const result = page.getByTestId('creator-result')
+  const retry = result.getByTestId('creator-retry-failed-actions')
+  const importAvailable = result.getByTestId('creator-import-available-actions')
+  const preview = result.getByTestId('creator-preview-result')
+  if (retainedPreview) await expect(preview).toBeEnabled()
+  else await expect(importAvailable).toHaveText('导入可用动作（1）')
+  await retry.click()
+  await expect(result).toContainText('Native execution approval was revoked; generation cancelled.')
+  if (retainedPreview) {
+    await expect(result.getByTestId('creator-action-chip-waving')).toHaveAttribute('data-status', 'pending')
+    await expect(retry).toBeEnabled()
+    await expect(preview).toBeEnabled()
+  } else {
+    await expect(result).toContainText('需要复查')
+    await expect(importAvailable).toBeEnabled()
+  }
+  if (repairSaved) {
+    await expect(result.getByTestId('creator-progress')).toContainText('Run status cancelled')
+    await expect(result.getByTestId('creator-progress-failure')).toContainText('取消原因')
+    await expect(importAvailable).toHaveText('导入可用动作（2）')
+    await expect(result.getByTestId('creator-action-chip-waving')).toHaveAttribute('data-status', 'passed')
+    await expect(result.getByTestId('creator-asset-review')).toContainText('Saved waving candidate')
+    await expect(retry).toHaveCount(0)
+  } else {
+    await expect(retry).toBeEnabled()
+  }
+  expect(retryPayload.actionId).toBe('waving')
+})
+
 for (const [pane, initiallyRunning] of [['Create', false], ['Plugins', false], ['Create', true], ['Plugins', true]]) {
   const scenario = initiallyRunning ? 'opens the native dashboard without restarting Creator Studio' : 'starts Creator Studio over HTTP before opening its native dashboard'
   test(`${pane} ${scenario}`, async ({ page }) => {

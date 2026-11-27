@@ -43,6 +43,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   const persistenceRequests = []
   const fetchCalls = []
   let creatorNativeApproved = false
+  let creatorRevocations = 0
   let creatorEnabled = true
   let failNextSettingsPatch = false
   let holdNextSettingsRead
@@ -235,6 +236,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
       }),
       createPluginService: ({ getPluginBlockStatus, selectCreatorAssetFrameFolder, readCreatorNativeApproval }) => ({
         readCreatorNativeApproval,
+        revokeCreatorNativeExecution: () => { creatorRevocations += 1 },
         readBlockStatus: (candidate) => {
           pluginServiceCandidates.push(candidate)
           return getPluginBlockStatus(candidate)
@@ -392,6 +394,8 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), true)
   creatorNativeApproved = false
   assert.equal(await ipcDependencies.pluginService.readCreatorNativeApproval('openpet.creator-studio'), false)
+  coordinatorDependencies.onCreatorNativeApprovalRevoked()
+  assert.equal(creatorRevocations, 1)
   assert.deepEqual(await ipcDependencies.pluginService.pickFrames(), { canceled: false, sourceDir: '/tmp/frames' })
   assert.equal(dialogCalls.length, 1)
   assert.deepEqual(pluginInstallCandidates, ['blocked-plugin'])
