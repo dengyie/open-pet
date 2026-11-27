@@ -986,7 +986,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       appendLog({ pluginId: plugin.manifest.id, commandId, level: 'info', message: 'Bridge creator.model-health-check invoked' })
       return { ok: true, result: await imageGenerationModelService.checkHealth({}) }
     },
-    creatorModelImageGenerate: async (payload = {}) => {
+    creatorModelImageGenerate: async (payload = {}, { signal } = {}) => {
       assertPermission(plugin.manifest, 'model:image-generate')
       if (!imageGenerationModelService?.generateImage) throw new Error('Creator model image generation is not available')
       appendLog({ pluginId: plugin.manifest.id, commandId, level: 'info', message: 'Bridge creator.model-image-generate invoked' })
@@ -1030,6 +1030,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       try {
         result = await imageGenerationModelService.generateImage({
           ...providerPayload,
+          signal,
           referenceImages: sanitizeCreatorModelReferenceImages(plugin.manifest, payload.referenceImages),
           output: {
             ...(payload.output || {}),

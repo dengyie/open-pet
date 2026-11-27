@@ -173,7 +173,9 @@ const createPluginRuntimeBridgeServer = ({
         request.socket?.once('close', closeHandler)
         try {
           const payload = await readJsonBody(request, maxBodyBytes)
-          sendJson(response, 200, await runtime.handlers[jsonHandler](payload, { signal: controller.signal }))
+          const signal = runtime.signal ? AbortSignal.any([controller.signal, runtime.signal]) : controller.signal
+          signal.throwIfAborted()
+          sendJson(response, 200, await runtime.handlers[jsonHandler](payload, { signal }))
         } finally {
           request.off('aborted', abortHandler)
           response.off('close', closeHandler)

@@ -1033,6 +1033,53 @@ test('Creator Studio Hatch planning receives bridge cancellation after the HTTP 
   }
 })
 
+test('revocation aborts pending Creator Studio image bridge requests before the command exits', async (t) => {
+  const pluginId = 'openpet.creator-studio'
+  const spawned = []
+  const child = createSlowStoppingServiceProcess()
+  const signals = []
+  const waiters = []
+  const service = createPluginService({
+    settingsService: createSettingsService({ plugins: { enabled: { [pluginId]: true } } }),
+    petService: createBridgeAwarePetService(),
+    pluginDirs: [path.resolve(__dirname, '../../examples/plugins')],
+    spawnCommandProcess: (_file, _args, options) => { spawned.push(options); return child },
+    signalServiceProcessTree: () => false,
+    imageGenerationModelService: {
+      generateImage: ({ signal }) => new Promise((resolve, reject) => {
+        signals.push(signal)
+        waiters.push(resolve)
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    }
+  })
+
+  const command = service.runCommand(pluginId, 'create-run')
+  const commandStopped = assert.rejects(command, { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+  let requests = []
+  try {
+    await waitFor(() => spawned.length === 1)
+    const { OPENPET_BRIDGE_URL: url, OPENPET_BRIDGE_TOKEN: token } = spawned[0].env
+    const referenceDir = fs.mkdtempSync(path.join(service.getPluginCreatorDataDir(pluginId), 'bridge-cancel-'))
+    t.after(() => fs.rmSync(referenceDir, { recursive: true, force: true }))
+    const relativePath = `${path.basename(referenceDir)}/reference.png`
+    fs.writeFileSync(path.join(referenceDir, 'reference.png'), 'reference-image')
+    requests = [1, 2].map(() => requestBridge(`${url}/creator/model-image-generate`, {
+      method: 'POST', token, body: { runId: 'bridge-cancel', referenceImages: [{ relativePath }] }
+    }))
+    await waitFor(() => signals.length === 2)
+    service.revokeCreatorNativeExecution()
+    assert.deepEqual(signals.map((signal) => signal?.aborted), [true, true])
+    assert.deepEqual(signals.map((signal) => signal.reason.code), ['CREATOR_NATIVE_APPROVAL_REVOKED', 'CREATOR_NATIVE_APPROVAL_REVOKED'])
+  } finally {
+    for (const resolve of waiters) resolve({})
+    service.revokeCreatorNativeExecution()
+    child.emit('exit', null, 'SIGKILL')
+    await Promise.allSettled([...requests, commandStopped])
+    await service.stopAllServices()
+  }
+})
+
 test('Creator Studio video generation is accounted in the Hatch-pet Provider budget', async () => {
   const spawned = []
   const child = createFakeServiceProcess()

@@ -107,12 +107,14 @@ const runPluginCommandEntryProcess = async ({
     stopCompleted: null,
     resolveStopCompleted: null
   }
+  const bridgeAbort = new AbortController()
   commandBridgeRuntimes.set(bridgeRuntimeKey, {
     pluginId,
     commandId,
     runId: bridgeRunId,
     token: bridgeToken,
     status: 'running',
+    signal: bridgeAbort.signal,
     handlers: createPluginBridgeHandlers(plugin, commandId, bridgeRunId)
   })
   commandRuntimes.set(runtimeKey, runtime)
@@ -146,6 +148,7 @@ const runPluginCommandEntryProcess = async ({
       runtime.status = 'stopping'
       runtime.error = ''
       stopError = Object.assign(new Error(reason), { code, openpetLogged: true })
+      bridgeAbort.abort(stopError)
       stopRuntimeProcessWithFallback(runtime, signal)
       return true
     }
