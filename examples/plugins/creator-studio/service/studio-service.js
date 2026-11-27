@@ -283,6 +283,9 @@ const classifyRecoveryFailure = (message = '') => {
   }
 }
 
+const isCancelledProviderRun = (run) => run?.status === 'cancelled' &&
+  usesHostProviderBackend(run.backend || run.input?.backend)
+
 const createPublicRecovery = ({ dataDir, run }) => {
   const backendStatus = run.backendStatus || {}
   const generatedImage = run.artifacts?.generatedImage || {}
@@ -290,7 +293,8 @@ const createPublicRecovery = ({ dataDir, run }) => {
     ? generatedImage.conditioning
     : null
   const outputCount = Array.isArray(generatedImage.outputs) ? generatedImage.outputs.length : 0
-  const canRetryGeneration = ['failed', 'cancelled'].includes(run.status) && run.taskStatus === 'confirmed' &&
+  const canRetryGeneration = !isCancelledProviderRun(run) &&
+    ['failed', 'cancelled'].includes(run.status) && run.taskStatus === 'confirmed' &&
     (run.currentStep === 'generate' || run.qualityFirst?.phase === 'planning-failed')
   const isFullPet = run.generationTask?.mode === 'full-pet'
   const failureReason = createPublicText({ dataDir, value: run.error || backendStatus.message || '' })
@@ -624,6 +628,12 @@ const createWizardState = ({ dataDir, run }) => {
       : 'Retry generation on this same run after reviewing the failure details.'
     nextStepLabel = 'Retry generation'
     nextStepReason = status === 'cancelled' ? summary : 'Use the same run to retry generation after checking the failure details.'
+    if (isCancelledProviderRun(run)) {
+      nextStepReason = 'Restore native execution approval, then use Create to start provider generation.'
+      nextStepBlocked = true
+      nextStepLocation = 'Control Center -> Create'
+      nextStepSurface = 'control-center'
+    }
   } else if (status === 'ready_for_review') {
     phase = 'ready-for-review'
     if (requiresActionRepairBeforeApproval) {
@@ -873,7 +883,8 @@ const createDashboardButtonStates = ({ dataDir, run }) => {
   const fullPetApprovalBlocked = status === 'ready_for_review' && fullPetReviewGate.reviewGate.ready === false
   const actionApprovalBlocked = status === 'ready_for_review' && actionFrameReviewGate.reviewGate.ready === false
   const requiresRetryBeforeApproval = fullPetApprovalBlocked
-  const canRetryGeneration = Boolean(
+  const requiresHostGeneration = isCancelledProviderRun(run)
+  const canRetryGeneration = !requiresHostGeneration && Boolean(
     run.recovery?.canRetryGeneration ||
     (['failed', 'cancelled'].includes(status) && taskStatus === 'confirmed') ||
     (requiresRetryBeforeApproval && taskStatus === 'confirmed')
@@ -881,9 +892,8 @@ const createDashboardButtonStates = ({ dataDir, run }) => {
   const generateLabel = canRetryGeneration ? 'Retry generation' : (isFullPet ? 'Generate pet pack' : 'Generate action')
 
   const confirmEnabled = hasGenerationTask && !hasPendingQuestion && taskStatus !== 'confirmed'
-  const generateEnabled = !hasPendingQuestion && taskStatus === 'confirmed' && ['draft', 'failed', 'cancelled'].includes(status)
-    ? true
-    : !hasPendingQuestion && requiresRetryBeforeApproval && taskStatus === 'confirmed'
+  const generateEnabled = !requiresHostGeneration && !hasPendingQuestion && taskStatus === 'confirmed' &&
+    (['draft', 'failed', 'cancelled'].includes(status) || requiresRetryBeforeApproval)
   const approveEnabled = status === 'ready_for_review' && !fullPetApprovalBlocked && !actionApprovalBlocked
 
   return {
@@ -909,11 +919,13 @@ const createDashboardButtonStates = ({ dataDir, run }) => {
         ? (canRetryGeneration
             ? 'Retry generation will reuse this same run and preserve the confirmed task.'
             : 'Generation is unlocked for this confirmed task.')
-        : hasPendingQuestion
-          ? 'Answer the pending follow-up question before generation.'
-          : taskStatus !== 'confirmed'
-            ? 'Confirm the task before generation.'
-            : 'Generation is not available in the current run state.'
+        : requiresHostGeneration
+          ? 'Provider generation requires a host command. Use Control Center -> Create.'
+          : hasPendingQuestion
+            ? 'Answer the pending follow-up question before generation.'
+            : taskStatus !== 'confirmed'
+              ? 'Confirm the task before generation.'
+              : 'Generation is not available in the current run state.'
     },
     approve: {
       buttonId: 'approve-button',
@@ -1457,7 +1469,7 @@ const createImportReadiness = ({ run }) => {
 const createDashboardState = ({ dataDir, run, developerMode = false }) => {
   const promptProvenance = createPromptProvenance({ dataDir, run, developerMode })
   const recoveryMessage = String(run?.backendStatus?.message || run?.error || '').trim()
-  const canRetryGeneration = ['failed', 'cancelled'].includes(run?.status)
+  const canRetryGeneration = !isCancelledProviderRun(run) && ['failed', 'cancelled'].includes(run?.status)
   return {
     workflow: createWorkflowState({ run }),
     importReadiness: createImportReadiness({ run }),

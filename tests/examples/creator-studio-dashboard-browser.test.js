@@ -2226,6 +2226,17 @@ test('creator studio dashboard enables retry generation for failed legacy runs w
   }
 })
 
+test('creator studio dashboard directs a cancelled provider generation back to Create', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-browser-cancelled-provider-'))
+  const run = seedLegacyFailedRunWithoutTask(dataDir)
+  updateRunStatus({ dataDir, runId: run.runId, status: 'cancelled', patch: { generationTask: run.generationTask } })
+  const server = await openDashboardServer(dataDir, t)
+  const { page } = await openDashboardPage(server, t)
+
+  assert.equal(await page.locator('#generate-button').isDisabled(), true)
+  assert.match(await page.locator('#next-step-panel').textContent(), /Control Center.*Create/)
+})
+
 test('creator studio dashboard enables retry generation for failed legacy full-pet runs without generationTask', async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-browser-legacy-failed-full-pet-retry-'))
   const run = seedLegacyFailedFullPetRunWithoutTask(dataDir)
