@@ -798,6 +798,19 @@ const createQualityFirstActionResultView = (result) => ({
   })) : []
 })
 
+const reconcileUnreportedRunningRows = async ({ dataDir, runId, runtime, canonical, profile, actionResults }) => {
+  if (typeof runtime?.loadActionCheckpoint !== 'function') return
+  const runningRows = ['running-right', 'running-left']
+  const missing = runningRows.filter((actionId) => !Object.hasOwn(actionResults, actionId))
+  if (!missing.length || runningRows.some((actionId) => Object.hasOwn(actionResults, actionId) && actionResults[actionId]?.ok !== true)) return
+  const checkpoints = readActionCheckpoints({ dataDir, runId }).actions
+  if (!missing.every((actionId) => checkpoints?.[actionId]?.ok === true)) return
+  const recovered = await Promise.all(missing.map((actionId) => runtime.loadActionCheckpoint({ actionId, canonical, profile })))
+  if (recovered.every((result) => result?.ok === true)) {
+    missing.forEach((actionId, index) => { actionResults[actionId] = createQualityFirstActionResultView(recovered[index]) })
+  }
+}
+
 const invalidateActionResultForScaleProfileChange = (result = {}) => {
   const { selection: _selection, ...evidence } = result && typeof result === 'object' ? result : {}
   return {
@@ -1079,6 +1092,7 @@ const acceptQualityFirstActionCandidate = async ({
       await runtime.persistActionResult({ actionId: 'running-left', result: mirrored, canonical, profile: effectiveProfile })
       actionResults['running-left'] = createQualityFirstActionResultView(mirrored)
     }
+    await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
     const packageResult = actionResults.idle?.ok === true
       ? await runtime.finalizePackage({ run, canonical, profile: effectiveProfile, actionResults })
       : null
@@ -1283,6 +1297,7 @@ const runQualityFirstActionRepair = async ({
         ok: false, actionId: 'running-left', disposition: 'omitted', failureCode: 'source_action_pending'
       })
     }
+    await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
     // Persist progress for interruption recovery; caught failures restore the prior revision.
     const { package: _stalePackage, ...pendingQualityFirst } = generatingRun.qualityFirst
     const persistActionProgress = () => writeRun({ dataDir, run: {
