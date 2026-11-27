@@ -17,6 +17,7 @@ const {
   createPluginCommandBridgeServer
 } = require('./plugin-command-bridge-server')
 const { createPluginRuntimeBridgeServer, PLUGIN_BRIDGE_HOST } = require('./plugin-runtime-bridge-server')
+const { CREATOR_STUDIO_REPAIR_FRAGMENT } = require('./creator-studio-repair-auth')
 const { runPluginCommandEntryProcess } = require('./plugin-command-runner')
 const {
   createPluginEntryCwdResolver,
@@ -505,7 +506,7 @@ const assertStorageKey = (key) => {
   }
 }
 
-const createPluginService = ({ settingsService, petService, actionService, actionImportService, petPackService, aiService, aiTalkService, imageGenerationModelService, videoGenerationModelService = null, secretService = null, hatchPetAgentService = null, fetchImpl = globalThis.fetch, resolveAddress, pluginNetworkConnect = connectPinnedHttps, pluginNetworkTimeoutMs = 10000, serviceHealthTimeoutMs, healthCheckTimeoutMs = serviceHealthTimeoutMs ?? PLUGIN_SERVICE_HEALTH_TIMEOUT_MS, serviceStopGracePeriodMs = PLUGIN_SERVICE_STOP_GRACE_PERIOD_MS, commandProcessTimeoutMs = LOCAL_PLUGIN_COMMAND_TIMEOUT_MS, openExternal = async () => { throw new Error('Dashboard opener is not available') }, selectCreatorAssetFrameFolder = async () => { throw new Error('Creator asset folder picker is not available') }, onPetPackActivated = () => {}, spawnServiceProcess = spawn, spawnSetupProcess = spawnServiceProcess, spawnCommandProcess = spawnServiceProcess, killServiceProcess = process.kill, signalServiceProcessTree = defaultServiceProcessTree.signalServiceProcessTree, setServiceHealthTimer = setTimeout, clearServiceHealthTimer = clearTimeout, probeAgentAwarenessActivity = defaultProbeAgentAwarenessActivity, setAgentAwarenessAutostartTimer = setInterval, clearAgentAwarenessAutostartTimer = clearInterval, agentAwarenessAutostartIntervalMs = DEFAULT_AGENT_AWARENESS_AUTOSTART_INTERVAL_MS, pluginDirs = [], officialPlugins = [], readCreatorNativeApproval, getPluginBlockStatus = () => ({ blocked: false, reasons: [] }) }) => {
+const createPluginService = ({ settingsService, petService, actionService, actionImportService, petPackService, aiService, aiTalkService, imageGenerationModelService, videoGenerationModelService = null, secretService = null, hatchPetAgentService = null, fetchImpl = globalThis.fetch, resolveAddress, pluginNetworkConnect = connectPinnedHttps, pluginNetworkTimeoutMs = 10000, serviceHealthTimeoutMs, healthCheckTimeoutMs = serviceHealthTimeoutMs ?? PLUGIN_SERVICE_HEALTH_TIMEOUT_MS, serviceStopGracePeriodMs = PLUGIN_SERVICE_STOP_GRACE_PERIOD_MS, commandProcessTimeoutMs = LOCAL_PLUGIN_COMMAND_TIMEOUT_MS, openExternal = async () => { throw new Error('Dashboard opener is not available') }, selectCreatorAssetFrameFolder = async () => { throw new Error('Creator asset folder picker is not available') }, onPetPackActivated = () => {}, spawnServiceProcess = spawn, spawnSetupProcess = spawnServiceProcess, spawnCommandProcess = spawnServiceProcess, killServiceProcess = process.kill, signalServiceProcessTree = defaultServiceProcessTree.signalServiceProcessTree, setServiceHealthTimer = setTimeout, clearServiceHealthTimer = clearTimeout, probeAgentAwarenessActivity = defaultProbeAgentAwarenessActivity, setAgentAwarenessAutostartTimer = setInterval, clearAgentAwarenessAutostartTimer = clearInterval, agentAwarenessAutostartIntervalMs = DEFAULT_AGENT_AWARENESS_AUTOSTART_INTERVAL_MS, pluginDirs = [], officialPlugins = [], readCreatorNativeApproval, getCreatorStudioRepairToken, getPluginBlockStatus = () => ({ blocked: false, reasons: [] }) }) => {
   let effectiveHatchPetAgentService = hatchPetAgentService
   if (!settingsService) throw new Error('settingsService is required')
   if (!petService) throw new Error('petService is required')
@@ -1216,6 +1217,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
   const serviceBridgeServer = createPluginRuntimeBridgeServer({
     appendLog,
     bridgeRuntimes: serviceBridgeRuntimes,
+    getCreatorStudioRepairToken,
     host: PLUGIN_BRIDGE_HOST,
     jsonRoutes: SERVICE_BRIDGE_JSON_ROUTES,
     readOnlyRoutes: SERVICE_BRIDGE_READ_ONLY_ROUTES,
@@ -2245,7 +2247,21 @@ const createPluginService = ({ settingsService, petService, actionService, actio
         if (!normalizedKey || !normalizedValue) continue
         dashboardUrl.searchParams.set(normalizedKey, normalizedValue)
       }
-      await openExternal(dashboardUrl.toString())
+      const repairToken = pluginId === CREATOR_STUDIO_PLUGIN_ID && dashboardId === 'main' &&
+        dashboardUrl.origin === 'http://127.0.0.1:8794' && !dashboardUrl.username && !dashboardUrl.password
+        ? getCreatorStudioRepairToken?.()
+        : ''
+      if (repairToken) {
+        const launchUrl = new URL(dashboardUrl)
+        launchUrl.hash = new URLSearchParams({ [CREATOR_STUDIO_REPAIR_FRAGMENT]: repairToken }).toString()
+        try {
+          await openExternal(launchUrl.toString())
+        } catch (_) {
+          throw new Error('Creator Studio dashboard could not be opened')
+        }
+      } else {
+        await openExternal(dashboardUrl.toString())
+      }
       appendLog({ pluginId, commandId, level: 'info', message: 'Dashboard opened' })
       return {
         ok: true,

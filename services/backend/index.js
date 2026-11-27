@@ -75,6 +75,7 @@ import { runCreatorProviderCall } from "./bridge/creator-provider-call.js"
 const require = createRequire(import.meta.url)
 const { normalizeNetworkRequest, requestPluginNetwork } = require("../../apps/desktop/src/services/plugin-network-client.js")
 const { createHatchPetAgentService } = require("../../apps/desktop/src/services/hatch-pet-agent-service.js")
+const { deriveCreatorStudioRepairToken } = require("../../apps/desktop/src/services/creator-studio-repair-auth.js")
 const fs = require("node:fs")
 
 const packageJson = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../package.json"), "utf8"))
@@ -621,6 +622,7 @@ await initializeBackendRuntime({
 					plugins: pluginFacade,
 					settings: runtime.settings,
 					creator: creatorBridge,
+					creatorStudioRepairToken: deriveCreatorStudioRepairToken(runtime.sessionToken),
 				jobs: { insert: (input) => runtime.enqueueJob(input) },
 				logs: { appendPlugin: (entry) => runtime.plugins.appendLog(entry) },
 				network: {

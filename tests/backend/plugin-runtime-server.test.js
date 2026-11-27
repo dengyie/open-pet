@@ -54,7 +54,7 @@ function createHarness(permissions) {
 	return { calls, plugin, server }
 }
 
-function requestJson(url, { token = "secret-token", capability = "pet:say", body = {}, path = "/" } = {}) {
+function requestJson(url, { token = "secret-token", capability = "pet:say", body = {}, path = "/", repairToken } = {}) {
 	return new Promise((resolve, reject) => {
 			const request = http.request(new URL(path, url), {
 			method: "POST",
@@ -62,6 +62,7 @@ function requestJson(url, { token = "secret-token", capability = "pet:say", body
 				Authorization: `Bearer ${token}`,
 				"Content-Type": "application/json",
 				"X-OpenPet-Capability": capability,
+				...(repairToken ? { "X-OpenPet-Creator-Studio-Repair-Token": repairToken } : {}),
 			},
 		}, (response) => {
 			let text = ""
@@ -270,21 +271,28 @@ test("listen exposes a token-bound loopback endpoint and close expires it", asyn
 	await assert.rejects(() => requestJson(listening.url), /ECONNREFUSED|ECONNRESET|socket hang up/)
 })
 
-test("only the Creator Studio service token can request a dashboard repair", async (t) => {
+test("dashboard repairs require both Creator Studio service and dashboard caller credentials", async (t) => {
 	const creatorId = "openpet.creator-studio"
 	const otherId = "openpet.other"
 	const calls = []
+	const repairToken = "dashboard-repair-token"
 	const server = createPluginRuntimeServer({
 		plugins: { get: (id) => ({ id, permissions: ["model:image-generate"] }) },
 		creator: { repair: (payload) => { calls.push(payload); return { repair: true } } },
+		creatorStudioRepairToken: repairToken,
 	})
 	t.after(() => server.close())
 	const studio = await server.listen({ pluginId: creatorId, token: "creator-token" })
 	const other = await server.listen({ pluginId: otherId, token: "other-token" })
 	const options = { capability: "", path: "/creator/repair", body: { command: "retry-action", runId: "retained", actionId: "jumping" } }
 	assert.equal((await requestJson(other.url, { ...options, token: other.token })).status, 404)
+	assert.equal((await requestJson(other.url, { ...options, token: other.token, repairToken })).status, 404)
 	assert.equal((await requestJson(studio.url, { ...options, token: studio.token, capability: "creator:model-image-generate" })).status, 404)
-	assert.deepEqual(await requestJson(studio.url, { ...options, token: studio.token }), { status: 200, body: { ok: true, result: { repair: true } } })
+	assert.equal((await requestJson(studio.url, { ...options, token: studio.token })).status, 401)
+	assert.equal((await requestJson(studio.url, { ...options, token: studio.token, repairToken: studio.token })).status, 403)
+	assert.equal((await requestJson(studio.url, { ...options, token: "", repairToken })).status, 401)
+	assert.deepEqual(calls, [])
+	assert.deepEqual(await requestJson(studio.url, { ...options, token: studio.token, repairToken }), { status: 200, body: { ok: true, result: { repair: true } } })
 	assert.deepEqual(calls, [options.body])
 })
 

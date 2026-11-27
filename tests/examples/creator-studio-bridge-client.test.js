@@ -11,6 +11,7 @@ test('creator repair waits for delayed headers without the fetch deadline and re
     assert.equal(request.url, '/studio/creator/repair')
     assert.equal(request.method, 'POST')
     assert.equal(request.headers.authorization, 'Bearer service-token')
+    assert.equal(request.headers['x-openpet-creator-studio-repair-token'], 'caller-token')
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
     assert.deepEqual(JSON.parse(Buffer.concat(chunks)), { command: 'retry-action' })
@@ -34,11 +35,11 @@ test('creator repair waits for delayed headers without the fetch deadline and re
   })
 
   const payload = { command: 'retry-action' }
-  assert.deepEqual(await callBridge('/creator/repair', payload), { ok: true, result: { repaired: true } })
+  assert.deepEqual(await callBridge('/creator/repair', payload, { repairToken: 'caller-token' }), { ok: true, result: { repaired: true } })
 
   const started = new Promise((resolve) => { requestStarted = resolve })
   const controller = new AbortController()
-  const pending = callBridge('/creator/repair', payload, { signal: controller.signal })
+  const pending = callBridge('/creator/repair', payload, { signal: controller.signal, repairToken: 'caller-token' })
   await started
   controller.abort()
   await assert.rejects(pending, { name: 'AbortError' })

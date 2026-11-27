@@ -1,5 +1,6 @@
 const crypto = require('crypto')
 const http = require('http')
+const { CREATOR_STUDIO_REPAIR_HEADER, creatorStudioRepairAuthFailure } = require('./creator-studio-repair-auth')
 
 const PLUGIN_BRIDGE_HOST = '127.0.0.1'
 const MAX_PLUGIN_BRIDGE_BODY_BYTES = 1024 * 1024
@@ -105,6 +106,7 @@ const createPluginRuntimeBridgeServer = ({
   appendLog = () => {},
   bridgeRuntimes,
   createServer = http.createServer,
+  getCreatorStudioRepairToken,
   host = PLUGIN_BRIDGE_HOST,
   jsonRoutes,
   maxBodyBytes = MAX_PLUGIN_BRIDGE_BODY_BYTES,
@@ -161,6 +163,13 @@ const createPluginRuntimeBridgeServer = ({
 
       const jsonHandler = jsonRoutes.get(route)
       if (jsonHandler) {
+        if (jsonHandler === 'creatorRepair') {
+          const failure = creatorStudioRepairAuthFailure(request.headers[CREATOR_STUDIO_REPAIR_HEADER], getCreatorStudioRepairToken?.())
+          if (failure) {
+            sendJson(response, failure.status, { ok: false, error: failure.error })
+            return
+          }
+        }
         const controller = new AbortController()
         const abortHandler = () => {
           if (!controller.signal.aborted) controller.abort(createClientDisconnectedError())

@@ -642,6 +642,19 @@
       const state = { run: null, actionReview: null, fullPetReview: null, runs: [], playbackTimer: null, playbackSession: 0, generationInFlight: false }
       const $ = (id) => document.getElementById(id)
       const developerMode = new URLSearchParams(window.location.search).get('developer') === '1'
+      const repairToken = (() => {
+        const key = 'openpet-repair-token'
+        const url = new URL(window.location.href)
+        const fragment = new URLSearchParams(url.hash.slice(1))
+        const token = fragment.get(key)
+        if (token) {
+          fragment.delete(key)
+          url.hash = fragment.toString()
+          window.history.replaceState(null, '', url)
+          window.sessionStorage.setItem(key, token)
+        }
+        return token || window.sessionStorage.getItem(key)
+      })()
       const isFullPetRun = (run) => run?.generationTask?.mode === 'full-pet'
       const defaultGenerateLabel = (run = state.run) => (isFullPetRun(run) ? 'Generate pet pack' : 'Generate action')
       const normalizeDashboardBackend = (value) => {
@@ -668,10 +681,10 @@
         $('status-line').className = `status ${kind}`.trim()
       }
 
-      const postJson = async (url, body = {}) => {
+      const postJson = async (url, body = {}, headers = {}) => {
         const response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify(body)
         })
         const payload = await response.json()
@@ -1817,7 +1830,7 @@
           const endpoint = retryIdentity
             ? `/api/runs/${encodeURIComponent(state.run.runId)}/identity/retry`
             : `/api/runs/${encodeURIComponent(state.run.runId)}/actions/${encodeURIComponent(actionId)}/retry`
-          const payload = await postJson(endpoint)
+          const payload = await postJson(endpoint, {}, repairToken ? { 'X-OpenPet-Creator-Studio-Repair-Token': repairToken } : {})
           state.run = payload.run
           state.actionReview = payload.actionReview || null
           state.fullPetReview = payload.fullPetReview || null

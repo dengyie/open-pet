@@ -1844,6 +1844,31 @@ const createFullPetReview = ({ dataDir, run }) => {
 
 const handlePost = async ({ request, response, dataDir, url }) => {
   try {
+    const retryActionMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/actions\/([^/]+)\/retry$/)
+    const retryIdentityMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/identity\/retry$/)
+    if (retryActionMatch || retryIdentityMatch) {
+      const repairToken = request.headers['x-openpet-creator-studio-repair-token']
+      if (typeof repairToken !== 'string' || !repairToken) {
+        sendJson(response, 401, { ok: false, error: 'Open Creator Studio from OpenPet to authorize repairs' })
+        return true
+      }
+      await readJsonBody(request)
+      const runId = decodeURIComponent((retryActionMatch || retryIdentityMatch)[1])
+      const payload = retryActionMatch
+        ? { command: 'retry-action', runId, actionId: decodeURIComponent(retryActionMatch[2]) }
+        : { command: 'retry-identity', runId }
+      const { result: output } = await callBridge('/creator/repair', payload, { repairToken })
+      sendJson(response, 200, {
+        ok: true,
+        run: createPublicRun({ dataDir, run: output.run }),
+        actionReview: createActionReview({ dataDir, run: output.run }),
+        fullPetReview: createFullPetReview({ dataDir, run: output.run }),
+        repair: output.repair,
+        outputDir: toDataRelativePath({ dataDir, targetPath: output.outputDir })
+      })
+      return true
+    }
+
     const body = await readJsonBody(request)
     if (url.pathname === '/api/tasks/draft') {
       const output = draftTaskRun({ dataDir, payload: body })
@@ -1912,37 +1937,6 @@ const handlePost = async ({ request, response, dataDir, url }) => {
         run: createPublicRun({ dataDir, run: output.run }),
         actionReview: createActionReview({ dataDir, run: output.run }),
         fullPetReview: createFullPetReview({ dataDir, run: output.run }),
-        outputDir: toDataRelativePath({ dataDir, targetPath: output.outputDir })
-      })
-      return true
-    }
-
-    const retryActionMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/actions\/([^/]+)\/retry$/)
-    if (retryActionMatch) {
-      const runId = decodeURIComponent(retryActionMatch[1])
-      const actionId = decodeURIComponent(retryActionMatch[2])
-      const { result: output } = await callBridge('/creator/repair', { command: 'retry-action', runId, actionId })
-      sendJson(response, 200, {
-        ok: true,
-        run: createPublicRun({ dataDir, run: output.run }),
-        actionReview: createActionReview({ dataDir, run: output.run }),
-        fullPetReview: createFullPetReview({ dataDir, run: output.run }),
-        repair: output.repair,
-        outputDir: toDataRelativePath({ dataDir, targetPath: output.outputDir })
-      })
-      return true
-    }
-
-    const retryIdentityMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/identity\/retry$/)
-    if (retryIdentityMatch) {
-      const runId = decodeURIComponent(retryIdentityMatch[1])
-      const { result: output } = await callBridge('/creator/repair', { command: 'retry-identity', runId })
-      sendJson(response, 200, {
-        ok: true,
-        run: createPublicRun({ dataDir, run: output.run }),
-        actionReview: createActionReview({ dataDir, run: output.run }),
-        fullPetReview: createFullPetReview({ dataDir, run: output.run }),
-        repair: output.repair,
         outputDir: toDataRelativePath({ dataDir, targetPath: output.outputDir })
       })
       return true
