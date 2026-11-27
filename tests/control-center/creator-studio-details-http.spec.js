@@ -18,8 +18,10 @@ const plugin = {
   }
 }
 
-for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows saved repairs' : 'keeps the review and recovery controls'} after native approval is revoked during action retry`, async ({ page }) => {
-  const reviewRun = { runId, state: 'review-required', mode: 'full-pet' }
+for (const scenario of ['keeps the review and recovery controls', 'shows saved repairs', 'keeps preview and pending retries']) test(`Create ${scenario} after native approval is revoked during action retry`, async ({ page }) => {
+  const repairSaved = scenario === 'shows saved repairs'
+  const retainedPreview = scenario === 'keeps preview and pending retries'
+  const reviewRun = { runId, state: retainedPreview ? 'completed' : 'review-required', mode: 'full-pet' }
   const cancelledRun = { ...reviewRun, state: 'cancelled', commandId: 'retry-action' }
   let retried = false
   let retryPayload
@@ -44,8 +46,9 @@ for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows sav
         data = {
           jobId: 'review-job', status: 'succeeded',
           result: {
-            ok: true, state: 'review-required', code: 'review_required', message: 'Ready for review',
-            run: reviewRun, availableActionIds: ['idle'], failedActionIds: ['waving']
+            ok: true, state: reviewRun.state, code: 'review_required', message: 'Ready for review',
+            run: reviewRun, availableActionIds: ['idle'], failedActionIds: ['waving'],
+            ...(retainedPreview ? { clickAction: 'idle', importedAction: { actionId: 'idle', label: 'Idle' } } : {})
           }
         }
         break
@@ -62,8 +65,8 @@ for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows sav
             ok: true, state: 'cancelled', code: 'native_execution_revoked',
             message: 'Native execution approval was revoked; generation cancelled.',
             run: cancelledRun,
-            ...(repairSaved ? {
-              availableActionIds: ['idle', 'waving'],
+            ...(repairSaved || retainedPreview ? {
+              availableActionIds: repairSaved ? ['idle', 'waving'] : ['idle'],
               failedActionIds: [],
               diagnostics: {
                 progress: {
@@ -71,10 +74,10 @@ for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows sav
                   failureReason: 'Native execution approval was revoked; generation cancelled.',
                   actions: [
                     { actionId: 'idle', status: 'passed', importable: true },
-                    {
+                    repairSaved ? {
                       actionId: 'waving', status: 'passed', importable: true,
                       assets: [{ kind: 'row', relativePath: `runs/${runId}/waving/repaired.png`, label: 'Saved waving candidate' }]
-                    }
+                    } : { actionId: 'waving', status: 'pending', importable: false }
                   ]
                 }
               }
@@ -103,11 +106,19 @@ for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows sav
   const result = page.getByTestId('creator-result')
   const retry = result.getByTestId('creator-retry-failed-actions')
   const importAvailable = result.getByTestId('creator-import-available-actions')
-  await expect(importAvailable).toHaveText('导入可用动作（1）')
+  const preview = result.getByTestId('creator-preview-result')
+  if (retainedPreview) await expect(preview).toBeEnabled()
+  else await expect(importAvailable).toHaveText('导入可用动作（1）')
   await retry.click()
   await expect(result).toContainText('Native execution approval was revoked; generation cancelled.')
-  await expect(result).toContainText('需要复查')
-  await expect(importAvailable).toBeEnabled()
+  if (retainedPreview) {
+    await expect(result.getByTestId('creator-action-chip-waving')).toHaveAttribute('data-status', 'pending')
+    await expect(retry).toBeEnabled()
+    await expect(preview).toBeEnabled()
+  } else {
+    await expect(result).toContainText('需要复查')
+    await expect(importAvailable).toBeEnabled()
+  }
   if (repairSaved) {
     await expect(result.getByTestId('creator-progress')).toContainText('Run status cancelled')
     await expect(result.getByTestId('creator-progress-failure')).toContainText('取消原因')

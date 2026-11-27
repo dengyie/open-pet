@@ -176,7 +176,30 @@ export function useCreatorPane(active: boolean) {
       if (cancelledRetry && current?.run?.mode === 'full-pet' &&
         current.run.runId && current.run.runId === nextResult.run?.runId &&
         ['review-required', 'preview-ready', 'completed', 'import-failed'].includes(current.state)) {
-        if (nextResult.diagnostics?.progress) return { ...nextResult, state: current.state }
+        const progress = nextResult.diagnostics?.progress
+        if (progress) {
+          const repaired = new Set([
+            ...(nextResult.availableActionIds || progress.availableActionIds || []),
+            ...(progress.actions || []).filter((action) => action.status === 'passed' || action.status === 'mirrored')
+              .map((action) => action.actionId)
+          ])
+          const failedActionIds = [...new Set([
+            ...(nextResult.failedActionIds || progress.failedActionIds || []),
+            ...(current.failedActionIds || []),
+            ...(current.diagnostics?.progress?.failedActionIds || []),
+            ...(current.basicActions?.omittedActionIds || []),
+            ...(current.basicActions?.missingRequiredOfficialActionIds || [])
+          ])].filter((actionId) => !repaired.has(actionId))
+          return {
+            ...nextResult,
+            state: current.state,
+            activePet: current.activePet,
+            importedAction: current.importedAction,
+            clickAction: current.clickAction,
+            clickActionChange: current.clickActionChange,
+            failedActionIds
+          }
+        }
         return { ...current, message: nextResult.message }
       }
       return nextResult
