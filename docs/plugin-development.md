@@ -332,7 +332,7 @@ Bridge rules:
 - service requests must use `Authorization: Bearer <OPENPET_SERVICE_BRIDGE_TOKEN>`;
 - `pet:say`, `pet:action`, `pet:event`, `actions:read`, `actions:write`, `trigger-proposals:write`, `pack-manifest:read`, `pack-manifest:write`, `assets:inspect`, `assets:generate`, `pet-pack:import`, and `model:image-generate` permissions are enforced per route;
 - all pet mutations still flow through `PetService`;
-- services do not receive the command bridge's creator-tool routes. The bundled Creator Studio dashboard can use its service token to request the host's `POST /creator/repair` operation, limited to the existing `retry-action` and `retry-identity` commands;
+- services do not receive the command bridge's creator-tool routes. The bundled Creator Studio dashboard can request the host's `POST /creator/repair` operation, limited to the existing `retry-action` and `retry-identity` commands. Both the service token and a separate repair credential are required. Open the dashboard from OpenPet to authorize repairs; if OpenPet's backend restarts, reopen the dashboard from OpenPet;
 - creator-tools action reads and writes flow through the host action service boundary, while pack manifest metadata reads and writes flow through the host pet-pack service boundary;
 - `pack-manifest:read` / `pack-manifest:write` only expose the current active installed user pack metadata workflow and do not permit arbitrary pet-pack writes, arbitrary pack targeting, or raw filesystem access;
 - creator-tools frame inspection is read-only, package-local, and confined to the extension directory;

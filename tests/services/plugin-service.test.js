@@ -4768,34 +4768,64 @@ test('Creator Studio dashboard retries through its service bridge and the host c
   const pluginId = 'openpet.creator-studio'
   const serviceChild = createFakeServiceProcess()
   const commandChild = createFakeServiceProcess({ pid: 4322 })
+  const identityChild = createFakeServiceProcess({ pid: 4323 })
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-studio-repair-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const renewals = []
   let serviceEnv
+  let openedUrl
+  let repairToken = ''
   const command = Promise.withResolvers()
+  const identityCommand = Promise.withResolvers()
   const service = createPluginService({
     settingsService: createSettingsService({ plugins: { enabled: { [pluginId]: true } } }),
     petService: createBridgeAwarePetService(),
     officialPlugins: [],
     pluginDirs: [path.resolve(__dirname, '../../examples/plugins')],
+    getCreatorStudioRepairToken: () => repairToken,
+    openExternal: async (url) => { openedUrl = new URL(url) },
     hatchPetAgentService: { renewBudgetWindow: (input) => renewals.push(input) },
     spawnServiceProcess: (_file, _args, { env }) => { serviceEnv = env; return serviceChild },
-    spawnCommandProcess: (file, args) => { command.resolve({ file, args }); return commandChild }
+    spawnCommandProcess: (file, args) => {
+      if (args.some((arg) => arg.endsWith('commands/retry-identity.js'))) {
+        identityCommand.resolve()
+        return identityChild
+      }
+      command.resolve({ file, args })
+      return commandChild
+    }
   })
   t.after(() => service.stopAllServices())
   await service.startService(pluginId, 'studio')
   assert.equal(serviceEnv.OPENPET_BRIDGE_URL, undefined)
+  await assert.rejects(service.openDashboard(pluginId, 'main'), /repair authorization is not ready/)
+  assert.equal(openedUrl, undefined)
+  repairToken = 'dashboard-repair-token'
+  const launch = await service.openDashboard(pluginId, 'main', { query: { runId: 'retained-run' } })
+  assert.equal(launch.url, 'http://127.0.0.1:8794/?runId=retained-run')
+  const launchCredential = new URLSearchParams(openedUrl.hash.slice(1)).get('openpet-repair-token')
+  assert.equal(openedUrl.searchParams.get('runId'), 'retained-run')
+  assert.equal(launchCredential, repairToken)
   t.mock.property(process, 'env', serviceEnv)
   const { createCreatorStudioServer } = require('../../examples/plugins/creator-studio/service/studio-service')
   const dashboard = createCreatorStudioServer({ dataDir: dir })
   await new Promise((resolve) => dashboard.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise((resolve) => dashboard.close(resolve)))
   const run = { runId: 'retained-run', status: 'ready_for_review', input: {} }
-  const pending = fetch(`http://127.0.0.1:${dashboard.address().port}/api/runs/${run.runId}/actions/jumping/retry`, {
+  const retry = (operation, token) => fetch(`http://127.0.0.1:${dashboard.address().port}/api/runs/${run.runId}/${operation}/retry`, {
     method: 'POST',
     body: '{}',
-    headers: { 'content-type': 'application/json' }
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { 'x-openpet-creator-studio-repair-token': token } : {})
+    }
   })
+  for (const operation of ['actions/jumping', 'identity']) {
+    assert.equal((await retry(operation)).status, 401)
+    assert.equal((await retry(operation, serviceEnv.OPENPET_SERVICE_BRIDGE_TOKEN)).status, 403)
+  }
+  assert.deepEqual(renewals, [])
+  const pending = retry('actions/jumping', launchCredential)
   const dispatch = await Promise.race([command.promise, pending.then(async (response) => {
     throw new Error(`Dashboard ended before starting the repair command: ${response.status} ${await response.clone().text()}`)
   })])
@@ -4811,6 +4841,29 @@ test('Creator Studio dashboard retries through its service bridge and the host c
   assert.deepEqual(renewals, [{ runId: run.runId, reason: 'retry-action', force: true }])
   assert.equal(response.status, 200, body.error)
   assert.deepEqual(body.repair, repair)
+
+  repairToken = 'dashboard-repair-token-after-restart'
+  const reopened = await service.openDashboard(pluginId, 'main', { query: { runId: 'retained-run' } })
+  assert.equal(reopened.url, launch.url)
+  const updatedCredential = new URLSearchParams(openedUrl.hash.slice(1)).get('openpet-repair-token')
+  assert.equal(updatedCredential, repairToken)
+  assert.equal((await retry('identity', launchCredential)).status, 403)
+  assert.equal(renewals.length, 1)
+  const pendingIdentity = retry('identity', updatedCredential)
+  await Promise.race([identityCommand.promise, pendingIdentity.then(async (response) => {
+    throw new Error(`Dashboard ended before starting the identity repair: ${response.status} ${await response.clone().text()}`)
+  })])
+  const identityContext = JSON.parse(identityChild.stdin.read())
+  const identityRepair = { scope: 'identity' }
+  identityChild.stdout.write(`${JSON.stringify({ ok: true, run, repair: identityRepair })}\n`)
+  identityChild.emit('exit', 0, null)
+  const identityResponse = await pendingIdentity
+  const identityBody = await identityResponse.json()
+  assert.equal(identityContext.commandId, 'retry-identity')
+  assert.deepEqual(identityContext.payload, { runId: run.runId })
+  assert.deepEqual(renewals[1], { runId: run.runId, reason: 'retry-identity', force: true })
+  assert.equal(identityResponse.status, 200, identityBody.error)
+  assert.deepEqual(identityBody.repair, identityRepair)
 })
 
 test('plugin service bridge pet routes enforce manifest permissions', async () => {

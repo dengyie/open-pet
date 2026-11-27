@@ -7,6 +7,7 @@ import { ApiError, MAX_BODY_BYTES } from "../http/middleware.js"
 const require = createRequire(import.meta.url)
 const { readBoundedResponseBuffer } = require("../../../apps/desktop/src/services/bounded-response-body.js")
 const { sanitizeLogText } = require("../../../apps/desktop/src/services/log-safety.js")
+const { CREATOR_STUDIO_REPAIR_HEADER, creatorStudioRepairAuthFailure } = require("../../../apps/desktop/src/services/creator-studio-repair-auth.js")
 
 const HOST = "127.0.0.1"
 const NETWORK_RESPONSE_MAX_BYTES = 128 * 1024
@@ -110,7 +111,7 @@ function publicHeaders(headers) {
 	return Object.fromEntries(headers.entries())
 }
 
-export function createPluginRuntimeServer({ shell, plugins, settings, jobs, network, logs, creator, logger, now = Date.now } = {}) {
+export function createPluginRuntimeServer({ shell, plugins, settings, jobs, network, logs, creator, creatorStudioRepairToken, logger, now = Date.now } = {}) {
 	if (!plugins || typeof plugins.get !== "function") throw new TypeError("plugin runtime server requires plugins")
 	let server = null
 	let starting = null
@@ -290,6 +291,11 @@ export function createPluginRuntimeServer({ shell, plugins, settings, jobs, netw
 			}
 			const pathname = new URL(request.url, `http://${HOST}`).pathname
 			if (pathname === "/creator/repair" && session.pluginId === CREATOR_STUDIO_PLUGIN_ID && !request.headers[CAPABILITY_HEADER]) {
+				const failure = creatorStudioRepairAuthFailure(request.headers[CREATOR_STUDIO_REPAIR_HEADER], creatorStudioRepairToken)
+				if (failure) {
+					sendJson(response, failure.status, { ok: false, error: failure.error })
+					return
+				}
 				authorizedPlugin(session.pluginId, "creator:model-image-generate")
 				const result = await requireMethod(creator, "repair", "Creator repair is unavailable")(await readJsonBody(request), { signal: controller.signal })
 				sendJson(response, 200, { ok: true, result })

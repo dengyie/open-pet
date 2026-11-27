@@ -44,6 +44,7 @@ const createPluginServices = ({
   createPluginGithubImportService,
   createPluginService,
   createCatalogService,
+  getCreatorStudioRepairToken,
   readCreatorNativeApproval,
   reloadAndSendAnimations,
   onActivePetPackChanged = () => {}
@@ -82,6 +83,7 @@ const createPluginServices = ({
     imageGenerationModelService,
     videoGenerationModelService,
     secretService,
+    getCreatorStudioRepairToken,
     readCreatorNativeApproval,
     pluginDirs: [pluginDir],
     officialPlugins: [createBasicBehaviorPlugin()],

@@ -1,5 +1,6 @@
 const { createCoreServices } = require('./create-core-services')
 const { createPluginServices } = require('./create-plugin-services')
+const { deriveCreatorStudioRepairToken } = require('../creator-studio-repair-auth')
 const { createWindowServices } = require('./create-window-services')
 const { registerDisplayLifecycle, registerPetWindowLifecycle, registerRuntimeAppLifecycle } = require('./runtime-lifecycle')
 const { registerCursorRepair, runPostPluginStartupSideEffects } = require('./startup-side-effects')
@@ -457,6 +458,7 @@ const createOpenPetRuntime = ({
     createPluginGithubImportService: factories.createPluginGithubImportService,
     createPluginService: factories.createPluginService,
     createCatalogService: factories.createCatalogService,
+    getCreatorStudioRepairToken: () => deriveCreatorStudioRepairToken(sidecarRuntimeCoordinator.getBackend()?.sessionToken),
     readCreatorNativeApproval: async (pluginId) => {
       const backend = sidecarRuntimeCoordinator.getBackend()
       if (!backend) return false
