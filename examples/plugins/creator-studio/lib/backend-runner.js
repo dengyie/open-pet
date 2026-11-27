@@ -799,15 +799,25 @@ const createQualityFirstActionResultView = (result) => ({
 })
 
 const reconcileUnreportedRunningRows = async ({ dataDir, runId, runtime, canonical, profile, actionResults }) => {
-  if (typeof runtime?.loadActionCheckpoint !== 'function') return
+  if (typeof runtime?.loadActionCheckpoint !== 'function') return []
   const runningRows = ['running-right', 'running-left']
   const missing = runningRows.filter((actionId) => !Object.hasOwn(actionResults, actionId))
-  if (!missing.length || runningRows.some((actionId) => Object.hasOwn(actionResults, actionId) && actionResults[actionId]?.ok !== true)) return
+  if (!missing.length || runningRows.some((actionId) => Object.hasOwn(actionResults, actionId) && actionResults[actionId]?.ok !== true)) return []
   const checkpoints = readActionCheckpoints({ dataDir, runId }).actions
-  if (!missing.every((actionId) => checkpoints?.[actionId]?.ok === true)) return
+  if (!missing.every((actionId) => checkpoints?.[actionId]?.ok === true)) return []
   const recovered = await Promise.all(missing.map((actionId) => runtime.loadActionCheckpoint({ actionId, canonical, profile })))
-  if (recovered.every((result) => result?.ok === true)) {
-    missing.forEach((actionId, index) => { actionResults[actionId] = createQualityFirstActionResultView(recovered[index]) })
+  if (!recovered.every((result) => result?.ok === true)) return []
+  missing.forEach((actionId, index) => { actionResults[actionId] = createQualityFirstActionResultView(recovered[index]) })
+  return missing
+}
+
+const finalizeRepairPackage = async ({ runtime, optionalRows, ...options }) => {
+  try {
+    return await runtime.finalizePackage(options)
+  } catch (error) {
+    if (error?.code !== 'official_full_pet_row_qa_failed' || !optionalRows.includes(error.actionId)) throw error
+    for (const actionId of optionalRows) delete options.actionResults[actionId]
+    return runtime.finalizePackage(options)
   }
 }
 
@@ -1092,9 +1102,9 @@ const acceptQualityFirstActionCandidate = async ({
       await runtime.persistActionResult({ actionId: 'running-left', result: mirrored, canonical, profile: effectiveProfile })
       actionResults['running-left'] = createQualityFirstActionResultView(mirrored)
     }
-    await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
+    const optionalRows = await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
     const packageResult = actionResults.idle?.ok === true
-      ? await runtime.finalizePackage({ run, canonical, profile: effectiveProfile, actionResults })
+      ? await finalizeRepairPackage({ runtime, run, canonical, profile: effectiveProfile, actionResults, optionalRows })
       : null
     if (actionResults.idle?.ok === true && (!packageResult?.artifacts || typeof packageResult.artifacts !== 'object')) {
       throw createCandidateValidationError('override_checkpoint_rebuild_failed', 'Final package artifacts are missing after action selection')
@@ -1297,7 +1307,6 @@ const runQualityFirstActionRepair = async ({
         ok: false, actionId: 'running-left', disposition: 'omitted', failureCode: 'source_action_pending'
       })
     }
-    await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
     // Persist progress for interruption recovery; caught failures restore the prior revision.
     const { package: _stalePackage, ...pendingQualityFirst } = generatingRun.qualityFirst
     const persistActionProgress = () => writeRun({ dataDir, run: {
@@ -1357,6 +1366,9 @@ const runQualityFirstActionRepair = async ({
       persistActionProgress()
     }
     const idleOk = normalizedActionId === 'idle' ? result?.ok === true : actionResults.idle?.ok === true
+    const optionalRows = idleOk
+      ? await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
+      : []
     // A rejected missing action cannot change the accepted atlas. Preserve its
     // existing evaluation (including rejection) instead of paying to rescore it.
     const previousPackage = run.qualityFirst?.package
@@ -1380,7 +1392,7 @@ const runQualityFirstActionRepair = async ({
     const packageResult = idleOk
       ? retainedPackageCurrent
         ? { ...previousPackage, artifacts: run.artifacts || {} }
-        : await runtime.finalizePackage({ run, canonical, profile: effectiveProfile, actionResults })
+        : await finalizeRepairPackage({ runtime, run, canonical, profile: effectiveProfile, actionResults, optionalRows })
       : null
     if (idleOk && (!packageResult || typeof packageResult !== 'object' || !packageResult.artifacts || typeof packageResult.artifacts !== 'object')) {
       const error = new Error('Quality-first final package artifacts are missing')

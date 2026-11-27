@@ -2055,7 +2055,7 @@ for (const scenario of ['reported mirror', 'unreported mirror', 'partial package
   assert.deepEqual(JSON.parse(fs.readFileSync(checkpointPath)), checkpoints)
 })
 
-test('repairing another action packages accepted running checkpoints not yet reported by the interrupted run', async () => {
+for (const failedRow of ['', 'running-left']) test(`repairing another action keeps the requested repair when saved running rows ${failedRow ? 'fail QA' : 'pass QA'}`, async () => {
   const dataDir = createDataDir()
   const { runId } = createRun({ dataDir, input: {
     petName: 'Interrupted Running Rows', backend: 'provider',
@@ -2081,6 +2081,7 @@ test('repairing another action packages accepted running checkpoints not yet rep
   } })
   settleGeneratingRunAfterCommandTermination({ dataDir, runId, cancellationReason: 'Approval revoked' })
   const loaded = []
+  const packageAttempts = []
   const result = await runQualityFirstActionRepair({
     dataDir, runId, actionId: 'waving', plan: { hash: 'plan' }, profile,
     runtime: {
@@ -2096,15 +2097,24 @@ test('repairing another action packages accepted running checkpoints not yet rep
         return { actionId, ok: true, checkpointReused: true }
       },
       finalizePackage: async ({ actionResults }) => {
-        for (const actionId of runningRows) assert.equal(actionResults[actionId]?.ok, true, actionId)
+        assert.equal(actionResults.waving.ok, true)
+        const included = runningRows.filter((actionId) => actionResults[actionId]?.ok === true)
+        packageAttempts.push(included)
+        if (failedRow && included.includes(failedRow)) {
+          throw Object.assign(new Error(`Official full-pet row ${failedRow} failed QA`), {
+            code: 'official_full_pet_row_qa_failed', actionId: failedRow
+          })
+        }
         return { artifacts: { spritesheet: '/new/sheet.webp' } }
       }
     }
   })
   assert.deepEqual(loaded, runningRows)
+  assert.deepEqual(packageAttempts, failedRow ? [runningRows, []] : [runningRows])
   assert.equal(result.run.status, 'ready_for_review')
+  assert.equal(result.run.qualityFirst.actionResults.waving.ok, true)
   for (const actionId of runningRows) {
-    assert.equal(result.run.qualityFirst.actionResults[actionId].ok, true)
+    assert.equal(result.run.qualityFirst.actionResults[actionId]?.ok, failedRow ? undefined : true)
     assert.equal(crypto.createHash('sha256').update(fs.readFileSync(frames[actionId].path)).digest('hex'), frames[actionId].sha256)
   }
   assert.deepEqual(JSON.parse(fs.readFileSync(checkpointPath)).actions, checkpoints.actions)
