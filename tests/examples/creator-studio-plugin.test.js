@@ -3416,6 +3416,7 @@ test('creator studio dashboard initializes and uses a launch credential when ses
       URLSearchParams,
       window: {
         location,
+        addEventListener: () => {},
         history: { replaceState: (_state, _title, url) => { location.href = url.href } },
         get sessionStorage() { throw new DOMException('Storage access blocked', 'SecurityError') }
       },
@@ -3429,6 +3430,39 @@ test('creator studio dashboard initializes and uses a launch credential when ses
     assert.equal(typeof readyHandler, 'function')
     assert.equal(location.href, 'http://127.0.0.1:8794/?runId=retained-run')
   }
+})
+
+test('creator studio dashboard replaces its repair credential on both new and reused tabs', () => {
+  const dashboardPath = path.join(pluginRoot, 'web', 'dashboard', 'index.html')
+  const [, script] = fs.readFileSync(dashboardPath, 'utf-8').match(/<script>([\s\S]+)<\/script>/)
+  const key = 'openpet-repair-token'
+  const location = new URL('http://127.0.0.1:8794/?runId=retained-run')
+  const stored = new Map([[key, 'old-credential']])
+  const listeners = new Map()
+  const navigateToCredential = (token) => { location.hash = new URLSearchParams({ [key]: token }).toString() }
+  navigateToCredential('first-launch')
+  const activeCredential = runInNewContext(`${script}\n;(() => repairToken)`, {
+    URL,
+    URLSearchParams,
+    window: {
+      location,
+      addEventListener: (type, listener) => listeners.set(type, listener),
+      history: { replaceState: (_state, _title, url) => { location.href = url.href } },
+      sessionStorage: { getItem: (key) => stored.get(key), setItem: (key, value) => stored.set(key, value) }
+    },
+    document: {
+      getElementById: () => ({ addEventListener: () => {} }),
+      addEventListener: () => {}
+    }
+  })
+
+  assert.equal(activeCredential(), 'first-launch')
+  assert.equal(stored.get(key), 'first-launch')
+  navigateToCredential('reopened-after-restart')
+  listeners.get('hashchange')()
+  assert.equal(activeCredential(), 'reopened-after-restart')
+  assert.equal(stored.get(key), 'reopened-after-restart')
+  assert.equal(location.href, 'http://127.0.0.1:8794/?runId=retained-run')
 })
 
 test('creator studio dashboard asset includes full-pet import review messaging', () => {

@@ -2247,11 +2247,10 @@ const createPluginService = ({ settingsService, petService, actionService, actio
         if (!normalizedKey || !normalizedValue) continue
         dashboardUrl.searchParams.set(normalizedKey, normalizedValue)
       }
-      const repairToken = pluginId === CREATOR_STUDIO_PLUGIN_ID && dashboardId === 'main' &&
-        dashboardUrl.origin === 'http://127.0.0.1:8794' && !dashboardUrl.username && !dashboardUrl.password
-        ? getCreatorStudioRepairToken?.()
-        : ''
-      if (repairToken) {
+      if (pluginId === CREATOR_STUDIO_PLUGIN_ID && dashboardId === 'main' &&
+        dashboardUrl.origin === 'http://127.0.0.1:8794' && !dashboardUrl.username && !dashboardUrl.password) {
+        const repairToken = getCreatorStudioRepairToken?.()
+        if (!repairToken) throw new Error('Creator Studio repair authorization is not ready; try opening the dashboard again')
         const launchUrl = new URL(dashboardUrl)
         launchUrl.hash = new URLSearchParams({ [CREATOR_STUDIO_REPAIR_FRAGMENT]: repairToken }).toString()
         try {

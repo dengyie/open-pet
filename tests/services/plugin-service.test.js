@@ -4700,7 +4700,7 @@ test('Creator Studio dashboard retries through its service bridge and the host c
   const renewals = []
   let serviceEnv
   let openedUrl
-  const repairToken = 'dashboard-repair-token'
+  let repairToken = ''
   const command = Promise.withResolvers()
   const identityCommand = Promise.withResolvers()
   const service = createPluginService({
@@ -4724,6 +4724,9 @@ test('Creator Studio dashboard retries through its service bridge and the host c
   t.after(() => service.stopAllServices())
   await service.startService(pluginId, 'studio')
   assert.equal(serviceEnv.OPENPET_BRIDGE_URL, undefined)
+  await assert.rejects(service.openDashboard(pluginId, 'main'), /repair authorization is not ready/)
+  assert.equal(openedUrl, undefined)
+  repairToken = 'dashboard-repair-token'
   const launch = await service.openDashboard(pluginId, 'main', { query: { runId: 'retained-run' } })
   assert.equal(launch.url, 'http://127.0.0.1:8794/?runId=retained-run')
   const launchCredential = new URLSearchParams(openedUrl.hash.slice(1)).get('openpet-repair-token')
@@ -4765,7 +4768,14 @@ test('Creator Studio dashboard retries through its service bridge and the host c
   assert.equal(response.status, 200, body.error)
   assert.deepEqual(body.repair, repair)
 
-  const pendingIdentity = retry('identity', launchCredential)
+  repairToken = 'dashboard-repair-token-after-restart'
+  const reopened = await service.openDashboard(pluginId, 'main', { query: { runId: 'retained-run' } })
+  assert.equal(reopened.url, launch.url)
+  const updatedCredential = new URLSearchParams(openedUrl.hash.slice(1)).get('openpet-repair-token')
+  assert.equal(updatedCredential, repairToken)
+  assert.equal((await retry('identity', launchCredential)).status, 403)
+  assert.equal(renewals.length, 1)
+  const pendingIdentity = retry('identity', updatedCredential)
   await Promise.race([identityCommand.promise, pendingIdentity.then(async (response) => {
     throw new Error(`Dashboard ended before starting the identity repair: ${response.status} ${await response.clone().text()}`)
   })])
