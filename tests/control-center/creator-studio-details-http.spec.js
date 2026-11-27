@@ -57,7 +57,7 @@ for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows sav
         break
       case '/jobs/retry-job':
         data = {
-          jobId: 'retry-job', status: 'succeeded',
+          jobId: 'retry-job', status: 'canceled',
           result: {
             ok: true, state: 'cancelled', code: 'native_execution_revoked',
             message: 'Native execution approval was revoked; generation cancelled.',
@@ -67,6 +67,8 @@ for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows sav
               failedActionIds: [],
               diagnostics: {
                 progress: {
+                  runStatus: 'cancelled',
+                  failureReason: 'Native execution approval was revoked; generation cancelled.',
                   actions: [
                     { actionId: 'idle', status: 'passed', importable: true },
                     {
@@ -107,6 +109,8 @@ for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows sav
   await expect(result).toContainText('需要复查')
   await expect(importAvailable).toBeEnabled()
   if (repairSaved) {
+    await expect(result.getByTestId('creator-progress')).toContainText('Run status cancelled')
+    await expect(result.getByTestId('creator-progress-failure')).toContainText('取消原因')
     await expect(importAvailable).toHaveText('导入可用动作（2）')
     await expect(result.getByTestId('creator-action-chip-waving')).toHaveAttribute('data-status', 'passed')
     await expect(result.getByTestId('creator-asset-review')).toContainText('Saved waving candidate')

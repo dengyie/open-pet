@@ -13,6 +13,7 @@ const { sanitizePluginCommandResultValue, sanitizePluginCommandText } = require(
 export const SIGKILL_DELAY_MS = 2_000
 export const SHUTDOWN_GRACE_MS = 5_000
 export const RETRY_BASE_DELAY_MS = 250
+const CANCELED_RESULT = Symbol("canceled job result")
 
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms))
@@ -205,6 +206,9 @@ export function createRunner({
 				record.processHandle = processHandle
 				return processHandle
 			},
+			cancelWithResult(result) {
+				return { [CANCELED_RESULT]: result }
+			},
 			async finalize(writeFinalArtifact) {
 				if (record.canceled || record.interrupted || record.controller.signal.aborted) {
 					throw Object.assign(new Error("Job 已取消"), { code: "JOB_CANCELED", retryable: false })
@@ -225,6 +229,18 @@ export function createRunner({
 					const result = await handler({ ...context, job: current })
 					jobProgress.flush()
 					if (record.canceled || record.interrupted) return repo.byId(job.id)
+					if (result && Object.hasOwn(result, CANCELED_RESULT)) {
+						const cancellation = result[CANCELED_RESULT]
+						jobProgress.report({
+							phase: "canceled",
+							percent: repo.byId(job.id).progress?.percent ?? 0,
+							message: cancellation.message,
+						})
+						jobProgress.flush()
+						const canceled = repo.finish(job.id, { status: "canceled", result: cancellation })
+						emit?.("job.canceled", canceled)
+						return canceled
+					}
 					const finished = repo.finish(job.id, { status: "succeeded", result })
 					emit?.("job.succeeded", finished)
 					return finished

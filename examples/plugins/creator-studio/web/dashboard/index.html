@@ -1162,6 +1162,9 @@
         const referenceInputs = Array.isArray(conditioning.referenceInputs) && conditioning.referenceInputs.length
           ? conditioning.referenceInputs.join(', ')
           : 'none'
+        if (run?.status === 'cancelled') {
+          return `<div class="notice"><strong>Generation cancelled.</strong><span>${escapeHtml(recovery.failureReason || backend.message || run.error || 'Restore native execution approval before retrying.')}</span></div>`
+        }
         if (run?.status === 'failed') {
           return [
             '<div class="notice error">',
@@ -1696,7 +1699,7 @@
         }
         const buttonStates = run.actionLane?.buttonStates || {}
         $('confirm-button').disabled = buttonStates.confirm ? !buttonStates.confirm.enabled : (Boolean(question) || run.taskStatus === 'confirmed')
-        const generateDisabled = buttonStates.generate ? !buttonStates.generate.enabled : (Boolean(question) || run.taskStatus !== 'confirmed' || !['draft', 'failed'].includes(run.status))
+        const generateDisabled = buttonStates.generate ? !buttonStates.generate.enabled : (Boolean(question) || run.taskStatus !== 'confirmed' || !['draft', 'failed', 'cancelled'].includes(run.status))
         const approveDisabled = buttonStates.approve ? !buttonStates.approve.enabled : (run.status !== 'ready_for_review')
         $('generate-button').disabled = state.generationInFlight || generateDisabled
         $('generate-button').textContent = state.generationInFlight ? 'Generating...' : (buttonStates.generate?.label || (run.recovery?.canRetryGeneration ? 'Retry generation' : defaultGenerateLabel(run)))

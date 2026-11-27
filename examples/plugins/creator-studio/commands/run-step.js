@@ -7,7 +7,7 @@ runCommand(async (context) => {
   const runId = resolveRunId({
     dataDir: process.env.OPENPET_DATA_DIR,
     runId: context.payload?.runId,
-    statuses: ['draft', 'failed'],
+    statuses: ['draft', 'failed', 'cancelled'],
     description: 'draft or failed'
   })
   const output = await runGenerationStep({

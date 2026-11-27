@@ -20,6 +20,7 @@ function context(runnerContext, creator) {
 		tmpDir: runnerContext.tmpDir,
 		report: runnerContext.report,
 		finalize: runnerContext.finalize,
+		cancelWithResult: runnerContext.cancelWithResult,
 		creator,
 	}
 }

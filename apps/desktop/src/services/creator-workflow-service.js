@@ -8,7 +8,7 @@ const { inferAnimationType, isWorkStateAction } = require('../../../../examples/
 const { normalizeSingleActionContract } = require('../../../../examples/plugins/creator-studio/lib/single-action-contract.js')
 const { getQualityFirstQualityProfile } = require('../../../../examples/plugins/creator-studio/lib/pet-generation-quality-profile.js')
 const {
-  failGeneratingRunAfterCommandTermination
+  settleGeneratingRunAfterCommandTermination
 } = require('../../../../examples/plugins/creator-studio/lib/run-store.js')
 
 const CREATOR_STUDIO_PLUGIN_ID = 'openpet.creator-studio'
@@ -1369,6 +1369,7 @@ const createStageViews = ({
   const review = normalizeText(reviewStatus)
   const imported = normalizeText(importStatus)
   const failed = status === 'failed'
+  const cancelled = status === 'cancelled'
   const readyForReview = status === 'ready_for_review'
   const approved = status === 'approved'
   const isImported = status === 'imported' || imported === 'imported'
@@ -1376,6 +1377,7 @@ const createStageViews = ({
     task === 'confirmed' &&
     !readyForReview &&
     !failed &&
+    !cancelled &&
     !approved &&
     !isImported &&
     (status === 'draft' || status === '' || step === 'generate')
@@ -1394,7 +1396,7 @@ const createStageViews = ({
     import: 'pending'
   }
 
-  if (confirmed && !readyForReview && !approved && !isImported && !failed) {
+  if (confirmed && !readyForReview && !approved && !isImported && !failed && !cancelled) {
     stageStatus.generate = generating || step === 'generate' ? 'active' : 'pending'
   }
 
@@ -1421,6 +1423,9 @@ const createStageViews = ({
       stageStatus.review = 'pending'
       stageStatus.import = 'skipped'
     }
+  }
+  if (cancelled) {
+    stageStatus.generate = 'skipped'
   }
 
   return WORKFLOW_STAGE_DEFS.map((stage) => ({
@@ -1891,7 +1896,7 @@ const createRunFailureReason = (run = {}) => {
   const status = normalizeText(run?.status)
   const backendState = normalizeText(run?.backendStatus?.state)
   const generatedFailure = run?.artifacts?.generatedImage?.failure?.message
-  const rawFailure = generatedFailure || run?.error || (
+  const rawFailure = status === 'cancelled' ? run?.backendStatus?.message || run?.error : generatedFailure || run?.error || (
     status === 'failed' || backendState === 'failed'
       ? run?.backendStatus?.message
       : ''
@@ -2026,7 +2031,9 @@ const createWorkflowProgressView = ({
   const runningAction = actions.find((action) => action.status === 'running')
 
   let summary = ''
-  if (qualityFirst?.phase === 'planning-failed') {
+  if (runStatus === 'cancelled') {
+    summary = failureReason || '生成已取消'
+  } else if (qualityFirst?.phase === 'planning-failed') {
     summary = `动作规划失败（${qualityFirst.failureCode}）；可在恢复规划服务后重试生成`
   } else if (qualityFirst?.phase === 'awaiting_identity_review') {
     summary = `等待人工确认 canonical identity（${qualityFirst.eligibleCandidateCount}/${qualityFirst.candidateCount} 个候选可用）`
@@ -2074,16 +2081,18 @@ const createWorkflowProgressView = ({
       : 'full'
 
   return {
-    phase: qualityFirst?.phase || normalizeText(activeStage?.id) || 'generate',
-    phaseLabel: qualityFirst?.phase === 'planning' || qualityFirst?.phase === 'planning-failed'
-      ? '动作规划'
-      : qualityFirst?.phase === 'awaiting_identity_review'
-        ? '身份候选审查'
-        : qualityFirst?.phase === 'identity-generation-failed'
-          ? '身份候选生成失败'
-          : qualityFirst?.phase === 'recovery-required'
-            ? '资产恢复'
-            : normalizeText(activeStage?.label) || '生成资源',
+    phase: runStatus === 'cancelled' ? 'cancelled' : qualityFirst?.phase || normalizeText(activeStage?.id) || 'generate',
+    phaseLabel: runStatus === 'cancelled'
+      ? '已取消'
+      : qualityFirst?.phase === 'planning' || qualityFirst?.phase === 'planning-failed'
+        ? '动作规划'
+        : qualityFirst?.phase === 'awaiting_identity_review'
+          ? '身份候选审查'
+          : qualityFirst?.phase === 'identity-generation-failed'
+            ? '身份候选生成失败'
+            : qualityFirst?.phase === 'recovery-required'
+              ? '资产恢复'
+              : normalizeText(activeStage?.label) || '生成资源',
     summary: sanitizeProgressReason(summary) || '生成进度更新中',
     stages,
     actions,
@@ -2579,9 +2588,10 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       let diagnostics = null
       if (runId) {
         const pluginDataDir = pluginService.getPluginCreatorDataDir(CREATOR_STUDIO_PLUGIN_ID)
-        failGeneratingRunAfterCommandTermination({
+        settleGeneratingRunAfterCommandTermination({
           dataDir: pluginDataDir,
           runId,
+          cancellationReason: reason,
           now: () => new Date(nowMs()).toISOString()
         })
         diagnostics = readWorkflowDiagnostics({ pluginDataDir, runId })
@@ -2724,11 +2734,12 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           decisionId: normalizeText(hatchPetAgentShadow.decisionId).slice(0, 128)
         }
       : null
-    const getWorkflowDiagnostics = ({ settleTerminatedCommand = false } = {}) => {
+    const getWorkflowDiagnostics = ({ settleTerminatedCommand = false, cancellationReason } = {}) => {
       if (settleTerminatedCommand && runId) {
-        failGeneratingRunAfterCommandTermination({
+        settleGeneratingRunAfterCommandTermination({
           dataDir: pluginDataDir,
           runId,
+          cancellationReason,
           now: () => new Date(nowMs()).toISOString()
         })
       }
@@ -2995,6 +3006,10 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         ? 'native_execution_revoked'
         : contractFailureCodes.has(normalizeText(error?.code)) ? normalizeText(error.code) : 'workflow_failed'
       const reason = approvalRevoked ? CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE : error.message
+      const diagnostics = getWorkflowDiagnostics({
+        settleTerminatedCommand: true,
+        cancellationReason: approvalRevoked ? reason : undefined
+      })
       const result = createWorkflowResult({
         state,
         code: failureCode,
@@ -3007,11 +3022,12 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
               mode,
               runId,
               commandId: activeCommandId || lastCommandResult?.commandId,
-              message: reason || getCommandMessage(lastCommandResult, 'Workflow failed')
+              message: reason || getCommandMessage(lastCommandResult, 'Workflow failed'),
+              ...(approvalRevoked ? { diagnostics } : {})
             })
           : null,
         reference: creatorReferenceService.getReference(referenceTarget),
-        diagnostics: getWorkflowDiagnostics({ settleTerminatedCommand: true })
+        diagnostics
       })
       setLastRun(result.run)
       return result

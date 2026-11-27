@@ -357,37 +357,39 @@ const createGenerationLeaseHeartbeat = ({ dataDir, runId, leaseId, now = () => n
   return () => clearInterval(interval)
 }
 
-const settleTerminatedGeneratingRun = ({ dataDir, run, recoveredAt, event }) => {
+const settleTerminatedGeneratingRun = ({ dataDir, run, recoveredAt, event, cancellationReason }) => {
   const lease = run.generationLease
   const { generationLease: _generationLease, ...runWithoutLease } = run
+  const status = cancellationReason ? 'cancelled' : 'failed'
+  const reason = cancellationReason || GENERATION_COMMAND_TERMINATED_REASON
   const recoveredRun = {
     ...runWithoutLease,
-    status: 'failed',
+    status,
     currentStep: 'generate',
     updatedAt: recoveredAt,
     backendStatus: {
       ...(run.backendStatus || {}),
       backend: run.backendStatus?.backend || run.backend || run.input?.backend || '',
-      state: 'failed',
-      message: GENERATION_COMMAND_TERMINATED_REASON,
+      state: status,
+      message: reason,
       updatedAt: recoveredAt
     },
-    error: GENERATION_COMMAND_TERMINATED_REASON
+    error: reason
   }
   writeRun({ dataDir, run: recoveredRun })
   appendRunLog({
     dataDir,
     runId: run.runId,
-    level: 'error',
+    level: cancellationReason ? 'warn' : 'error',
     event,
-    message: GENERATION_COMMAND_TERMINATED_REASON,
+    message: reason,
     data: { commandId: String(lease?.commandId || ''), leaseId: String(lease?.leaseId || '') },
     now: () => recoveredAt
   })
   return recoveredRun
 }
 
-const failGeneratingRunAfterCommandTermination = ({ dataDir, runId, now = () => new Date().toISOString() }) => {
+const settleGeneratingRunAfterCommandTermination = ({ dataDir, runId, cancellationReason, now = () => new Date().toISOString() }) => {
   let run
   try {
     run = readRun({ dataDir, runId })
@@ -399,7 +401,8 @@ const failGeneratingRunAfterCommandTermination = ({ dataDir, runId, now = () => 
     dataDir,
     run,
     recoveredAt: now(),
-    event: 'generate.command-terminated'
+    event: cancellationReason ? 'generate.cancelled' : 'generate.command-terminated',
+    cancellationReason
   })
 }
 
@@ -537,7 +540,7 @@ module.exports = {
   createGenerationLeaseHeartbeat,
   createRun,
   materializeBackendReferenceForRun,
-  failGeneratingRunAfterCommandTermination,
+  settleGeneratingRunAfterCommandTermination,
   GENERATION_COMMAND_TERMINATED_REASON,
   getRunDir,
   listRuns,

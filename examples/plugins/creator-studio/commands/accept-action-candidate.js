@@ -11,7 +11,7 @@ runCommand(async (context) => {
   const runId = resolveRunId({
     dataDir,
     runId: context.payload?.runId,
-    statuses: ['ready_for_review', 'recovery-required', 'failed'],
+    statuses: ['ready_for_review', 'recovery-required', 'failed', 'cancelled'],
     description: 'action-candidate-review'
   })
   const run = readRun({ dataDir, runId })

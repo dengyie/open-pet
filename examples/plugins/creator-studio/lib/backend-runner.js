@@ -898,7 +898,7 @@ const acceptQualityFirstActionCandidate = async ({
   if (!GENERATED_FULL_PET_ACTION_IDS.includes(normalizedActionId)) {
     throw createCandidateValidationError('candidate_binding_stale', 'Requested action candidate does not belong to a generated action')
   }
-  if (!['ready_for_review', 'recovery-required', 'failed'].includes(String(run.status || ''))) {
+  if (!['ready_for_review', 'recovery-required', 'failed', 'cancelled'].includes(String(run.status || ''))) {
     throw createCandidateValidationError('candidate_binding_stale', 'Action candidate review is not available for this run state')
   }
   const canonical = run.qualityFirst?.acceptedCanonical

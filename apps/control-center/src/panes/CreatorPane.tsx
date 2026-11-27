@@ -439,7 +439,7 @@ const WorkflowProgressPanel = ({ progress }: { progress: CreatorWorkflowProgress
     </div>
     {progress.summary ? <span data-testid="creator-progress-summary">{progress.summary}</span> : null}
     {progress.failureReason ? (
-      <span data-testid="creator-progress-failure"><strong>失败原因</strong> {progress.failureReason}</span>
+      <span data-testid="creator-progress-failure"><strong>{progress.runStatus === 'cancelled' ? '取消原因' : '失败原因'}</strong> {progress.failureReason}</span>
     ) : null}
     {progress.stages?.length ? (
       <div className="creator-result-grid" data-testid="creator-progress-stages">
@@ -1010,7 +1010,7 @@ const ResultCard = ({
           {diagnostics.generatedAt ? <span><strong>Generated</strong> {formatTimestamp(diagnostics.generatedAt)}</span> : null}
           {diagnostics.failedAt ? <span><strong>Failed</strong> {formatTimestamp(diagnostics.failedAt)}</span> : null}
           {conditioning ? <span><strong>Reference inputs</strong> {conditioningReferences}</span> : null}
-          {diagnostics.failureReason ? <span><strong>Failure reason</strong> {diagnostics.failureReason}</span> : null}
+          {diagnostics.failureReason ? <span><strong>{diagnostics.runStatus === 'cancelled' ? 'Cancellation reason' : 'Failure reason'}</strong> {diagnostics.failureReason}</span> : null}
         </div>
       ) : null}
       {hatchPetAgent ? (

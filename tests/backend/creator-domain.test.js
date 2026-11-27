@@ -204,6 +204,46 @@ test("Desktop Creator jobs can finish after the dialog deadline or be canceled w
 	assert.equal(repo.byId(canceledJobId).result, null)
 })
 
+test("Shell native approval revocation cancels the Create Job without dropping its workflow result", async (t) => {
+	const { db } = await fixture()
+	t.after(() => db.close())
+	const [{ createCreatorDomain }, { createJobsRepository }, { createQueue }, { createRunner }, { createCreatorJobHandlers }] = await Promise.all([
+		import("../../services/backend/domains/creator/index.js"),
+		import("../../services/backend/store/repositories/jobs.js"),
+		import("../../services/backend/jobs/queue.js"),
+		import("../../services/backend/jobs/runner.js"),
+		import("../../services/backend/jobs/handlers/creator.js"),
+	])
+	const result = {
+		ok: true, state: "cancelled", code: "native_execution_revoked", message: "Native execution approval revoked.",
+		run: { runId: "interrupted-run", mode: "full-pet", state: "cancelled", commandId: "retry-action" },
+		diagnostics: { runStatus: "cancelled", progress: { availableActionIds: ["idle"] } },
+	}
+	const shell = {
+		request: async ({ operation }) => ({
+			body: { type: "creator.result", operation, ok: true, result },
+		}),
+	}
+	const repo = createJobsRepository({ db })
+	const queue = createQueue({ repo })
+	const creator = createCreatorDomain({ db, shell, enqueueJob: (input) => queue.enqueue(input) })
+	const events = []
+	const runner = createRunner({ repo, queue, handlers: createCreatorJobHandlers({ creator }), emit: (event) => events.push(event) })
+	const { jobId } = creator.enqueueWorkflow({ runId: result.run.runId, operation: "retry-action", actionId: "waving" })
+
+	await runner.run()
+
+	const job = repo.byId(jobId)
+	assert.equal(job.status, "canceled")
+	assert.equal(job.progress.phase, "canceled")
+	assert.ok(job.progress.percent < 100)
+	assert.equal(job.progress.message, result.message)
+	assert.deepEqual(job.result, result)
+	assert.ok(events.includes("job.canceled"))
+	assert.ok(!events.includes("job.succeeded"))
+	assert.equal(db.prepare("SELECT status FROM creator_runs WHERE id = ?").get(result.run.runId).status, "cancelled")
+})
+
 test("Retained Desktop Creator action repairs outlive the dialog deadline and can be canceled", async (t) => {
 	const { db } = await fixture()
 	t.after(() => db.close())

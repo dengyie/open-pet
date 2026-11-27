@@ -1146,6 +1146,11 @@ test('Create returns a cancelled state and reason when native approval is revoke
       runCommand: async (_pluginId, commandId) => {
         if (commandId === 'draft-task') return { commandId, result: { run: { runId: 'run-revoked', taskStatus: 'confirmed' } } }
         assert.equal(commandId, 'run-step')
+        const runDir = path.join(pluginDataDir, 'runs', 'run-revoked')
+        fs.mkdirSync(runDir, { recursive: true })
+        fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({
+          runId: 'run-revoked', status: 'generating', generationLease: { commandId }
+        }))
         throw Object.assign(new Error('Creator Studio native execution approval was revoked'), { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
       }
     },
@@ -1170,6 +1175,11 @@ test('Create returns a cancelled state and reason when native approval is revoke
   assert.equal(result.code, 'native_execution_revoked')
   assert.match(result.message, /已撤销.*授权/)
   assert.equal(result.run.runId, 'run-revoked')
+  assert.equal(result.diagnostics.runStatus, 'cancelled')
+  assert.equal(result.diagnostics.failureReason, result.message)
+  assert.equal(result.diagnostics.progress.phase, 'cancelled')
+  assert.ok(!result.diagnostics.progress.stages.some((stage) => stage.status === 'active'))
+  assert.equal(readRun({ dataDir: pluginDataDir, runId: 'run-revoked' }).status, 'cancelled')
   assert.equal((await service.getLastRun()).run.state, 'cancelled')
 })
 
@@ -2965,9 +2975,10 @@ for (const [commandId, execute] of [
     assert.equal(refreshedRun.runId, runId)
     assert.equal(refreshedRun.commandId, commandId)
     assert.equal(result.code, 'native_execution_revoked')
-    assert.equal(result.diagnostics.runStatus, 'failed')
+    assert.equal(result.diagnostics.runStatus, 'cancelled')
+    assert.equal(result.diagnostics.failureReason, result.message)
     const persisted = readRun({ dataDir: pluginDataDir, runId })
-    assert.equal(persisted.status, 'failed')
+    assert.equal(persisted.status, 'cancelled')
     assert.equal(persisted.generationLease, undefined)
   })
 }

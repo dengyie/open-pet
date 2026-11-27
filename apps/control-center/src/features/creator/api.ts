@@ -54,6 +54,7 @@ export type CreatorJobStart = { jobId: string } | { result: CreatorWorkflowResul
 export type CreatorJobResolution =
   | { kind: 'pending' }
   | { kind: 'succeeded'; result: CreatorWorkflowResult | CreatorExportRecoveryBundleResult }
+  | { kind: 'cancelled'; result: CreatorWorkflowResult }
   | { kind: 'failed'; message: string }
 
 export function resolveCreatorJob(job: Job | null): CreatorJobResolution {
@@ -65,7 +66,11 @@ export function resolveCreatorJob(job: Job | null): CreatorJobResolution {
     if (parsedExport.success) return { kind: 'succeeded', result: parsedExport.output }
     return { kind: 'failed', message: 'Creator Job returned an invalid result.' }
   }
-  if (job.status === 'canceled') return { kind: 'failed', message: 'Creator Job was canceled.' }
+  if (job.status === 'canceled') {
+    const workflow = v.safeParse(workflowSchema, job.result)
+    if (workflow.success && workflow.output.state === 'cancelled') return { kind: 'cancelled', result: workflow.output }
+    return { kind: 'failed', message: 'Creator Job was canceled.' }
+  }
   return { kind: 'failed', message: job.error?.message || 'Creator Job failed or was interrupted.' }
 }
 

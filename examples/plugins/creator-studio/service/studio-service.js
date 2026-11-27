@@ -290,7 +290,7 @@ const createPublicRecovery = ({ dataDir, run }) => {
     ? generatedImage.conditioning
     : null
   const outputCount = Array.isArray(generatedImage.outputs) ? generatedImage.outputs.length : 0
-  const canRetryGeneration = run.status === 'failed' && run.taskStatus === 'confirmed' &&
+  const canRetryGeneration = ['failed', 'cancelled'].includes(run.status) && run.taskStatus === 'confirmed' &&
     (run.currentStep === 'generate' || run.qualityFirst?.phase === 'planning-failed')
   const isFullPet = run.generationTask?.mode === 'full-pet'
   const failureReason = createPublicText({ dataDir, value: run.error || backendStatus.message || '' })
@@ -367,7 +367,7 @@ const createWizardSteps = (phase) => {
     statusByKey['follow-up'] = 'complete'
     statusByKey.confirm = 'complete'
     statusByKey.generate = 'current'
-  } else if (phase === 'failed') {
+  } else if (phase === 'failed' || phase === 'cancelled') {
     statusByKey.draft = 'complete'
     statusByKey['follow-up'] = 'complete'
     statusByKey.confirm = 'complete'
@@ -617,11 +617,13 @@ const createWizardState = ({ dataDir, run }) => {
     summary = 'Confirm the drafted task before generation.'
     nextStepLabel = 'Confirm task'
     nextStepReason = 'The task is drafted. Confirm it to unlock generation.'
-  } else if (status === 'failed') {
-    phase = 'failed'
-    summary = 'Retry generation on this same run after reviewing the failure details.'
+  } else if (status === 'failed' || status === 'cancelled') {
+    phase = status
+    summary = status === 'cancelled'
+      ? 'Generation was cancelled. Restore native execution approval before retrying.'
+      : 'Retry generation on this same run after reviewing the failure details.'
     nextStepLabel = 'Retry generation'
-    nextStepReason = 'Use the same run to retry generation after checking the failure details.'
+    nextStepReason = status === 'cancelled' ? summary : 'Use the same run to retry generation after checking the failure details.'
   } else if (status === 'ready_for_review') {
     phase = 'ready-for-review'
     if (requiresActionRepairBeforeApproval) {
@@ -873,13 +875,13 @@ const createDashboardButtonStates = ({ dataDir, run }) => {
   const requiresRetryBeforeApproval = fullPetApprovalBlocked
   const canRetryGeneration = Boolean(
     run.recovery?.canRetryGeneration ||
-    (status === 'failed' && taskStatus === 'confirmed') ||
+    (['failed', 'cancelled'].includes(status) && taskStatus === 'confirmed') ||
     (requiresRetryBeforeApproval && taskStatus === 'confirmed')
   )
   const generateLabel = canRetryGeneration ? 'Retry generation' : (isFullPet ? 'Generate pet pack' : 'Generate action')
 
   const confirmEnabled = hasGenerationTask && !hasPendingQuestion && taskStatus !== 'confirmed'
-  const generateEnabled = !hasPendingQuestion && taskStatus === 'confirmed' && ['draft', 'failed'].includes(status)
+  const generateEnabled = !hasPendingQuestion && taskStatus === 'confirmed' && ['draft', 'failed', 'cancelled'].includes(status)
     ? true
     : !hasPendingQuestion && requiresRetryBeforeApproval && taskStatus === 'confirmed'
   const approveEnabled = status === 'ready_for_review' && !fullPetApprovalBlocked && !actionApprovalBlocked
@@ -927,7 +929,7 @@ const createDashboardButtonStates = ({ dataDir, run }) => {
           ? 'This run is already imported.'
           : status === 'approved'
             ? 'This run is already approved. Finish host-owned import in Control Center -> Plugins.'
-            : status === 'failed'
+            : ['failed', 'cancelled'].includes(status)
               ? 'Retry generation before approval.'
               : 'Generation review must complete before approval.'
     }
@@ -1133,7 +1135,9 @@ const createWorkflowGuidance = ({ dataDir, run }) => {
     ? (
         ['ready_for_review', 'approved', 'imported'].includes(run.status)
           ? `This run already used the host-owned image Provider${providerLabel ? ` (${providerLabel})` : ''}.`
-          : run.status === 'failed'
+          : run.status === 'cancelled'
+            ? 'This provider run was cancelled.'
+            : run.status === 'failed'
             ? `This run failed while using the host-owned image Provider${providerLabel ? ` (${providerLabel})` : ''}.`
             : `This run will use the host-owned image Provider when generation starts${providerLabel ? ` (${providerLabel})` : ''}.`
       )
@@ -1142,7 +1146,9 @@ const createWorkflowGuidance = ({ dataDir, run }) => {
     ? [
         'Use Control Center -> AI -> Test saved image Provider before production smoke runs.',
         'The dashboard service cannot run a live provider health check because bridge tokens stay command-scoped.',
-        run.status === 'failed'
+        run.status === 'cancelled'
+          ? 'Restore native execution approval before retrying generation.'
+          : run.status === 'failed'
           ? 'Fix the provider readiness issue, then use Retry generation on this same run.'
           : 'Review QA, prompt provenance, and generated frames before claiming production asset quality.'
       ]
@@ -1364,10 +1370,10 @@ const createWorkflowState = ({ run }) => {
     }
   }
 
-  if (status === 'failed') {
+  if (status === 'failed' || status === 'cancelled') {
     return {
-      phase: 'failed',
-      headline: 'Generation failed',
+      phase: status,
+      headline: status === 'cancelled' ? 'Generation cancelled' : 'Generation failed',
       nextActionLabel: 'Retry generation'
     }
   }
@@ -1451,7 +1457,7 @@ const createImportReadiness = ({ run }) => {
 const createDashboardState = ({ dataDir, run, developerMode = false }) => {
   const promptProvenance = createPromptProvenance({ dataDir, run, developerMode })
   const recoveryMessage = String(run?.backendStatus?.message || run?.error || '').trim()
-  const canRetryGeneration = String(run?.status || '') === 'failed'
+  const canRetryGeneration = ['failed', 'cancelled'].includes(run?.status)
   return {
     workflow: createWorkflowState({ run }),
     importReadiness: createImportReadiness({ run }),
