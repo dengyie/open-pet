@@ -962,6 +962,7 @@ const createImageGenerationModelService = ({
   providerGenerationTimeoutMs,
   cloudGenerationTimeoutMs,
   providerResponseLimits = {},
+  canPersistModelCatalog = () => true,
   awaitPersistence = false
 } = {}) => {
   if (!settingsService) throw new Error('settingsService is required')
@@ -1111,6 +1112,7 @@ const createImageGenerationModelService = ({
       fetchedAt: now().toISOString(),
       secrets: [secretService.getSecretValue(config.apiKeyRef)]
     })
+    if (!canPersistModelCatalog()) return nextCatalog
     const current = getStoredImageGenerationState()
     const saved = saveStoredConfig({
       ...toPersistedConfig(current),
@@ -1134,7 +1136,10 @@ const createImageGenerationModelService = ({
     }
   }
 
-  const getHealthCacheRevision = () => healthCacheRevision
+  const getHealthCacheRevision = () => {
+    const secretRevision = secretService.getSecretRevision?.(getStoredConfig().apiKeyRef)
+    return secretRevision === undefined ? healthCacheRevision : `${healthCacheRevision}:${secretRevision}`
+  }
 
   const saveConfig = (partialConfig) => {
     assertProviderConfigPayload(partialConfig, 'Image Provider')

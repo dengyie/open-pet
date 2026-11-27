@@ -129,7 +129,22 @@ const createCoreServices = ({
   })
   const aiSidecar = createAiSidecarProxy({ getBackend, fetchImpl, onSnapshot: onAiSnapshot, getActivePetPackId: () => petPackService.getActivePetPack?.()?.manifest?.id || '' })
   const { aiService, aiTalkService, petUtteranceLogService, behaviorOrchestratorService } = aiSidecar
-  const imageGenerationModelService = createImageGenerationModelService({ settingsService, secretService, appLogService })
+  let backendImageConfig
+  const applyBackendImageConfig = (config) => { backendImageConfig = config }
+  const imageSettingsService = {
+    ...settingsService,
+    get: () => {
+      const settings = settingsService.get()
+      return backendImageConfig === undefined ? settings : {
+        ...settings,
+        models: { ...settings.models, imageGeneration: backendImageConfig }
+      }
+    }
+  }
+  const imageGenerationModelService = createImageGenerationModelService({
+    settingsService: imageSettingsService, secretService, appLogService,
+    canPersistModelCatalog: () => backendImageConfig === undefined
+  })
   const videoGenerationModelService = typeof createVideoGenerationModelService === 'function'
     ? createVideoGenerationModelService({ settingsService, secretService, appLogService })
     : null
@@ -203,6 +218,7 @@ const createCoreServices = ({
       cursorAssetService,
       systemCursorService,
       creatorReferenceService,
+      applyBackendImageConfig,
       imageGenerationModelService,
       videoGenerationModelService,
       triggerRuleRuntimeService,

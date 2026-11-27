@@ -12,8 +12,78 @@ const { createSettingsSidecarBridge } = require("../../apps/desktop/src/services
 const { createSettingsHostEffect } = require("../../apps/desktop/src/services/settings-host-effects.js")
 const { createSecretService } = require("../../apps/desktop/src/services/secret-service.js")
 const { createAiSidecarProxy } = require("../../apps/desktop/src/services/ai-sidecar-proxy.js")
+const { createImageGenerationModelService } = require("../../apps/desktop/src/services/image-generation-model-service.js")
 
 const repoRoot = path.resolve(__dirname, "../..")
+
+test("saving an image provider through the AI routes configures the Shell Creator provider", async () => {
+	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpet-creator-provider-"))
+	const storePath = path.join(userDataDir, "backend", "secrets", "providers.enc")
+	const secretService = createSecretService({ storePath })
+	const apiKey = "fixture-image-provider-key"
+	const baseUrl = "https://images.example.test/v1"
+	const model = "gpt-image-2"
+	let imageConfig
+	let backend
+	const requests = []
+	const shellImages = createImageGenerationModelService({
+		settingsService: { get: () => ({ models: { imageGeneration: imageConfig } }) },
+		secretService,
+		canPersistModelCatalog: () => imageConfig === undefined,
+		fetchImpl: async (url, options) => {
+			requests.push({ url, authorization: options.headers.Authorization })
+			return Response.json({ data: [{ id: model }] })
+		},
+	})
+	const settingsBridge = createSettingsSidecarBridge({
+		getBackend: () => backend,
+		applyBackendImageConfig: (config) => { imageConfig = config },
+	})
+	try {
+		backend = await spawnSidecar({
+			entry: path.join(repoRoot, "services/backend/index.js"),
+			initBody: { userDataDir, providerKeys: secretService.listProviderKeys() },
+			logger: { info() {}, warn() {}, error() {} },
+		})
+		const handler = createMessageHandler({
+			send: (envelope) => backend.child.send(envelope),
+			secretService,
+			onSettingsApplyRequest: (envelope) => settingsBridge.handle(envelope),
+		})
+		backend.child.on("message", (envelope) => {
+			if (["settings.apply.request", "secrets.persist.request"].includes(envelope?.body?.type)) void handler.handle(envelope)
+		})
+		const request = async (route, method, body) => {
+			const response = await fetch(`${backend.baseUrl}/ai/images/${route}`, {
+				method,
+				headers: { authorization: `Bearer ${backend.sessionToken}`, "content-type": "application/json" },
+				body: JSON.stringify(body),
+			})
+			assert.equal(response.status, 200)
+		}
+
+		await settingsBridge.hydrate()
+		assert.equal((await shellImages.checkHealth()).code, "missing_api_key")
+		await request("config", "PATCH", { config: { provider: "openai-compatible", baseUrl, model } })
+		await request("key", "PUT", { apiKey })
+		assert.equal(shellImages.getConfig().baseUrl, baseUrl)
+		assert.equal(shellImages.getConfig().model, model)
+		const health = await shellImages.checkHealth()
+		assert.equal(health.ok, true, health.message)
+		assert.deepEqual(requests, [{ url: `${baseUrl}/models`, authorization: `Bearer ${apiKey}` }])
+
+		imageConfig = undefined
+		await settingsBridge.hydrate()
+		assert.equal(shellImages.getConfig().baseUrl, baseUrl)
+		assert.equal(createSecretService({ storePath }).listProviderKeys().openai, apiKey)
+		await request("key", "DELETE")
+		assert.equal(shellImages.getConfig().hasApiKey, false)
+		assert.equal(createSecretService({ storePath }).listProviderKeys().openai, undefined)
+	} finally {
+		if (backend?.child) await stopSidecar(backend.child)
+		fs.rmSync(userDataDir, { recursive: true, force: true })
+	}
+})
 
 test("the dedicated Hatch Pet Agent key persists across sidecar restart", async () => {
 	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpet-hatch-key-"))

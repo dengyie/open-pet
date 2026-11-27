@@ -81,6 +81,7 @@ const createOpenPetRuntime = ({
       cursorAssetService,
       systemCursorService,
       creatorReferenceService,
+      applyBackendImageConfig,
       imageGenerationModelService,
       videoGenerationModelService,
       localHttpService,
@@ -324,6 +325,7 @@ const createOpenPetRuntime = ({
     requestBackend: (body) => sidecarRuntimeCoordinator.requestBackend?.(body),
     fetchImpl,
     petService,
+    applyBackendImageConfig,
     applyHostSettings: applySettingsHostEffect,
     sendToPetRenderer: (settings) => broadcastCursorSettings(settings),
     logger: sidecarLogger
@@ -361,6 +363,7 @@ const createOpenPetRuntime = ({
 
   sidecarRuntimeCoordinator.onChanged?.((backend) => {
     aiSidecar.reset()
+    applyBackendImageConfig(undefined)
     const settingsWindow = getPetWindow()?.settingsWindow
     if (settingsWindow && !settingsWindow.isDestroyed?.()) {
       settingsWindow.webContents?.send?.(IPC.SETTINGS_CHANGED, {

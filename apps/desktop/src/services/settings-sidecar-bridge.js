@@ -12,6 +12,7 @@ const CANONICAL_PATHS = Object.freeze([
 	"companion.idleMotion.enabled", "companion.idleMotion.intensity",
 ])
 const PERSISTABLE_PATHS = CANONICAL_PATHS
+const IMAGE_CONFIG_PATH = "models.imageGeneration"
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 
@@ -120,7 +121,7 @@ async function fetchSnapshot(backend, fetchImpl) {
 	return snapshot
 }
 
-function createSettingsSidecarBridge({ getBackend, fetchImpl = globalThis.fetch, requestBackend, petService, applyHostSettings, sendToPetRenderer, logger } = {}) {
+function createSettingsSidecarBridge({ getBackend, fetchImpl = globalThis.fetch, requestBackend, petService, applyBackendImageConfig, applyHostSettings, sendToPetRenderer, logger } = {}) {
 	if (typeof getBackend !== "function") throw new TypeError("createSettingsSidecarBridge 需要 getBackend")
 	if (typeof fetchImpl !== "function") throw new TypeError("createSettingsSidecarBridge 需要 fetchImpl")
 	let operation = Promise.resolve()
@@ -176,6 +177,10 @@ function createSettingsSidecarBridge({ getBackend, fetchImpl = globalThis.fetch,
 				: await fetchSnapshot(backend, fetchImpl)
 			const latestBackend = getBackend()
 			if (!latestBackend || latestBackend.sessionToken !== backend.sessionToken) return null
+			if (notification?.paths?.includes(IMAGE_CONFIG_PATH)) {
+				applyBackendImageConfig?.(getPath(snapshot.values, IMAGE_CONFIG_PATH))
+				if (canonicalPaths(notification.paths).length === 0) return null
+			}
 			return await apply(snapshot, notification?.paths, { skipBackendRollback: notification?.type === "settings.apply.request" })
 		} catch (error) {
 			logger?.warn?.("应用 sidecar settings snapshot 失败", { error: String(error) })
@@ -193,6 +198,7 @@ function createSettingsSidecarBridge({ getBackend, fetchImpl = globalThis.fetch,
 			if (!backend) return null
 			const snapshot = await fetchSnapshot(backend, fetchImpl)
 			if (getBackend()?.sessionToken !== backend.sessionToken) return null
+			applyBackendImageConfig?.(getPath(snapshot.values, IMAGE_CONFIG_PATH))
 			return apply(snapshot, CANONICAL_PATHS)
 		})
 		return operation
