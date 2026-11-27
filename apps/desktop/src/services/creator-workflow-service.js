@@ -22,6 +22,7 @@ const CREATOR_STUDIO_ACCEPT_IDENTITY_COMMAND_ID = 'accept-identity'
 const CREATOR_STUDIO_ACCEPT_ACTION_CANDIDATE_COMMAND_ID = 'accept-action-candidate'
 const CREATOR_STUDIO_RETRY_ACTION_COMMAND_ID = 'retry-action'
 const CREATOR_STUDIO_RETRY_IDENTITY_COMMAND_ID = 'retry-identity'
+const CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE = '已撤销 Creator Studio 的本机执行授权，生成已取消。'
 
 const EDITABLE_TARGET_TYPE = 'editable-action-host'
 const EDITABLE_TARGET_ID = 'legacy-editable-host'
@@ -2571,6 +2572,29 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         setLastRun(result.run)
       }
       return result
+    } catch (error) {
+      if (error?.code !== 'CREATOR_NATIVE_APPROVAL_REVOKED') throw error
+      const { runId, commandId } = activeWorkflow
+      const reason = CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE
+      let diagnostics = null
+      if (runId) {
+        const pluginDataDir = pluginService.getPluginCreatorDataDir(CREATOR_STUDIO_PLUGIN_ID)
+        failGeneratingRunAfterCommandTermination({
+          dataDir: pluginDataDir,
+          runId,
+          now: () => new Date(nowMs()).toISOString()
+        })
+        diagnostics = readWorkflowDiagnostics({ pluginDataDir, runId })
+      }
+      const result = createWorkflowResult({
+        state: 'cancelled',
+        code: 'native_execution_revoked',
+        message: reason,
+        run: runId ? createRunView({ state: 'cancelled', mode, runId, commandId, message: reason, diagnostics }) : null,
+        diagnostics
+      })
+      setLastRun(result.run)
+      return result
     } finally {
       clearWorkflow()
     }
@@ -2970,7 +2994,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       const failureCode = approvalRevoked
         ? 'native_execution_revoked'
         : contractFailureCodes.has(normalizeText(error?.code)) ? normalizeText(error.code) : 'workflow_failed'
-      const reason = approvalRevoked ? '已撤销 Creator Studio 的本机执行授权，生成已取消。' : error.message
+      const reason = approvalRevoked ? CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE : error.message
       const result = createWorkflowResult({
         state,
         code: failureCode,

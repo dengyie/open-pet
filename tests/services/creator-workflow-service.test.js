@@ -2917,6 +2917,61 @@ test('creator workflow accepts a warned canonical identity through an exact hash
   }])
 })
 
+for (const [commandId, execute] of [
+  ['accept-identity', (service, runId) => service.acceptCreatorIdentity({
+    runId, candidateId: 'canonical-1', sha256: 'a'.repeat(64)
+  })],
+  ['retry-action', (service, runId) => service.retryFullPetAction({ runId, actionId: 'waving' })]
+]) {
+  test(`revoking native approval during ${commandId} settles the stored and refreshed Creator run`, async (t) => {
+    const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-interrupted-'))
+    t.after(() => fs.rmSync(pluginDataDir, { recursive: true, force: true }))
+    const runId = 'run-interrupted'
+    const runDir = path.join(pluginDataDir, 'runs', runId)
+    fs.mkdirSync(runDir, { recursive: true })
+    let commandStarted
+    const started = new Promise((resolve) => { commandStarted = resolve })
+    let revoke
+    const service = createCreatorWorkflowService({
+      pluginService: {
+        listPlugins: () => [createPluginView({ commands: [{ id: commandId }] })],
+        getPluginCreatorDataDir: () => pluginDataDir,
+        runCommand: async (_pluginId, actualCommandId, payload) => {
+          assert.equal(actualCommandId, commandId)
+          assert.equal(payload.runId, runId)
+          fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({
+            runId, status: 'generating', currentStep: 'generate', backend: 'provider',
+            generationLease: { commandId, leaseId: 'in-flight-lease', startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString() }
+          }))
+          return new Promise((_resolve, reject) => {
+            revoke = () => reject(Object.assign(new Error('native execution approval was revoked'), { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' }))
+            commandStarted()
+          })
+        }
+      },
+      imageGenerationModelService: { checkHealth: async () => ({ ok: true }), getConfig: () => ({ provider: 'openai-compatible' }) },
+      actionService: { getConfig: () => ({ actions: [] }), acceptTriggerProposalItem: () => ({}) },
+      creatorReferenceService: { getReference: () => null, bindReference: async () => ({}), copyReferenceIntoRun: () => ({}) }
+    })
+
+    const work = execute(service, runId)
+    await Promise.race([started, work])
+    assert.equal((await service.getLastRun()).run.state, 'generating')
+    revoke()
+
+    const result = await work.catch((error) => error)
+    const refreshedRun = (await service.getState()).lastRun
+    assert.equal(refreshedRun.state, 'cancelled')
+    assert.equal(refreshedRun.runId, runId)
+    assert.equal(refreshedRun.commandId, commandId)
+    assert.equal(result.code, 'native_execution_revoked')
+    assert.equal(result.diagnostics.runStatus, 'failed')
+    const persisted = readRun({ dataDir: pluginDataDir, runId })
+    assert.equal(persisted.status, 'failed')
+    assert.equal(persisted.generationLease, undefined)
+  })
+}
+
 test('creator workflow selects a retained action candidate through the dedicated command', async () => {
   const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-accept-action-candidate-'))
   const runId = 'run-accept-action-candidate'
