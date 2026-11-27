@@ -666,6 +666,7 @@ export const backendToShellSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("degraded"), reason: z.string() }),
   z.object({ type: z.literal("dialog.request"), requestId: z.string(), mode: z.enum(["file", "directory"]) }),
   z.object({ type: z.literal("settings.changed"), paths: z.array(z.string()), version: z.number().int().nonnegative() }),
+  z.object({ type: z.literal("creator.native-approval-revoked") }).strict(),
   z.object({ type: z.literal("settings.apply.request"), paths: z.array(z.string()), version: z.number().int().nonnegative(), values: z.record(z.string(), z.unknown()).optional() }),
   settingsCommandBackendRequestSchema,
   z.object({ type: z.literal("settings.persist.result"), version: z.number().int().nonnegative(), ok: z.boolean(), changedPaths: z.array(z.string()), error: z.string().optional(), errorCode: z.string().optional() }),

@@ -22,6 +22,7 @@ const EXPECTED_BACKEND_TO_SHELL_TYPES = [
 	"degraded",
 	"dialog.request",
 	"settings.changed",
+	"creator.native-approval-revoked",
 	"settings.apply.request",
 	"settings.command.request",
 	"settings.persist.result",
@@ -56,7 +57,7 @@ async function contractBackendToShellTypes() {
 		assert.deepEqual(await contractBackendToShellTypes(), EXPECTED_BACKEND_TO_SHELL_TYPES)
 		assert.deepEqual(backendSchema.BACKEND_TO_SHELL_TYPES, EXPECTED_BACKEND_TO_SHELL_TYPES)
 		assert.deepEqual(SHELL_BACKEND_TO_SHELL_TYPES, EXPECTED_BACKEND_TO_SHELL_TYPES)
-	assert.equal(new Set(SHELL_BACKEND_TO_SHELL_TYPES).size, 24)
+		assert.equal(new Set(SHELL_BACKEND_TO_SHELL_TYPES).size, 25)
 	})
 
 	it("drops malformed and non-allowlisted envelopes and logs each rejection", async () => {
@@ -146,6 +147,14 @@ async function contractBackendToShellTypes() {
 		const handler = createMessageHandler({ send() {}, onSettingsChanged: (payload) => notifications.push(payload) })
 		assert.equal(await handler.handle(envelope("settings.changed", { paths: ["scale"], version: 4, values: { apiKey: "secret" } })), true)
 		assert.deepEqual(notifications, [{ paths: ["scale"], version: 4 }])
+	})
+
+	it("only accepts payload-free Creator native approval revocation notifications", async () => {
+		let revocations = 0
+		const handler = createMessageHandler({ send() {}, onCreatorNativeApprovalRevoked: () => { revocations += 1 } })
+		assert.equal(await handler.handle(envelope("creator.native-approval-revoked", { pid: 42 })), false)
+		assert.equal(await handler.handle(envelope("creator.native-approval-revoked")), true)
+		assert.equal(revocations, 1)
 	})
 
 	it("answers settings.apply.request with the same envelope id after Shell effects settle", async () => {

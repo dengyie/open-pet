@@ -46,6 +46,7 @@ const runPluginCommandEntryProcess = async ({
   createPluginCreatorDirs,
   cloneJsonValue,
   resolveCommandCwd,
+  beforeSpawn,
   spawnCommandProcess,
   stopRuntimeProcessWithFallback,
   resolveStopWaiter,
@@ -78,6 +79,7 @@ const runPluginCommandEntryProcess = async ({
       extensionDir: cwd
     }
   }
+  beforeSpawn?.()
   const child = spawnCommandProcess(file, args, {
     cwd,
     detached: false,
@@ -100,7 +102,6 @@ const runPluginCommandEntryProcess = async ({
     pid: Number(child.pid) || 0,
     error: '',
     child,
-    stopReason: '',
     stop: null,
     failStop: null,
     stopCompleted: null,
@@ -140,11 +141,20 @@ const runPluginCommandEntryProcess = async ({
         reject(error)
       })
     }
-    runtime.stop = ({ reason = 'Command stopped', signal = 'SIGTERM' } = {}) => {
+    let stopError
+    runtime.stop = ({ reason = 'Command stopped', code, signal = 'SIGTERM' } = {}) => {
       runtime.status = 'stopping'
       runtime.error = ''
-      runtime.stopReason = reason
+      stopError = Object.assign(new Error(reason), { code, openpetLogged: true })
       stopRuntimeProcessWithFallback(runtime, signal)
+      return true
+    }
+    const rejectStopped = () => {
+      if (!stopError) return false
+      runtime.status = 'failed'
+      runtime.error = stopError.message
+      appendLog({ pluginId, commandId, level: 'error', message: runtime.error })
+      reject(stopError)
       return true
     }
     const timeoutMs = Number.isFinite(Number(commandEntry?.timeoutMs))
@@ -155,6 +165,8 @@ const runPluginCommandEntryProcess = async ({
     const timeoutId = timeoutMs > 0
       ? setTimeout(() => {
           settle(() => {
+            resolveStopWaiter(runtime)
+            if (rejectStopped()) return
             safeKillChild()
             reject(new Error(`Plugin command timed out after ${timeoutMs}ms`))
           })
@@ -175,12 +187,14 @@ const runPluginCommandEntryProcess = async ({
     child.on?.('error', (error) => {
       settle(() => {
         resolveStopWaiter(runtime)
+        if (rejectStopped()) return
         reject(new Error(sanitizePluginCommandText(error?.message || 'Plugin command failed')))
       })
     })
     child.stdin?.on?.('error', (error) => {
       settle(() => {
         resolveStopWaiter(runtime)
+        if (rejectStopped()) return
         safeKillChild()
         reject(new Error(sanitizePluginCommandText(error?.message || 'Plugin command stdin failed')))
       })
@@ -189,15 +203,7 @@ const runPluginCommandEntryProcess = async ({
       settle(() => {
         resolveStopWaiter(runtime)
         const exitCode = Number.isFinite(Number(code)) ? Number(code) : null
-        if (runtime.status === 'stopping') {
-          runtime.status = 'failed'
-          runtime.error = runtime.stopReason || 'Command stopped'
-          appendLog({ pluginId, commandId, level: 'error', message: 'Command stopped' })
-          const error = new Error(runtime.error)
-          error.openpetLogged = true
-          reject(error)
-          return
-        }
+        if (rejectStopped()) return
         if (exitCode !== 0 || signal) {
           const parsedResult = readCommandResult(stdoutText)
           const parsedError = parsedResult && typeof parsedResult === 'object' && typeof parsedResult.error === 'string'

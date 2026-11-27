@@ -1930,7 +1930,7 @@ export interface PluginCommandRunResultViewState extends OkResponse {
   result?: JsonValue
 }
 
-export type CreatorStudioDefaultFlowState = 'blocked' | 'needs_details' | 'review-required' | 'completed'
+export type CreatorStudioDefaultFlowState = 'blocked' | 'needs_details' | 'review-required' | 'cancelled' | 'completed'
 
 export interface CreatorStudioDefaultFlowResult extends OkResponse {
   state: CreatorStudioDefaultFlowState
@@ -1996,6 +1996,7 @@ export type CreatorWorkflowState =
   | 'generating'
   | 'awaiting-identity-review'
   | 'recovery-required'
+  | 'cancelled'
   | 'review-required'
   | 'preview-ready'
   | 'import-failed'

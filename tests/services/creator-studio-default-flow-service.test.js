@@ -460,6 +460,21 @@ test('creator studio default flow does not require trigger handoff records befor
   assert.equal(result.lastCommandResult?.commandId, 'run-step')
 })
 
+test('creator studio default flow reports revocation as cancellation even before a draft exists', async () => {
+  const service = createCreatorStudioDefaultFlowService({
+    imageGenerationModelService: { checkHealth: async () => ({ ok: true }) },
+    pluginService: {
+      listPlugins: () => [createPluginView()],
+      runCommand: async () => {
+        throw Object.assign(new Error('Creator Studio native execution approval was revoked'), { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+      }
+    }
+  })
+  const result = await service.runDefaultFlow({ prompt: '新增一个转圈动作' })
+  assert.equal(result.state, 'cancelled')
+  assert.match(result.message, /已撤销.*授权/)
+})
+
 test('creator studio default flow failure logs do not include raw prompt or file-path error text', async () => {
   const logs = []
   const sensitiveError = new Error('Prompt "新增一个害羞转圈动作" failed at /Users/mango/private/reference.png')

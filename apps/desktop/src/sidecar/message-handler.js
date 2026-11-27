@@ -133,6 +133,7 @@ const BACKEND_TO_SHELL_TYPES = Object.freeze([
 	"degraded",
 	"dialog.request",
 	"settings.changed",
+	"creator.native-approval-revoked",
 	"settings.apply.request",
 	"settings.command.request",
 	"settings.persist.result",
@@ -497,6 +498,9 @@ function parseEnvelope(raw) {
 		case "settings.changed":
 			if (!Array.isArray(body.paths) || body.paths.some((path) => typeof path !== "string") || !Number.isInteger(body.version) || body.version < 0) return fail("bad-body", "settings.changed")
 			break
+		case "creator.native-approval-revoked":
+			if (!exactKeys(body, ["type"])) return fail("bad-body", "creator.native-approval-revoked")
+			break
 		case "settings.apply.request":
 			if (!Array.isArray(body.paths) || body.paths.some((path) => typeof path !== "string") || !Number.isInteger(body.version) || body.version < 0 || (body.values !== undefined && (body.values === null || typeof body.values !== "object" || Array.isArray(body.values)))) return fail("bad-body", "settings.apply.request")
 			break
@@ -550,7 +554,7 @@ function parseEnvelope(raw) {
 	return { ok: true, envelope: { v: raw.v, id: raw.id, at: raw.at, body: normalizedBody } }
 }
 
-function createMessageHandler({ dialog, petService, secretService, logger, send, onNotify, onBadge, onDashboard, onSettingsChanged, onSettingsApplyRequest, onSettingsCommandRequest, onCatalogRequest, onPetPackRequest, onActionsRequest, onCreatorRequest, onAiTalkRequest, onAiState, onAiHostRequest, productionService } = {}) {
+function createMessageHandler({ dialog, petService, secretService, logger, send, onNotify, onBadge, onDashboard, onSettingsChanged, onCreatorNativeApprovalRevoked, onSettingsApplyRequest, onSettingsCommandRequest, onCatalogRequest, onPetPackRequest, onActionsRequest, onCreatorRequest, onAiTalkRequest, onAiState, onAiHostRequest, productionService } = {}) {
 	if (typeof send !== "function") throw new TypeError("createMessageHandler 需要 send")
 
 	async function handle(raw) {
@@ -743,6 +747,9 @@ function createMessageHandler({ dialog, petService, secretService, logger, send,
 					return true
 				case "settings.changed":
 					onSettingsChanged?.({ paths: [...body.paths], version: body.version })
+					return true
+				case "creator.native-approval-revoked":
+					onCreatorNativeApprovalRevoked?.()
 					return true
 				case "settings.apply.request": {
 					let result

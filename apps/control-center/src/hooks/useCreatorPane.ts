@@ -87,6 +87,7 @@ const formatWorkflowStateFallback = (state: CreatorWorkflowResult['state'] | str
   if (state === 'generating') return '进行中'
   if (state === 'provider-not-ready') return 'Provider 未就绪'
   if (state === 'hatch-pet-not-ready') return '生成前置检查失败'
+  if (state === 'cancelled') return '已取消'
   if (state === 'review-required') return '需要复查'
   if (state === 'preview-ready') return '预览就绪'
   if (state === 'import-failed') return '导入失败'

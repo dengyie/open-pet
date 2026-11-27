@@ -2965,22 +2965,25 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         'image_prompt_contract_invalid',
         'image_prompt_internal_term'
       ])
-      const failureCode = contractFailureCodes.has(normalizeText(error?.code))
-        ? normalizeText(error.code)
-        : 'workflow_failed'
+      const approvalRevoked = error?.code === 'CREATOR_NATIVE_APPROVAL_REVOKED'
+      const state = approvalRevoked ? 'cancelled' : 'review-required'
+      const failureCode = approvalRevoked
+        ? 'native_execution_revoked'
+        : contractFailureCodes.has(normalizeText(error?.code)) ? normalizeText(error.code) : 'workflow_failed'
+      const reason = approvalRevoked ? '已撤销 Creator Studio 的本机执行授权，生成已取消。' : error.message
       const result = createWorkflowResult({
-        state: 'review-required',
+        state,
         code: failureCode,
-        message: runId
-          ? `生成流程在 run ${runId} 失败：${error.message || '未知错误'}。可到 Creator Studio 查看详情。`
-          : (error.message || 'Creator workflow failed'),
+        message: approvalRevoked ? reason : runId
+          ? `生成流程在 run ${runId} 失败：${reason || '未知错误'}。可到 Creator Studio 查看详情。`
+          : (reason || 'Creator workflow failed'),
         run: runId
           ? createRunView({
-              state: 'review-required',
+              state,
               mode,
               runId,
               commandId: activeCommandId || lastCommandResult?.commandId,
-              message: error.message || getCommandMessage(lastCommandResult, 'Workflow failed')
+              message: reason || getCommandMessage(lastCommandResult, 'Workflow failed')
             })
           : null,
         reference: creatorReferenceService.getReference(referenceTarget),

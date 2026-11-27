@@ -118,11 +118,12 @@ const createPluginRuntimeControl = ({
     return runtime
   }
 
-  const stopPluginCommandRuntime = (pluginId, commandId, runtime, _options = {}) => {
-    if (!runtime || runtime.status !== 'running') return runtime
+  const stopPluginCommandRuntime = (pluginId, commandId, runtime, options = {}) => {
+    const canForceStop = options.signal === 'SIGKILL' && runtime?.status === 'stopping'
+    if (runtime?.status !== 'running' && !canForceStop) return runtime
     try {
       ensureStopWaiter(runtime)
-      runtime.stop?.({ reason: 'Command stopped' })
+      runtime.stop?.(options)
       appendLog({ pluginId, commandId, level: 'info', message: 'Command stop requested' })
     } catch (error) {
       runtime.status = 'failed'

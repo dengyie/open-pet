@@ -1135,6 +1135,44 @@ test('creator workflow service settles a fresh generating lease after the active
   assert.equal(logs.at(-1).details.lastCommandId, 'run-step')
 })
 
+test('Create returns a cancelled state and reason when native approval is revoked during generation', async (t) => {
+  const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-revoked-'))
+  t.after(() => fs.rmSync(pluginDataDir, { recursive: true, force: true }))
+  const reference = { targetType: EDITABLE_TARGET_TYPE, targetId: EDITABLE_TARGET_ID, fileName: 'reference.png', width: 512, height: 512, contentHash: 'hash' }
+  const service = createCreatorWorkflowService({
+    pluginService: {
+      listPlugins: () => [createPluginView({ serviceStatus: 'stopped' })],
+      getPluginCreatorDataDir: () => pluginDataDir,
+      runCommand: async (_pluginId, commandId) => {
+        if (commandId === 'draft-task') return { commandId, result: { run: { runId: 'run-revoked', taskStatus: 'confirmed' } } }
+        assert.equal(commandId, 'run-step')
+        throw Object.assign(new Error('Creator Studio native execution approval was revoked'), { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+      }
+    },
+    imageGenerationModelService: {
+      checkHealth: async () => ({ ok: true, code: 'provider_healthy' }),
+      getConfig: () => ({ provider: 'openai-compatible', model: 'gpt-image-2' })
+    },
+    actionService: {
+      getConfig: () => ({ defaultAction: 'idle', clickAction: 'wave', actions: [{ id: 'idle' }, { id: 'wave' }] }),
+      acceptTriggerProposalItem: () => ({})
+    },
+    creatorReferenceService: {
+      getReference: () => reference,
+      bindReference: async () => ({ replaced: false, reference }),
+      copyReferenceIntoRun: () => ({})
+    }
+  })
+
+  const result = await service.generateExistingAction({ actionName: 'spin', motionPrompt: 'spin' })
+
+  assert.equal(result.state, 'cancelled')
+  assert.equal(result.code, 'native_execution_revoked')
+  assert.match(result.message, /已撤销.*授权/)
+  assert.equal(result.run.runId, 'run-revoked')
+  assert.equal((await service.getLastRun()).run.state, 'cancelled')
+})
+
 test('creator workflow state polling reuses the preflight health result while generation is active', async () => {
   const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-health-poll-'))
   let now = 0
