@@ -132,7 +132,7 @@ for (const scenario of ['keeps the review and recovery controls', 'shows saved r
   expect(retryPayload.actionId).toBe('waving')
 })
 
-test('Create offers mirror-only recovery for the latest interrupted run after refresh', async ({ page }) => {
+for (const resumePackage of [false, true]) test(`Create offers ${resumePackage ? 'packaging recovery' : 'mirror-only recovery'} for the latest interrupted run after refresh`, async ({ page }) => {
   let retryPayload
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
@@ -144,7 +144,8 @@ test('Create offers mirror-only recovery for the latest interrupted run after re
           id: runId, status: 'cancelled', state: { runId, creatorExecution: 'backend', status: 'cancelled' }, mode: 'full-pet', diagnostics: {
             runStatus: 'cancelled', progress: {
               qualityFirst: { pipeline: 'quality-first-v1' },
-              actions: [{ actionId: 'running-right', status: 'passed' }, { actionId: 'running-left', status: 'pending' }]
+              ...(resumePackage ? { canResumeRunningLeftPackage: true } : {}),
+              actions: [{ actionId: 'running-right', status: 'passed' }, { actionId: 'running-left', status: resumePackage ? 'mirrored' : 'pending' }]
             }
           }
         }
@@ -180,7 +181,9 @@ test('Create offers mirror-only recovery for the latest interrupted run after re
   const latestRun = page.getByTestId('creator-last-run')
   await expect(latestRun).toContainText(`Run ID ${runId}`)
   await expect(latestRun).toContainText('State 已取消')
-  await latestRun.getByTestId('creator-recover-running-left').click()
+  const recover = latestRun.getByTestId('creator-recover-running-left')
+  if (resumePackage) await expect(recover).toHaveText('继续打包已保存的跑步动作')
+  await recover.click()
   const result = page.getByTestId('creator-result')
   await expect(result).toContainText('Repaired action running-left')
   await expect(result).toContainText('需要复查')

@@ -1593,6 +1593,16 @@ test('creator studio dashboard offers only mirror recovery for an unreported acc
   await page.reload()
   await page.waitForFunction(() => document.querySelector('#status-line')?.textContent === 'Loaded latest run.')
   assert.equal(await mirror.count(), 0)
+  const left = { ...right, row: { frames: [{ relativePath: `runs/${runId}/left.png` }] } }
+  fs.writeFileSync(checkpointPath, JSON.stringify({ actions: { 'running-right': right, 'running-left': left } }))
+  await page.reload()
+  await page.waitForFunction(() => document.querySelector('#status-line')?.textContent === 'Loaded latest run.')
+  const packageRecovery = panel.getByRole('button', { name: 'Finish packaging saved running rows' })
+  assert.equal(await packageRecovery.count(), 1)
+  assert.equal(await panel.locator('[data-retry-pet-action="running-right"]').count(), 0)
+  const packageResponse = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/runs/${runId}/actions/running-left/retry`)
+  await packageRecovery.click()
+  assert.equal((await packageResponse).status(), 401)
 })
 
 test('creator studio dashboard shows imported full-pet review completion details', async (t) => {

@@ -13,7 +13,7 @@ const { answerTaskQuestion, confirmTaskRun, draftTaskRun, updateTaskDraft } = re
 const { FIXTURE_BACKEND, normalizeCreatorBackend, usesHostProviderBackend } = require('../lib/backend-mode')
 const { createPlaybackDiagnostics } = require('../lib/action-frame-playback')
 const { OFFICIAL_FULL_PET_ACTION_IDS } = require('../lib/full-pet-row-contract')
-const { readActionCheckpoints } = require('../lib/full-pet-action-checkpoints')
+const { canResumeRunningMirrorPackaging, readActionCheckpoints } = require('../lib/full-pet-action-checkpoints')
 
 const SAFE_FRAME_FILE_PATTERN = /^\d{4}\.png$/
 const OFFICIAL_FULL_PET_ACTION_ID_SET = new Set(OFFICIAL_FULL_PET_ACTION_IDS)
@@ -1797,19 +1797,24 @@ const createFullPetRepairCoverage = ({ dataDir, run }) => {
   const checkpoints = readActionCheckpoints({ dataDir, runId: run.runId }).actions
   const actions = qualityFirst.actionResults || {}
   const right = checkpoints?.['running-right']
-  const canRecoverRunningLeft = Boolean(plan?.hash && profile?.hash &&
-    right?.ok === true && right.row?.frames?.length &&
-    right.bindings?.planHash === plan.hash && right.bindings?.profileHash === profile.hash &&
-    right.bindings?.canonicalHash === qualityFirst.acceptedCanonical.sha256 &&
+  const hasAcceptedCheckpoint = (checkpoint) => Boolean(plan?.hash && profile?.hash &&
+    checkpoint?.ok === true && checkpoint.row?.frames?.length &&
+    checkpoint.bindings?.planHash === plan.hash && checkpoint.bindings?.profileHash === profile.hash &&
+    checkpoint.bindings?.canonicalHash === qualityFirst.acceptedCanonical.sha256)
+  const canRecoverRunningLeft = Boolean(hasAcceptedCheckpoint(right) &&
     actions['running-left']?.ok !== true && checkpoints?.['running-left']?.ok !== true)
-  if (run.status !== 'cancelled' && !canRecoverRunningLeft) return null
+  const canResumeRunningLeftPackage = hasAcceptedCheckpoint(right) && hasAcceptedCheckpoint(checkpoints?.['running-left']) &&
+    canResumeRunningMirrorPackaging({ run, checkpoints })
+  if (run.status !== 'cancelled' && !canRecoverRunningLeft && !canResumeRunningLeftPackage) return null
   const availableActionIds = OFFICIAL_FULL_PET_ACTION_IDS.filter((actionId) =>
-    actions[actionId]?.ok === true || (actionId === 'running-right' && canRecoverRunningLeft))
+    actions[actionId]?.ok === true || (actionId === 'running-right' && canRecoverRunningLeft) ||
+    (['running-left', 'running-right'].includes(actionId) && canResumeRunningLeftPackage))
   const omittedActionIds = OFFICIAL_FULL_PET_ACTION_IDS.filter((actionId) => !availableActionIds.includes(actionId))
   return {
     availableActionIds,
     omittedActionIds,
     canRecoverRunningLeft,
+    canResumeRunningLeftPackage,
     retryActionIds: plan ? omittedActionIds.filter((actionId) => actionId !== 'running-left' && (actionId === 'idle' || profile?.hash)) : [],
     canRetryIdentity: Boolean(plan),
     actionAvailability: Object.fromEntries(omittedActionIds.map((actionId) => [

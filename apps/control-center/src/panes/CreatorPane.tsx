@@ -747,12 +747,13 @@ const canRecoverRunningMirror = (run: CreatorWorkflowResult['run'], diagnostics:
   return run?.mode === 'full-pet' && progress?.qualityFirst?.pipeline === 'quality-first-v1' &&
     ['cancelled', 'failed', 'ready_for_review', 'recovery-required'].includes(String(diagnostics?.runStatus || progress.runStatus)) &&
     progress.actions?.some((action) => action.actionId === 'running-right' && action.status === 'passed') &&
-    progress.actions?.some((action) => action.actionId === 'running-left' && ['pending', 'failed'].includes(action.status))
+    (progress.canResumeRunningLeftPackage ||
+      progress.actions?.some((action) => action.actionId === 'running-left' && ['pending', 'failed'].includes(action.status)))
 }
 
-const RunningMirrorRecoveryButton = ({ disabled, onRecover }: { disabled: boolean, onRecover: () => void | Promise<void> }) => (
+const RunningMirrorRecoveryButton = ({ disabled, resumePackage, onRecover }: { disabled: boolean, resumePackage?: boolean, onRecover: () => void | Promise<void> }) => (
   <button type="button" className="ghost" disabled={disabled} onClick={onRecover} data-testid="creator-recover-running-left">
-    从已通过的 running-right 镜像生成 running-left
+    {resumePackage ? '继续打包已保存的跑步动作' : '从已通过的 running-right 镜像生成 running-left'}
   </button>
 )
 
@@ -953,6 +954,7 @@ const ResultCard = ({
           {canRecoverRunningLeft ? (
             <RunningMirrorRecoveryButton
               disabled={running || previewing}
+              resumePackage={progress?.canResumeRunningLeftPackage}
               onRecover={() => onRetryFullPetAction('running-left')}
             />
           ) : null}
@@ -1435,7 +1437,11 @@ export function CreatorPane({
             <span><strong>Run ID</strong> {creatorState.lastRun.runId || '-'}</span>
           </div>
           {canRecoverRunningMirror(creatorState.lastRun, creatorState.lastRun.diagnostics) ? (
-            <RunningMirrorRecoveryButton disabled={running || previewing} onRecover={() => onRetryFullPetAction('running-left')} />
+            <RunningMirrorRecoveryButton
+              disabled={running || previewing}
+              resumePackage={creatorState.lastRun.diagnostics?.progress?.canResumeRunningLeftPackage}
+              onRecover={() => onRetryFullPetAction('running-left')}
+            />
           ) : null}
         </div>
       ) : null}

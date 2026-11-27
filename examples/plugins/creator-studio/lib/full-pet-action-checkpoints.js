@@ -182,8 +182,14 @@ const resolveReusableActionResult = ({ dataDir, runId, actionId, planHash, canon
   }
 }
 
+const canResumeRunningMirrorPackaging = ({ run, checkpoints }) =>
+  run.qualityFirst?.actionResults?.idle?.ok === true &&
+  !run.qualityFirst?.package && !run.artifacts?.spritesheet && !run.artifacts?.bundle &&
+  checkpoints?.['running-left']?.ok === true && Boolean(checkpoints['running-left'].row?.frames?.length)
+
 module.exports = {
   CHECKPOINT_VERSION,
+  canResumeRunningMirrorPackaging,
   invalidateActionCheckpoint,
   invalidateAllActionCheckpoints,
   readActionCheckpoints,

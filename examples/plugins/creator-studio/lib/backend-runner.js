@@ -32,6 +32,7 @@ const {
   normalizeStoredCandidateDecision
 } = require('./candidate-decision')
 const {
+  canResumeRunningMirrorPackaging,
   readActionCheckpoints,
   invalidateActionCheckpoint,
   invalidateAllActionCheckpoints
@@ -1171,14 +1172,21 @@ const runQualityFirstActionRepair = async ({
     throw new Error('Quality-first idle recovery requires scale-profile reconstruction support')
   }
   let mirrorSource
+  let savedMirror
   if (mirrorOnly) {
+    const checkpoints = readActionCheckpoints({ dataDir, runId }).actions
+    const resumePackaging = canResumeRunningMirrorPackaging({ run, checkpoints })
     if (!['failed', 'cancelled', 'ready_for_review', 'recovery-required'].includes(run.status) ||
-      run.qualityFirst?.actionResults?.['running-left']?.ok === true ||
-      readActionCheckpoints({ dataDir, runId }).actions?.['running-left']?.ok === true) {
+      ((run.qualityFirst?.actionResults?.['running-left']?.ok === true || checkpoints?.['running-left']?.ok === true) &&
+        !resumePackaging)) {
       throw new Error('Creator Studio mirror recovery requires a missing running-left row')
     }
     mirrorSource = await runtime.loadActionCheckpoint({ actionId: 'running-right', canonical, profile })
     if (mirrorSource?.ok !== true) throw new Error('Creator Studio mirror recovery requires a valid running-right checkpoint')
+    if (resumePackaging) {
+      savedMirror = await runtime.loadActionCheckpoint({ actionId: 'running-left', canonical, profile })
+      if (savedMirror?.ok !== true) throw new Error('Creator Studio packaging recovery requires a valid running-left checkpoint')
+    }
   }
   const startedAt = now()
   const evidenceArchive = archiveRepairEvidence({ dataDir, run, scope: 'action', actionId: normalizedActionId, archivedAt: startedAt })
@@ -1213,7 +1221,7 @@ const runQualityFirstActionRepair = async ({
     let result
     try {
       result = mirrorOnly
-        ? await runtime.mirrorRunningLeft({ source: mirrorSource, profile: effectiveProfile, canonical })
+        ? savedMirror || await runtime.mirrorRunningLeft({ source: mirrorSource, profile: effectiveProfile, canonical })
         : await runtime.runAction({
           actionId: normalizedActionId, canonical, profile: effectiveProfile, plan,
           ...(runningRight && !unreportedCheckpoint ? { reuseCheckpoint: false } : {})
@@ -1246,7 +1254,7 @@ const runQualityFirstActionRepair = async ({
       })
       return { outputDir: '', bundlePath: '', sha256: '', run: retainedRun, repair: { scope: 'action', actionId: normalizedActionId, evidenceArchive } }
     }
-    reusedUnreportedCheckpoint = unreportedCheckpoint && result?.checkpointReused === true
+    reusedUnreportedCheckpoint = !savedMirror && unreportedCheckpoint && result?.checkpointReused === true
     if (runningRight) {
       if (!unreportedCheckpoint) {
         invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
@@ -1258,10 +1266,14 @@ const runQualityFirstActionRepair = async ({
       if (!effectiveProfile?.hash) throw new Error('Quality-first idle recovery produced an invalid scale profile')
       await runtime.persistScaleProfile({ profile: effectiveProfile, canonical, idle: result })
     }
-    await runtime.persistActionResult({ actionId: normalizedActionId, result, canonical, profile: effectiveProfile })
+    if (!savedMirror) {
+      await runtime.persistActionResult({ actionId: normalizedActionId, result, canonical, profile: effectiveProfile })
+    }
     const actionResults = {
       ...(run.qualityFirst?.actionResults || {}),
-      [normalizedActionId]: createQualityFirstActionResultView(result)
+      [normalizedActionId]: savedMirror && run.qualityFirst?.actionResults?.[normalizedActionId]?.ok === true
+        ? run.qualityFirst.actionResults[normalizedActionId]
+        : createQualityFirstActionResultView(result)
     }
     if (mirrorOnly && actionResults['running-right']?.ok !== true) {
       actionResults['running-right'] = createQualityFirstActionResultView(mirrorSource)

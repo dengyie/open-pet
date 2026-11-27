@@ -7,6 +7,7 @@ const { writeJsonAtomic } = require('./json-file-utils')
 const { inferAnimationType, isWorkStateAction } = require('../../../../examples/plugins/creator-studio/lib/action-semantics.js')
 const { normalizeSingleActionContract } = require('../../../../examples/plugins/creator-studio/lib/single-action-contract.js')
 const { getQualityFirstQualityProfile } = require('../../../../examples/plugins/creator-studio/lib/pet-generation-quality-profile.js')
+const { canResumeRunningMirrorPackaging } = require('../../../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints.js')
 const {
   settleGeneratingRunAfterCommandTermination
 } = require('../../../../examples/plugins/creator-studio/lib/run-store.js')
@@ -2106,6 +2107,7 @@ const createWorkflowProgressView = ({
     runStatus,
     currentStep,
     failureReason,
+    ...(canResumeRunningMirrorPackaging({ run, checkpoints: checkpoints?.actions }) ? { canResumeRunningLeftPackage: true } : {}),
     qualityFirst
   }
 }
