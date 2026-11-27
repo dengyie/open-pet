@@ -918,7 +918,11 @@
                   '<span>',
                   `${escapeHtml(actionId)}: ${escapeHtml(safeFailureCondition(actionAvailability[actionId]?.reason))}`,
                   actionId === 'running-left'
-                    ? ' (derived from running-right)'
+                    ? ' (derived from running-right)' + (
+                        review?.repairCoverage && availableActionIds.includes('running-right') && canRetryAction('running-right')
+                          ? ' <button data-retry-pet-action="running-right">Retry running pair</button>'
+                          : ''
+                      )
                     : canRetryAction(actionId)
                       ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">Retry action</button>`
                       : '',

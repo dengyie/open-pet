@@ -1795,10 +1795,11 @@ const createCancelledFullPetRepairCoverage = ({ dataDir, run }) => {
   const runDir = path.join(dataDir, 'runs', run.runId)
   const plan = readJsonArtifact({ dataDir, targetPath: path.join(runDir, 'sprite-plan.json'), label: 'Sprite plan' })
   const profile = readJsonArtifact({ dataDir, targetPath: path.join(runDir, 'character-scale-profile.json'), label: 'Scale profile' })
+  const repairTargets = new Set(omittedActionIds.map((actionId) => actionId === 'running-left' ? 'running-right' : actionId))
   return {
     availableActionIds,
     omittedActionIds,
-    retryActionIds: plan ? omittedActionIds.filter((actionId) => actionId !== 'running-left' && (actionId === 'idle' || profile?.hash)) : [],
+    retryActionIds: plan ? [...repairTargets].filter((actionId) => actionId === 'idle' || profile?.hash) : [],
     canRetryIdentity: Boolean(plan),
     actionAvailability: Object.fromEntries(omittedActionIds.map((actionId) => [
       actionId, { reason: actions[actionId]?.failureCode || 'not-generated' }
