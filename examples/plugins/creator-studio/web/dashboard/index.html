@@ -902,7 +902,11 @@
           : [artReadiness.approvalId].filter(Boolean)
         const rowValidationRows = Array.isArray(review?.rowValidation?.rows) ? review.rowValidation.rows : []
         const showsMismatch = run?.status === 'ready_for_review' && review?.sourceImageMatchesCurrent === false
-        const canRepair = Boolean(review?.repairCoverage) || ['failed', 'ready_for_review'].includes(String(run?.status || ''))
+        const canRepair = ['failed', 'ready_for_review'].includes(String(run?.status || ''))
+        const canRetryAction = (actionId) => review?.repairCoverage
+          ? review.repairCoverage.retryActionIds.includes(actionId)
+          : canRepair
+        const canRetryIdentity = review?.repairCoverage ? review.repairCoverage.canRetryIdentity : canRepair
         const actionSummary = availableActionIds.length || omittedActionIds.length
           ? [
               '<div class="review-card review-summary">',
@@ -915,14 +919,14 @@
                   `${escapeHtml(actionId)}: ${escapeHtml(safeFailureCondition(actionAvailability[actionId]?.reason))}`,
                   actionId === 'running-left'
                     ? ' (derived from running-right)'
-                    : canRepair
+                    : canRetryAction(actionId)
                       ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">Retry action</button>`
                       : '',
                   '</span>'
                 ].join('')
               )),
               '<span>Automated QA is technical evidence; human visual approval is still required.</span>',
-              canRepair
+              canRetryIdentity
                 ? '<span><button data-retry-pet-identity="true">Regenerate canonical identity</button></span>'
                 : '',
               '</div>'

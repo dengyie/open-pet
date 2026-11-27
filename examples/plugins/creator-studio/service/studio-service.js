@@ -1785,16 +1785,21 @@ const createActionReview = ({ dataDir, run }) => {
   }
 }
 
-const createCancelledFullPetRepairCoverage = (run) => {
+const createCancelledFullPetRepairCoverage = ({ dataDir, run }) => {
   const qualityFirst = run.qualityFirst
   if (run.status !== 'cancelled' || run.generationTask?.pipeline !== 'quality-first-v1' ||
     !qualityFirst?.acceptedCanonical?.candidateId || !qualityFirst.acceptedCanonical.sha256) return null
   const actions = qualityFirst.actionResults || {}
   const availableActionIds = OFFICIAL_FULL_PET_ACTION_IDS.filter((actionId) => actions[actionId]?.ok === true)
   const omittedActionIds = OFFICIAL_FULL_PET_ACTION_IDS.filter((actionId) => !availableActionIds.includes(actionId))
+  const runDir = path.join(dataDir, 'runs', run.runId)
+  const plan = readJsonArtifact({ dataDir, targetPath: path.join(runDir, 'sprite-plan.json'), label: 'Sprite plan' })
+  const profile = readJsonArtifact({ dataDir, targetPath: path.join(runDir, 'character-scale-profile.json'), label: 'Scale profile' })
   return {
     availableActionIds,
     omittedActionIds,
+    retryActionIds: plan ? omittedActionIds.filter((actionId) => actionId !== 'running-left' && (actionId === 'idle' || profile?.hash)) : [],
+    canRetryIdentity: Boolean(plan),
     actionAvailability: Object.fromEntries(omittedActionIds.map((actionId) => [
       actionId, { reason: actions[actionId]?.failureCode || 'not-generated' }
     ]))
@@ -1857,7 +1862,7 @@ const createFullPetReview = ({ dataDir, run }) => {
     reviewGate: publicReviewState.reviewGate,
     sourceImageValidation: createPublicLogValue({ dataDir, value: publicSourceImageValidation }),
     atlasValidation: createPublicLogValue({ dataDir, value: atlasValidation }),
-    repairCoverage: createPublicLogValue({ dataDir, value: createCancelledFullPetRepairCoverage(run) }),
+    repairCoverage: createPublicLogValue({ dataDir, value: createCancelledFullPetRepairCoverage({ dataDir, run }) }),
     rowValidation: createPublicLogValue({ dataDir, value: rowValidation }),
     artReadiness: createPublicLogValue({
       dataDir,
