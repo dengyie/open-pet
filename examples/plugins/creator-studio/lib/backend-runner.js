@@ -391,6 +391,15 @@ const copyRepairEvidencePath = ({ sourcePath, archiveDir, relativePath }) => {
   fs.cpSync(sourcePath, targetPath, { recursive: true, force: true })
 }
 
+const actionRepairRollbackPaths = (actionId) => {
+  const frames = path.join('quality-first', 'frames')
+  if (actionId === 'idle') return [frames, 'character-scale-profile.json']
+  return [
+    path.join(frames, actionId),
+    ...(actionId === 'running-right' ? [path.join(frames, 'running-left')] : [])
+  ]
+}
+
 const archiveRepairEvidence = ({ dataDir, run, scope, actionId = '', archivedAt }) => {
   const runDir = path.join(dataDir, 'runs', run.runId)
   const baseArchiveId = `${createSafeArchiveSegment(archivedAt)}-${scope}${actionId ? `-${createSafeArchiveSegment(actionId)}` : ''}`
@@ -439,7 +448,7 @@ const archiveRepairEvidence = ({ dataDir, run, scope, actionId = '', archivedAt 
         path.join('candidates', `action-${actionId}`),
         path.join('candidate-archives', `action-${actionId}`),
         path.join('references', actionId),
-        path.join('quality-first', 'frames', actionId),
+        ...actionRepairRollbackPaths(actionId),
         path.join('prompts', 'quality-first'),
         'evaluations',
         path.join('keyframes', 'actions', `${actionId}-start-keyframe`),
@@ -465,6 +474,15 @@ const archiveRepairEvidence = ({ dataDir, run, scope, actionId = '', archivedAt 
     }
   }
   return archiveRelativePath
+}
+
+const restoreActionRepairState = ({ dataDir, runId, actionId, evidenceArchive }) => {
+  const runDir = path.join(dataDir, 'runs', runId)
+  const archiveDir = path.join(dataDir, evidenceArchive)
+  for (const relativePath of [...actionRepairRollbackPaths(actionId), 'full-pet-action-checkpoints.json']) {
+    fs.rmSync(path.join(runDir, relativePath), { recursive: true, force: true })
+    copyRepairEvidencePath({ sourcePath: path.join(archiveDir, relativePath), archiveDir: runDir, relativePath })
+  }
 }
 
 const runQualityFirstIdentityStage = async ({
@@ -1179,6 +1197,7 @@ const runQualityFirstActionRepair = async ({
   writeRun({ dataDir, run: generatingRun })
   const stopLeaseHeartbeat = createGenerationLeaseHeartbeat({ dataDir, runId, leaseId: lease.leaseId, now })
   appendDiagnosticRunLog({ dataDir, runId, event: 'quality-first.action.repair-started', message: `Quality-first action ${normalizedActionId} repair started`, data: { actionId: normalizedActionId }, now })
+  let reusedUnreportedCheckpoint = false
   try {
     let effectiveProfile = profile
     let result
@@ -1214,6 +1233,7 @@ const runQualityFirstActionRepair = async ({
       })
       return { outputDir: '', bundlePath: '', sha256: '', run: retainedRun, repair: { scope: 'action', actionId: normalizedActionId, evidenceArchive } }
     }
+    reusedUnreportedCheckpoint = unreportedCheckpoint && result?.checkpointReused === true
     if (runningRight) {
       if (!unreportedCheckpoint) {
         invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
@@ -1235,8 +1255,7 @@ const runQualityFirstActionRepair = async ({
         ok: false, actionId: 'running-left', disposition: 'omitted', failureCode: 'source_action_pending'
       })
     }
-    // Each checkpoint is durable before dependent work starts. Keep the public
-    // run aligned even when mirroring or package evaluation later fails.
+    // Persist progress for interruption recovery; caught failures restore the prior revision.
     const { package: _stalePackage, ...pendingQualityFirst } = generatingRun.qualityFirst
     const persistActionProgress = () => writeRun({ dataDir, run: {
       ...generatingRun,
@@ -1378,8 +1397,24 @@ const runQualityFirstActionRepair = async ({
     })
     return { outputDir: '', bundlePath: '', sha256: '', run: completedRun, repair: { scope: 'action', actionId: normalizedActionId, evidenceArchive } }
   } catch (error) {
+    restoreActionRepairState({ dataDir, runId, actionId: normalizedActionId, evidenceArchive })
+    if (reusedUnreportedCheckpoint) {
+      invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair-failed', now })
+    }
+    updateRunStatus({
+      dataDir,
+      runId,
+      status: 'failed',
+      patch: {
+        artifacts: run.artifacts,
+        qualityFirst: run.qualityFirst,
+        generationLease: undefined,
+        error: error.message,
+        backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'failed', message: error.message, updatedAt: now() })
+      },
+      now
+    })
     appendDiagnosticRunLog({ dataDir, runId, level: 'error', event: 'quality-first.action.repair-failed', message: `Quality-first action ${normalizedActionId} repair failed`, data: { actionId: normalizedActionId, failureCode: String(error?.code || 'action_repair_failed').replace(/[^A-Za-z0-9:_-]/g, '_').slice(0, 120) }, now })
-    updateRunStatus({ dataDir, runId, status: 'failed', patch: { generationLease: undefined, error: error.message, backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'failed', message: error.message, updatedAt: now() }) }, now })
     throw error
   } finally {
     stopLeaseHeartbeat()

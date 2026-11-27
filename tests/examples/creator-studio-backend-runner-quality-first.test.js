@@ -1861,7 +1861,54 @@ test('retry preserves an unreported passing checkpoint for host validation befor
   assert.equal(readRun({ dataDir, runId: created.runId }).qualityFirst.actionResults.failed.ok, true)
 })
 
-for (const { actionId, mirrorFails } of [{ actionId: 'waving' }, { actionId: 'running-right' }, { actionId: 'running-right', mirrorFails: true }]) test(`dependent ${mirrorFails ? 'mirror' : 'package'} failure retains newly accepted ${actionId} state and removes stale package links`, async () => {
+for (const checkpointReused of [false, true]) test(`official jumping row QA failure restores the previous run package and does not accept jumping (${checkpointReused ? 'resumed checkpoint' : 'fresh candidate'})`, async () => {
+  const dataDir = createDataDir()
+  const created = createRun({ dataDir, input: { petName: 'Lavender Bell', backend: 'provider', generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1', actions: [{ actionId: 'idle', name: 'Idle', frameCount: 6 }], questions: [] } } })
+  const canonical = { candidateId: 'canonical-2', sha256: 'a'.repeat(64) }
+  const previousPackage = { basicActions: { availableActionIds: ['idle'], omittedActionIds: ['jumping'] } }
+  const artifacts = { bundle: '/old/bundle.zip', spritesheet: '/old/sheet.webp' }
+  const runDir = path.join(dataDir, 'runs', created.runId)
+  const checkpointPath = path.join(runDir, 'full-pet-action-checkpoints.json')
+  const checkpoints = { version: 1, runId: created.runId, actions: { idle: { ok: true } } }
+  const passingCheckpoints = { ...checkpoints, actions: { ...checkpoints.actions, jumping: { ok: true } } }
+  fs.writeFileSync(checkpointPath, JSON.stringify(checkpointReused ? passingCheckpoints : checkpoints))
+  writeRun({ dataDir, run: {
+    ...created, status: 'ready_for_review', taskStatus: 'confirmed', artifacts,
+    generationTask: { ...created.generationTask, pipeline: 'quality-first-v1' },
+    qualityFirst: { acceptedCanonical: canonical, package: previousPackage, actionResults: { idle: { ok: true }, jumping: { ok: false } }, omittedActionIds: ['jumping'] }
+  } })
+
+  await assert.rejects(runQualityFirstActionRepair({
+    dataDir, runId: created.runId, actionId: 'jumping', plan: { hash: 'plan' }, profile: createHashBoundValue({ version: 1 }),
+    runtime: {
+      runAction: async () => ({ ok: true, actionId: 'jumping', selectedCandidateId: 'passed-candidate', checkpointReused }),
+      persistActionResult: async () => fs.writeFileSync(checkpointPath, JSON.stringify(passingCheckpoints)),
+      finalizePackage: async ({ actionResults }) => {
+        assert.equal(actionResults.jumping.ok, true)
+        throw new Error('Official full-pet row jumping failed QA: row_vertical_return_missing')
+      }
+    }
+  }), /Official full-pet row jumping failed QA: row_vertical_return_missing/)
+
+  const stored = readRun({ dataDir, runId: created.runId })
+  assert.deepEqual({
+    status: stored.status,
+    hasRunPackage: Object.hasOwn(stored.qualityFirst, 'package'),
+    jumpingOK: stored.qualityFirst.actionResults.jumping.ok
+  }, { status: 'failed', hasRunPackage: true, jumpingOK: false })
+  assert.deepEqual(stored.qualityFirst.package, previousPackage)
+  assert.deepEqual(stored.artifacts, artifacts)
+  assert.deepEqual(stored.qualityFirst.omittedActionIds, ['jumping'])
+  const storedCheckpoints = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'))
+  assert.deepEqual(storedCheckpoints.actions, checkpoints.actions)
+  if (checkpointReused) {
+    assert.equal(storedCheckpoints.invalidations.at(-1).reason, 'quality-first-action-repair-failed')
+  } else {
+    assert.deepEqual(storedCheckpoints, checkpoints)
+  }
+})
+
+for (const { actionId, mirrorFails } of [{ actionId: 'waving' }, { actionId: 'running-right' }, { actionId: 'running-right', mirrorFails: true }]) test(`dependent ${mirrorFails ? 'mirror' : 'package'} failure rolls back ${actionId} state and keeps the previous package`, async () => {
   const dataDir = createDataDir()
   const created = createRun({ dataDir, input: { petName: 'Interrupted Pet', backend: 'provider', generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1', actions: [{ actionId: 'idle', name: 'Idle', frameCount: 6 }], questions: [] } } })
   const canonical = { candidateId: 'canonical-1', sha256: 'a'.repeat(64) }
@@ -1869,28 +1916,37 @@ for (const { actionId, mirrorFails } of [{ actionId: 'waving' }, { actionId: 'ru
     ...created, status: 'ready_for_review', taskStatus: 'confirmed',
     generationTask: { ...created.generationTask, pipeline: 'quality-first-v1' },
     artifacts: { bundle: '/old/bundle.zip', spritesheet: '/old/sheet.webp' },
-    qualityFirst: { acceptedCanonical: canonical, package: { gate: { ok: true } }, actionResults: { idle: { ok: true }, 'running-left': { ok: true }, [actionId]: { ok: false } } }
+    qualityFirst: { acceptedCanonical: canonical, package: { gate: { ok: true } }, actionResults: { idle: { ok: true }, 'running-left': { ok: true }, [actionId]: { ok: false } }, omittedActionIds: [actionId] }
   } })
+  const framesDir = path.join(dataDir, 'runs', created.runId, 'quality-first', 'frames')
+  const framePath = (id) => path.join(framesDir, id, '01.png')
+  fs.mkdirSync(path.dirname(framePath('running-left')), { recursive: true })
+  fs.writeFileSync(framePath('running-left'), 'previous mirror')
   const error = Object.assign(new Error('evaluator exhausted'), { code: 'hatch_pet_evaluator_call_budget_exhausted' })
   await assert.rejects(runQualityFirstActionRepair({
     dataDir, runId: created.runId, actionId, plan: { hash: 'plan' }, profile: createHashBoundValue({ version: 1 }),
     runtime: {
       runAction: async () => ({ ok: true, actionId, selectedCandidateId: 'paid-and-passed', candidates: [] }),
-      persistActionResult: async () => {},
+      persistActionResult: async ({ actionId }) => {
+        fs.mkdirSync(path.dirname(framePath(actionId)), { recursive: true })
+        fs.writeFileSync(framePath(actionId), 'new frame')
+      },
       mirrorRunningLeft: async () => { if (mirrorFails) throw error; return { ok: true, actionId: 'running-left', selectedCandidateId: 'derived', candidates: [] } },
       finalizePackage: async () => { throw error }
     }
   }), actual => actual === error)
   const stored = readRun({ dataDir, runId: created.runId })
   assert.equal(stored.status, 'failed')
-  assert.equal(stored.qualityFirst.actionResults[actionId].ok, true)
-  assert.equal(stored.qualityFirst.actionResults[actionId].selectedCandidateId, 'paid-and-passed')
+  assert.equal(stored.qualityFirst.actionResults[actionId].ok, false)
+  assert.equal(stored.qualityFirst.actionResults[actionId].selectedCandidateId, undefined)
   assert.equal(stored.qualityFirst.actionResults.idle.ok, true)
-  if (actionId === 'running-right') assert.equal(stored.qualityFirst.actionResults['running-left'].ok, !mirrorFails)
-  assert.equal(Object.hasOwn(stored.qualityFirst, 'package'), false)
-  assert.equal(Object.hasOwn(stored.artifacts, 'bundle'), false)
-  assert.equal(Object.hasOwn(stored.artifacts, 'spritesheet'), false)
-  assert.equal(stored.qualityFirst.omittedActionIds.includes(actionId), false)
+  if (actionId === 'running-right') assert.equal(stored.qualityFirst.actionResults['running-left'].ok, true)
+  assert.deepEqual(stored.qualityFirst.package, { gate: { ok: true } })
+  assert.equal(stored.artifacts.bundle, '/old/bundle.zip')
+  assert.equal(stored.artifacts.spritesheet, '/old/sheet.webp')
+  assert.equal(stored.qualityFirst.omittedActionIds.includes(actionId), true)
+  assert.equal(fs.existsSync(framePath(actionId)), false)
+  assert.equal(fs.readFileSync(framePath('running-left'), 'utf8'), 'previous mirror')
 })
 
 test('quality-first action repair fails closed when final package artifacts cannot be rebuilt', async () => {
