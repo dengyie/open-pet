@@ -2364,6 +2364,7 @@ export interface CreatorWorkflowProgressViewState {
   runStatus: string
   currentStep: string
   failureReason: string
+  canResumeRunningLeftPackage?: boolean
   qualityFirst?: CreatorQualityFirstProgressViewState | null
 }
 

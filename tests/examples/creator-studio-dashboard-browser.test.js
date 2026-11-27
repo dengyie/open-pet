@@ -1558,6 +1558,73 @@ for (const scenario of ['with a packaged atlas', 'without a packaged atlas', 'be
   assert.equal(await panel.locator('[data-retry-pet-identity]').count(), 1)
 })
 
+test('creator studio dashboard offers only mirror recovery for an unreported accepted right row', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-mirror-recovery-'))
+  const { runId } = await seedImportedFullPetRun(dataDir)
+  const run = readRun({ dataDir, runId })
+  const runDir = path.join(dataDir, 'runs', runId)
+  const canonicalHash = 'a'.repeat(64)
+  const planHash = 'b'.repeat(64)
+  const profileHash = 'c'.repeat(64)
+  fs.writeFileSync(path.join(runDir, 'sprite-plan.json'), JSON.stringify({ hash: planHash }))
+  fs.writeFileSync(path.join(runDir, 'character-scale-profile.json'), JSON.stringify({ hash: profileHash }))
+  const checkpointPath = path.join(runDir, 'full-pet-action-checkpoints.json')
+  const right = {
+    ok: true, row: { frames: [{ relativePath: `runs/${runId}/right.png` }] },
+    bindings: { canonicalHash, planHash, profileHash }
+  }
+  fs.writeFileSync(checkpointPath, JSON.stringify({ actions: { 'running-right': right } }))
+  writeRun({ dataDir, run: {
+    ...run, status: 'cancelled', artifacts: {}, importedPackId: '', activatedPackId: '',
+    generationTask: { ...run.generationTask, pipeline: 'quality-first-v1' },
+    qualityFirst: { acceptedCanonical: { candidateId: 'canonical-1', sha256: canonicalHash }, actionResults: { idle: { ok: true } } }
+  } })
+  const server = await openDashboardServer(dataDir, t)
+  const { page } = await openDashboardPage(server, t)
+  const panel = page.locator('#full-pet-review-panel')
+  const mirror = panel.getByRole('button', { name: 'Derive running-left from accepted running-right' })
+  assert.equal(await mirror.count(), 1)
+  assert.equal(await panel.locator('[data-retry-pet-action="running-right"]').count(), 0)
+  const response = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/runs/${runId}/actions/running-left/retry`)
+  await mirror.click()
+  assert.equal((await response).status(), 401)
+
+  fs.writeFileSync(checkpointPath, JSON.stringify({ actions: { 'running-right': right, 'running-left': { ok: true } } }))
+  await page.reload()
+  await page.waitForFunction(() => document.querySelector('#status-line')?.textContent === 'Loaded latest run.')
+  assert.equal(await mirror.count(), 0)
+  const left = { ...right, row: { frames: [{ relativePath: `runs/${runId}/left.png` }] } }
+  fs.writeFileSync(checkpointPath, JSON.stringify({ actions: { 'running-right': right, 'running-left': left } }))
+  await page.reload()
+  await page.waitForFunction(() => document.querySelector('#status-line')?.textContent === 'Loaded latest run.')
+  const packageRecovery = panel.getByRole('button', { name: 'Finish packaging saved running rows' })
+  assert.equal(await packageRecovery.count(), 1)
+  assert.equal(await panel.locator('[data-retry-pet-action="running-right"]').count(), 0)
+  const packageResponse = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/runs/${runId}/actions/running-left/retry`)
+  await packageRecovery.click()
+  assert.equal((await packageResponse).status(), 401)
+
+  const savedRun = readRun({ dataDir, runId })
+  const rejected = { ok: false, failureCode: 'running_pair_atlas_qa_failed' }
+  writeRun({ dataDir, run: {
+    ...savedRun, status: 'ready_for_review',
+    qualityFirst: {
+      ...savedRun.qualityFirst,
+      actionResults: { idle: { ok: true }, waving: { ok: true }, 'running-right': rejected, 'running-left': rejected },
+      package: { basicActions: { availableActionIds: ['idle', 'waving'] } }
+    }
+  } })
+  await page.reload()
+  await page.waitForFunction(() => document.querySelector('#status-line')?.textContent === 'Loaded latest run.')
+  assert.equal(await packageRecovery.count(), 0)
+  assert.equal(await mirror.count(), 0)
+  assert.match(await panel.textContent(), /Available actions: idle, waving/)
+  const regenerate = panel.getByRole('button', { name: 'Regenerate running pair' })
+  const regenerateResponse = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/runs/${runId}/actions/running-right/retry`)
+  await regenerate.click()
+  assert.equal((await regenerateResponse).status(), 401)
+})
+
 test('creator studio dashboard shows imported full-pet review completion details', async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-browser-imported-full-pet-'))
   await seedImportedFullPetRun(dataDir)

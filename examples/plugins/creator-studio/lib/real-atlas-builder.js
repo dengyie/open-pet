@@ -477,7 +477,10 @@ const buildOfficialAtlasFromRows = async ({
     })
     const qa = rowAnalysis.qa
     if (qa.quality === FULL_PET_ROW_QUALITY.FAILED) {
-      throw new Error(`Official full-pet row ${row.id} failed QA: ${qa.errors.join(', ')}`)
+      throw Object.assign(new Error(`Official full-pet row ${row.id} failed QA: ${qa.errors.join(', ')}`), {
+        code: 'official_full_pet_row_qa_failed',
+        actionId: row.id
+      })
     }
     if (requestedQuality === FULL_PET_ROW_QUALITY.APPROVED_RIG) {
       await validateCanonicalRigRow({ dataDir, provenance: input.provenance, frames: rowAnalysis.frames, actionId: row.id, canonicalSha256: sha256File(entries[0].sourcePath) })

@@ -1149,7 +1149,13 @@ test('Create returns a cancelled state and reason when native approval is revoke
         const runDir = path.join(pluginDataDir, 'runs', 'run-revoked')
         fs.mkdirSync(runDir, { recursive: true })
         fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({
-          runId: 'run-revoked', status: 'generating', generationLease: { commandId }
+          runId: 'run-revoked', status: 'generating', currentStep: 'generate', generationLease: { commandId }
+        }))
+        fs.writeFileSync(path.join(runDir, 'full-pet-action-checkpoints.json'), JSON.stringify({
+          actions: {
+            idle: { ok: true, row: { frames: [{}] } },
+            'running-right': { ok: true, row: { frames: [{}] } }
+          }
         }))
         throw Object.assign(new Error('Creator Studio native execution approval was revoked'), { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
       }
@@ -1178,6 +1184,8 @@ test('Create returns a cancelled state and reason when native approval is revoke
   assert.equal(result.diagnostics.runStatus, 'cancelled')
   assert.equal(result.diagnostics.failureReason, result.message)
   assert.equal(result.diagnostics.progress.phase, 'cancelled')
+  assert.equal(result.diagnostics.progress.actions.find(({ actionId }) => actionId === 'running-right').status, 'passed')
+  assert.equal(result.diagnostics.progress.actions.find(({ actionId }) => actionId === 'running-left').status, 'pending')
   assert.ok(!result.diagnostics.progress.stages.some((stage) => stage.status === 'active'))
   assert.equal(readRun({ dataDir: pluginDataDir, runId: 'run-revoked' }).status, 'cancelled')
   assert.equal((await service.getLastRun()).run.state, 'cancelled')

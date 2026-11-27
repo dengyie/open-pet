@@ -132,6 +132,64 @@ for (const scenario of ['keeps the review and recovery controls', 'shows saved r
   expect(retryPayload.actionId).toBe('waving')
 })
 
+for (const resumePackage of [false, true]) test(`Create offers ${resumePackage ? 'packaging recovery' : 'mirror-only recovery'} for the latest interrupted run after refresh`, async ({ page }) => {
+  let retryPayload
+  await page.route('**/api/v1/**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname.replace('/api/v1', '')
+    if (pathname === '/creator/state') {
+      const data = {
+        ok: true, provider: { ready: true }, editableTarget: {}, dashboard, hatchPetAgent: { ok: true },
+        lastRun: {
+          id: runId, status: 'cancelled', state: { runId, creatorExecution: 'backend', status: 'cancelled' }, mode: 'full-pet', diagnostics: {
+            runStatus: 'cancelled', progress: {
+              qualityFirst: { pipeline: 'quality-first-v1' },
+              ...(resumePackage ? { canResumeRunningLeftPackage: true } : {}),
+              actions: [{ actionId: 'running-right', status: 'passed' }, { actionId: 'running-left', status: resumePackage ? 'mirrored' : 'pending' }]
+            }
+          }
+        }
+      }
+      return route.fulfill({ json: { ok: true, data, meta: { requestId: 'mirror-test', elapsedMs: 1 } } })
+    }
+    if (pathname === `/creator/runs/${runId}/retry-action`) {
+      retryPayload = request.postDataJSON()
+      return route.fulfill({ status: 202, json: { ok: true, data: { jobId: 'mirror-job' }, meta: { requestId: 'mirror-test', elapsedMs: 1 } } })
+    }
+    if (pathname === '/jobs/mirror-job') {
+      const data = {
+        jobId: 'mirror-job', status: 'succeeded',
+        result: {
+          ok: true, message: 'Repaired action running-left',
+          run: { id: runId, status: 'ready_for_review', mode: 'full-pet', state: { creatorExecution: 'backend' } },
+          repair: { scope: 'action', actionId: 'running-left' }
+        }
+      }
+      return route.fulfill({ json: { ok: true, data, meta: { requestId: 'mirror-test', elapsedMs: 1 } } })
+    }
+    return route.abort()
+  })
+  await page.addInitScript(() => {
+    window.openpetBackend = { getBackend: () => ({ baseUrl: location.origin + '/api/v1', sessionToken: 'mirror-test' }) }
+  })
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const { demoControlCenterAPI } = await import('/src/api/demo-control-center-api.ts')
+    window.controlCenterAPI = demoControlCenterAPI
+  })
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  const latestRun = page.getByTestId('creator-last-run')
+  await expect(latestRun).toContainText(`Run ID ${runId}`)
+  await expect(latestRun).toContainText('State 已取消')
+  const recover = latestRun.getByTestId('creator-recover-running-left')
+  if (resumePackage) await expect(recover).toHaveText('继续打包已保存的跑步动作')
+  await recover.click()
+  const result = page.getByTestId('creator-result')
+  await expect(result).toContainText('Repaired action running-left')
+  await expect(result).toContainText('需要复查')
+  expect(retryPayload?.actionId).toBe('running-left')
+})
+
 for (const [pane, initiallyRunning] of [['Create', false], ['Plugins', false], ['Create', true], ['Plugins', true]]) {
   const scenario = initiallyRunning ? 'opens the native dashboard without restarting Creator Studio' : 'starts Creator Studio over HTTP before opening its native dashboard'
   test(`${pane} ${scenario}`, async ({ page }) => {

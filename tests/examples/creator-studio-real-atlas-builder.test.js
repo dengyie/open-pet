@@ -558,7 +558,7 @@ test('real atlas builder still rejects transform-like official rows after stable
       qaDir,
       officialRows
     }),
-    /Official full-pet row running failed QA:/
+    { code: 'official_full_pet_row_qa_failed', actionId: 'running', message: /Official full-pet row running failed QA:/ }
   )
   assert.equal(
     fs.existsSync(path.join(dataDir, 'runs', 'run-1', 'qa', 'stable-rows', 'running', 'stable-slots-metadata.json')),

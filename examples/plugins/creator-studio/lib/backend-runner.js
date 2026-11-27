@@ -32,6 +32,9 @@ const {
   normalizeStoredCandidateDecision
 } = require('./candidate-decision')
 const {
+  RUNNING_PAIR_ATLAS_FAILURE,
+  canResumeRunningMirrorPackaging,
+  hasRejectedRunningPair,
   readActionCheckpoints,
   invalidateActionCheckpoint,
   invalidateAllActionCheckpoints
@@ -797,6 +800,33 @@ const createQualityFirstActionResultView = (result) => ({
   })) : []
 })
 
+const reconcileUnreportedRunningRows = async ({ dataDir, runId, runtime, canonical, profile, actionResults }) => {
+  if (typeof runtime?.loadActionCheckpoint !== 'function') return []
+  const runningRows = ['running-right', 'running-left']
+  const missing = runningRows.filter((actionId) => !Object.hasOwn(actionResults, actionId))
+  if (!missing.length || runningRows.some((actionId) => Object.hasOwn(actionResults, actionId) && actionResults[actionId]?.ok !== true)) return []
+  const checkpoints = readActionCheckpoints({ dataDir, runId }).actions
+  if (!missing.every((actionId) => checkpoints?.[actionId]?.ok === true)) return []
+  const recovered = await Promise.all(missing.map((actionId) => runtime.loadActionCheckpoint({ actionId, canonical, profile })))
+  if (!recovered.every((result) => result?.ok === true)) return []
+  missing.forEach((actionId, index) => { actionResults[actionId] = createQualityFirstActionResultView(recovered[index]) })
+  return missing
+}
+
+const finalizeRepairPackage = async ({ runtime, optionalRows, ...options }) => {
+  try {
+    return await runtime.finalizePackage(options)
+  } catch (error) {
+    if (error?.code !== 'official_full_pet_row_qa_failed' || !optionalRows.includes(error.actionId)) throw error
+    for (const actionId of ['running-right', 'running-left']) {
+      options.actionResults[actionId] = createQualityFirstActionResultView({
+        actionId, disposition: 'omitted', failureCode: RUNNING_PAIR_ATLAS_FAILURE
+      })
+    }
+    return runtime.finalizePackage(options)
+  }
+}
+
 const invalidateActionResultForScaleProfileChange = (result = {}) => {
   const { selection: _selection, ...evidence } = result && typeof result === 'object' ? result : {}
   return {
@@ -1078,8 +1108,9 @@ const acceptQualityFirstActionCandidate = async ({
       await runtime.persistActionResult({ actionId: 'running-left', result: mirrored, canonical, profile: effectiveProfile })
       actionResults['running-left'] = createQualityFirstActionResultView(mirrored)
     }
+    const optionalRows = await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
     const packageResult = actionResults.idle?.ok === true
-      ? await runtime.finalizePackage({ run, canonical, profile: effectiveProfile, actionResults })
+      ? await finalizeRepairPackage({ runtime, run, canonical, profile: effectiveProfile, actionResults, optionalRows })
       : null
     if (actionResults.idle?.ok === true && (!packageResult?.artifacts || typeof packageResult.artifacts !== 'object')) {
       throw createCandidateValidationError('override_checkpoint_rebuild_failed', 'Final package artifacts are missing after action selection')
@@ -1145,18 +1176,18 @@ const runQualityFirstActionRepair = async ({
   profile,
   now = () => new Date().toISOString()
 } = {}) => {
-  if (!runtime?.runAction || !runtime?.persistActionResult || !runtime?.finalizePackage) {
+  const normalizedActionId = String(actionId || '').trim()
+  const mirrorOnly = normalizedActionId === 'running-left'
+  if (!(mirrorOnly ? runtime?.loadActionCheckpoint && runtime?.mirrorRunningLeft : runtime?.runAction) ||
+    !runtime?.persistActionResult || !runtime?.finalizePackage) {
     throw new Error('Quality-first action repair requires a complete host runtime')
   }
   const run = readRun({ dataDir, runId })
-  const normalizedActionId = String(actionId || '').trim()
   if (run.generationTask?.pipeline !== 'quality-first-v1' || run.generationTask?.mode !== 'full-pet') {
     throw new Error('Quality-first action repair requires a quality-first full-pet run')
   }
-  if (!GENERATED_FULL_PET_ACTION_IDS.includes(normalizedActionId)) {
-    throw new Error(normalizedActionId === 'running-left'
-      ? 'Creator Studio running-left repair must regenerate running-right and derive its mirror'
-      : `Creator Studio cannot repair unknown generated action: ${normalizedActionId || '(missing)'}`)
+  if (!mirrorOnly && !GENERATED_FULL_PET_ACTION_IDS.includes(normalizedActionId)) {
+    throw new Error(`Creator Studio cannot repair unknown generated action: ${normalizedActionId || '(missing)'}`)
   }
   const canonical = run.qualityFirst?.acceptedCanonical
   if (!canonical?.candidateId || !canonical?.sha256) {
@@ -1170,15 +1201,35 @@ const runQualityFirstActionRepair = async ({
   )) {
     throw new Error('Quality-first idle recovery requires scale-profile reconstruction support')
   }
+  let mirrorSource
+  let savedMirror
+  const rejectedRunningPair = hasRejectedRunningPair(run)
+  if (mirrorOnly) {
+    if (rejectedRunningPair) throw new Error('Creator Studio running pair failed atlas QA; regenerate running-right')
+    const checkpoints = readActionCheckpoints({ dataDir, runId }).actions
+    const resumePackaging = canResumeRunningMirrorPackaging({ run, checkpoints })
+    if (!['failed', 'cancelled', 'ready_for_review', 'recovery-required'].includes(run.status) ||
+      ((run.qualityFirst?.actionResults?.['running-left']?.ok === true || checkpoints?.['running-left']?.ok === true) &&
+        !resumePackaging)) {
+      throw new Error('Creator Studio mirror recovery requires a missing running-left row')
+    }
+    mirrorSource = await runtime.loadActionCheckpoint({ actionId: 'running-right', canonical, profile })
+    if (mirrorSource?.ok !== true) throw new Error('Creator Studio mirror recovery requires a valid running-right checkpoint')
+    if (resumePackaging) {
+      savedMirror = await runtime.loadActionCheckpoint({ actionId: 'running-left', canonical, profile })
+      if (savedMirror?.ok !== true) throw new Error('Creator Studio packaging recovery requires a valid running-left checkpoint')
+    }
+  }
   const startedAt = now()
   const evidenceArchive = archiveRepairEvidence({ dataDir, run, scope: 'action', actionId: normalizedActionId, archivedAt: startedAt })
   // Interrupted finalization may leave an accepted checkpoint ahead of the
   // public run. The host revalidates all bindings/assets before reusing it;
   // stale checkpoints still fall through to normal generation.
-  const unreportedCheckpoint = run.qualityFirst?.actionResults?.[normalizedActionId]?.ok !== true &&
-    readActionCheckpoints({ dataDir, runId }).actions?.[normalizedActionId]?.ok === true
   const runningRight = normalizedActionId === 'running-right'
-  if (!unreportedCheckpoint && !runningRight) {
+  const unreportedCheckpoint = !(runningRight && rejectedRunningPair) &&
+    run.qualityFirst?.actionResults?.[normalizedActionId]?.ok !== true &&
+    readActionCheckpoints({ dataDir, runId }).actions?.[normalizedActionId]?.ok === true
+  if (!mirrorOnly && !unreportedCheckpoint && !runningRight) {
     invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
   }
   const lease = createGenerationLease({ commandId: 'retry-action', startedAt, leaseId: `${runId}-retry-action-${startedAt}` })
@@ -1192,7 +1243,7 @@ const runQualityFirstActionRepair = async ({
       phase: normalizedActionId === 'idle' ? 'generating-idle' : 'generating-actions',
       nextAction: normalizedActionId === 'idle' ? 'generate-idle' : 'generate-actions'
     },
-    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: `Regenerating ${normalizedActionId}`, updatedAt: startedAt })
+    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: mirrorOnly ? 'Deriving running-left from running-right' : `Regenerating ${normalizedActionId}`, updatedAt: startedAt })
   }
   writeRun({ dataDir, run: generatingRun })
   const stopLeaseHeartbeat = createGenerationLeaseHeartbeat({ dataDir, runId, leaseId: lease.leaseId, now })
@@ -1202,10 +1253,13 @@ const runQualityFirstActionRepair = async ({
     let effectiveProfile = profile
     let result
     try {
-      result = await runtime.runAction({
-        actionId: normalizedActionId, canonical, profile: effectiveProfile, plan,
-        ...(runningRight && !unreportedCheckpoint ? { reuseCheckpoint: false } : {})
-      })
+      result = mirrorOnly
+        ? savedMirror || await runtime.mirrorRunningLeft({ source: mirrorSource, profile: effectiveProfile, canonical })
+        : await runtime.runAction({
+          actionId: normalizedActionId, canonical, profile: effectiveProfile, plan,
+          ...(runningRight && !unreportedCheckpoint ? { reuseCheckpoint: false } : {})
+        })
+      if (mirrorOnly && result?.ok !== true) throw new Error('Creator Studio could not derive the running-left row')
     } catch (error) {
       if (!runningRight || error?.startFrameRejected !== true) throw error
       const failureCode = executionFailureCode(error, 'video_start_frame_rejected')
@@ -1233,7 +1287,7 @@ const runQualityFirstActionRepair = async ({
       })
       return { outputDir: '', bundlePath: '', sha256: '', run: retainedRun, repair: { scope: 'action', actionId: normalizedActionId, evidenceArchive } }
     }
-    reusedUnreportedCheckpoint = unreportedCheckpoint && result?.checkpointReused === true
+    reusedUnreportedCheckpoint = !savedMirror && unreportedCheckpoint && result?.checkpointReused === true
     if (runningRight) {
       if (!unreportedCheckpoint) {
         invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
@@ -1245,10 +1299,17 @@ const runQualityFirstActionRepair = async ({
       if (!effectiveProfile?.hash) throw new Error('Quality-first idle recovery produced an invalid scale profile')
       await runtime.persistScaleProfile({ profile: effectiveProfile, canonical, idle: result })
     }
-    await runtime.persistActionResult({ actionId: normalizedActionId, result, canonical, profile: effectiveProfile })
+    if (!savedMirror) {
+      await runtime.persistActionResult({ actionId: normalizedActionId, result, canonical, profile: effectiveProfile })
+    }
     const actionResults = {
       ...(run.qualityFirst?.actionResults || {}),
-      [normalizedActionId]: createQualityFirstActionResultView(result)
+      [normalizedActionId]: savedMirror && run.qualityFirst?.actionResults?.[normalizedActionId]?.ok === true
+        ? run.qualityFirst.actionResults[normalizedActionId]
+        : createQualityFirstActionResultView(result)
+    }
+    if (mirrorOnly && actionResults['running-right']?.ok !== true) {
+      actionResults['running-right'] = createQualityFirstActionResultView(mirrorSource)
     }
     if (normalizedActionId === 'running-right') {
       actionResults['running-left'] = createQualityFirstActionResultView({
@@ -1314,6 +1375,9 @@ const runQualityFirstActionRepair = async ({
       persistActionProgress()
     }
     const idleOk = normalizedActionId === 'idle' ? result?.ok === true : actionResults.idle?.ok === true
+    const optionalRows = idleOk
+      ? await reconcileUnreportedRunningRows({ dataDir, runId, runtime, canonical, profile: effectiveProfile, actionResults })
+      : []
     // A rejected missing action cannot change the accepted atlas. Preserve its
     // existing evaluation (including rejection) instead of paying to rescore it.
     const previousPackage = run.qualityFirst?.package
@@ -1337,7 +1401,7 @@ const runQualityFirstActionRepair = async ({
     const packageResult = idleOk
       ? retainedPackageCurrent
         ? { ...previousPackage, artifacts: run.artifacts || {} }
-        : await runtime.finalizePackage({ run, canonical, profile: effectiveProfile, actionResults })
+        : await finalizeRepairPackage({ runtime, run, canonical, profile: effectiveProfile, actionResults, optionalRows })
       : null
     if (idleOk && (!packageResult || typeof packageResult !== 'object' || !packageResult.artifacts || typeof packageResult.artifacts !== 'object')) {
       const error = new Error('Quality-first final package artifacts are missing')

@@ -486,7 +486,7 @@ for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`
   f.action = actionId === 'review' ? { actionId, anchorPolicy: 'action-relative-root-v1', frameCount: 6, layout: { columns: 3, rows: 2 } } : f.action
   const { createQualityFirstHostRuntime } = require('../../examples/plugins/creator-studio/lib/host-model-bridge')
   const { createSpriteAssetPlan } = require('../../examples/plugins/creator-studio/lib/sprite-asset-plan')
-  const { readActionCheckpoints, writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
+  const { invalidateActionCheckpoint, readActionCheckpoints, writeActionCheckpoint } = require('../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints')
   const { archiveCandidateRevision } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
   const runId = `host-rig-repair-${actionId}`
   const plan = createSpriteAssetPlan({ version: 1, revision: 1, character: { assetClass: 'grounded-compact-character' }, actions: [{ actionId }] })
@@ -607,6 +607,28 @@ for (const actionId of ['jumping', 'review', 'running', 'running-right']) test(`
       assert.equal(metadata.actionGeneration['running-left'].quality, 'approved-mirror')
       const rigManifest = JSON.parse(fs.readFileSync(path.join(auditRoot, metadata.actionGeneration[actionId].provenance.manifest.relativePath)))
       assert.equal(hash(fs.readFileSync(path.join(auditRoot, rigManifest.poseReference.relativePath))), rigManifest.poseReference.sha256)
+
+      const { runQualityFirstActionRepair } = require('../../examples/plugins/creator-studio/lib/backend-runner')
+      const { writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+      const canonical = { ...f.canonical, candidateId: 'canonical-1' }
+      const right = readActionCheckpoints({ dataDir: f.dataDir, runId }).actions['running-right']
+      invalidateActionCheckpoint({ dataDir: f.dataDir, runId, actionId: 'running-left' })
+      writeRun({ dataDir: f.dataDir, run: {
+        ...run, status: 'cancelled', generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
+        qualityFirst: { acceptedCanonical: canonical, actionResults: { idle: { ok: true, processorVersion: idleProcessorVersion } } }
+      } })
+      const recoveryCalls = calls.length
+      const repaired = await runQualityFirstActionRepair({ dataDir: f.dataDir, runId, actionId: 'running-left', runtime, plan, profile })
+      assert.equal(repaired.run.status, 'ready_for_review')
+      assert.ok(calls.slice(recoveryCalls).every(route => route === '/creator/hatch-pet/evaluate'))
+      const recovered = readActionCheckpoints({ dataDir: f.dataDir, runId }).actions
+      assert.deepEqual(recovered['running-right'], right)
+      for (const [index, frame] of right.row.frames.entries()) {
+        const rightPath = path.join(f.dataDir, frame.relativePath)
+        const leftPath = path.join(f.dataDir, recovered['running-left'].row.frames[index].relativePath)
+        assert.equal(hash(fs.readFileSync(rightPath)), frame.sha256)
+        assert.deepEqual(await sharp(leftPath).raw().toBuffer(), await sharp(rightPath).flop().raw().toBuffer())
+      }
     }
     assert.ok(execFileSync('unzip', ['-Z1', path.join(f.dataDir, packaged.bundleRelativePath)], { encoding: 'utf8' }).includes('rig-manifest.json'))
     const archive = archiveCandidateRevision({ dataDir: f.dataDir, runId, scope: `action-${actionId}`, now: () => '2026-11-07T01:00:00Z' })

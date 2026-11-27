@@ -15,7 +15,7 @@ const {
 } = require('../../examples/plugins/creator-studio/lib/backend-runner')
 const backendRunnerModule = require('../../examples/plugins/creator-studio/lib/backend-runner')
 const { createQualityFirstFullPetOrchestrator } = require('../../examples/plugins/creator-studio/lib/quality-first-full-pet-orchestrator')
-const { createRun, readRun, readRunLogs, writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+const { createRun, readRun, readRunLogs, settleGeneratingRunAfterCommandTermination, writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
 const { writeCandidateRecord } = require('../../examples/plugins/creator-studio/lib/sprite-candidate-store')
 const { getQualityFirstQualityProfile } = require('../../examples/plugins/creator-studio/lib/pet-generation-quality-profile')
 const { readCreatorWorkflowDiagnostics } = require('../../apps/desktop/src/services/creator-workflow-service')
@@ -1905,6 +1905,238 @@ for (const checkpointReused of [false, true]) test(`official jumping row QA fail
     assert.equal(storedCheckpoints.invalidations.at(-1).reason, 'quality-first-action-repair-failed')
   } else {
     assert.deepEqual(storedCheckpoints, checkpoints)
+  }
+})
+
+for (const scenario of ['right not yet reported', 'mirror fails', 'final QA fails', 'right checkpoint invalid', 'left already saved']) test(`mirror-only recovery: ${scenario}`, async () => {
+  const dataDir = createDataDir()
+  const created = createRun({ dataDir, input: {
+    petName: 'Interrupted Mirror', backend: 'provider',
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1', actions: [{ actionId: 'running-right' }], questions: [] }
+  } })
+  const runId = created.runId
+  const right = { actionId: 'running-right', ok: true, selectedCandidateId: 'accepted-right' }
+  const actionResults = { idle: { ok: true }, ...(scenario === 'right not yet reported' ? {} : { 'running-right': right }) }
+  const canonical = { candidateId: 'canonical-1', sha256: 'a'.repeat(64) }
+  const artifacts = { spritesheet: '/old/sheet.webp' }
+  writeRun({ dataDir, run: {
+    ...created, status: 'cancelled', artifacts, generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
+    qualityFirst: { acceptedCanonical: canonical, actionResults }
+  } })
+  const checkpointPath = path.join(dataDir, 'runs', runId, 'full-pet-action-checkpoints.json')
+  const framesDir = path.join(dataDir, 'runs', runId, 'quality-first', 'frames')
+  const framePath = path.join(framesDir, 'running-right', '01.png')
+  const leftFramePath = path.join(framesDir, 'running-left', '01.png')
+  writePngFixture(framePath)
+  const checkpoint = { ok: true, row: { frames: [{ relativePath: `runs/${runId}/quality-first/frames/running-right/01.png` }] } }
+  fs.writeFileSync(checkpointPath, JSON.stringify({ actions: {
+    'running-right': checkpoint,
+    ...(scenario === 'left already saved' ? { 'running-left': { ok: true } } : {})
+  } }))
+  const calls = []
+  const profile = createHashBoundValue({ version: 1 })
+  const repair = runQualityFirstActionRepair({
+    dataDir, runId, actionId: 'running-left', plan: { hash: 'plan' }, profile,
+    runtime: {
+      loadActionCheckpoint: async (input) => {
+        calls.push('load')
+        assert.deepEqual(input, { actionId: 'running-right', canonical, profile })
+        return scenario === 'right checkpoint invalid' ? null : right
+      },
+      mirrorRunningLeft: async ({ source }) => {
+        calls.push('mirror')
+        assert.equal(source, right)
+        return { ok: scenario !== 'mirror fails', actionId: 'running-left', selectedCandidateId: 'derived-left' }
+      },
+      persistActionResult: async ({ actionId }) => {
+        calls.push('persist')
+        assert.equal(actionId, 'running-left')
+        writePngFixture(leftFramePath)
+        fs.writeFileSync(checkpointPath, JSON.stringify({ actions: {
+          'running-right': checkpoint, 'running-left': { ok: true }
+        } }))
+      },
+      finalizePackage: async ({ actionResults }) => {
+        calls.push('package')
+        assert.equal(actionResults['running-right'].selectedCandidateId, 'accepted-right')
+        assert.equal(actionResults['running-left'].ok, true)
+        if (scenario === 'final QA fails') throw new Error('Official full-pet row running-left failed QA')
+        return { artifacts: {} }
+      }
+    }
+  })
+  if (scenario === 'right not yet reported') {
+    assert.equal((await repair).run.status, 'ready_for_review')
+    assert.deepEqual(calls, ['load', 'mirror', 'persist', 'package'])
+  } else {
+    await assert.rejects(repair, {
+      message: {
+        'mirror fails': 'Creator Studio could not derive the running-left row',
+        'final QA fails': 'Official full-pet row running-left failed QA',
+        'right checkpoint invalid': 'Creator Studio mirror recovery requires a valid running-right checkpoint',
+        'left already saved': 'Creator Studio mirror recovery requires a missing running-left row'
+      }[scenario]
+    })
+    assert.deepEqual(calls, {
+      'mirror fails': ['load', 'mirror'],
+      'final QA fails': ['load', 'mirror', 'persist', 'package'],
+      'right checkpoint invalid': ['load'],
+      'left already saved': []
+    }[scenario])
+    const stored = readRun({ dataDir, runId })
+    assert.deepEqual(stored.qualityFirst.actionResults, actionResults)
+    assert.deepEqual(stored.artifacts, artifacts)
+    assert.equal(fs.existsSync(leftFramePath), false)
+    if (scenario === 'final QA fails') {
+      assert.equal(JSON.parse(fs.readFileSync(checkpointPath)).actions['running-left'], undefined)
+    }
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(checkpointPath)).actions['running-right'], checkpoint)
+  assert.deepEqual(fs.readFileSync(framePath), LEGACY_PNG_BYTES)
+})
+
+for (const scenario of ['reported mirror', 'unreported mirror', 'partial package']) test(`mirror-only recovery resumes interrupted packaging with both checkpoints intact (${scenario})`, async () => {
+  const unreported = scenario === 'unreported mirror'
+  const partialPackage = scenario === 'partial package'
+  const dataDir = createDataDir()
+  const { runId } = createRun({ dataDir, input: {
+    petName: 'Interrupted Package', backend: 'provider',
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1', actions: [{ actionId: 'running-right' }], questions: [] }
+  } })
+  const canonical = { candidateId: 'canonical-1', sha256: 'a'.repeat(64) }
+  const profile = createHashBoundValue({ version: 1 })
+  const right = { actionId: 'running-right', ok: true, selectedCandidateId: 'accepted-right', row: { frames: [{}] } }
+  const left = { actionId: 'running-left', ok: true, selectedCandidateId: 'saved-mirror', row: { frames: [{}] } }
+  const actionResults = { idle: { ok: true }, 'running-right': right, 'running-left': left }
+  const checkpointPath = path.join(dataDir, 'runs', runId, 'full-pet-action-checkpoints.json')
+  const checkpoints = { actions: actionResults }
+  fs.writeFileSync(checkpointPath, JSON.stringify(checkpoints))
+  writeRun({ dataDir, run: {
+    runId, status: 'generating', currentStep: 'running-left', generationLease: { commandId: 'retry-action' },
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
+    ...(partialPackage ? { artifacts: { spritesheet: '/partial/sheet.webp' } } : {}),
+    qualityFirst: {
+      acceptedCanonical: canonical,
+      actionResults: unreported ? { idle: actionResults.idle, 'running-right': right } : actionResults,
+      ...(partialPackage ? { package: { basicActions: { availableActionIds: ['idle'] } } } : {})
+    }
+  } })
+  const interrupted = settleGeneratingRunAfterCommandTermination({ dataDir, runId, cancellationReason: 'Approval revoked' })
+  assert.equal(interrupted.status, 'cancelled')
+  assert.equal(readCreatorWorkflowDiagnostics({ pluginDataDir: dataDir, runId }).progress.canResumeRunningLeftPackage, true)
+  const calls = []
+  const runtime = {
+    loadActionCheckpoint: async ({ actionId }) => {
+      calls.push(actionId)
+      return { ...actionResults[actionId], checkpointReused: true }
+    },
+    mirrorRunningLeft: async () => assert.fail('the saved left row must not be regenerated'),
+    persistActionResult: async () => assert.fail('neither checkpoint should be rewritten'),
+    finalizePackage: async ({ actionResults: saved }) => {
+      calls.push('package')
+      assert.deepEqual(saved.idle, actionResults.idle)
+      assert.deepEqual(saved['running-right'], right)
+      assert.equal(saved['running-left'].selectedCandidateId, left.selectedCandidateId)
+      if (unreported) throw new Error('Official full-pet row running-left failed QA')
+      return { artifacts: { spritesheet: '/new/sheet.webp' } }
+    }
+  }
+  const repair = runQualityFirstActionRepair({ dataDir, runId, actionId: 'running-left', runtime, plan: { hash: 'plan' }, profile })
+  if (unreported) {
+    await assert.rejects(repair, /Official full-pet row running-left failed QA/)
+    assert.equal(readCreatorWorkflowDiagnostics({ pluginDataDir: dataDir, runId }).progress.canResumeRunningLeftPackage, true)
+  } else {
+    const repaired = await repair
+    assert.equal(repaired.run.status, 'ready_for_review')
+    assert.equal(repaired.run.artifacts.spritesheet, '/new/sheet.webp')
+    assert.equal(readCreatorWorkflowDiagnostics({ pluginDataDir: dataDir, runId }).progress.canResumeRunningLeftPackage, undefined)
+  }
+  assert.deepEqual(calls, ['running-right', 'running-left', 'package'])
+  assert.deepEqual(JSON.parse(fs.readFileSync(checkpointPath)), checkpoints)
+})
+
+for (const failedRow of ['', 'running-left']) test(`repairing another action keeps the requested repair when saved running rows ${failedRow ? 'fail QA' : 'pass QA'}`, async () => {
+  const dataDir = createDataDir()
+  const { runId } = createRun({ dataDir, input: {
+    petName: 'Interrupted Running Rows', backend: 'provider',
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1', actions: [{ actionId: 'running-right' }], questions: [] }
+  } })
+  const canonical = { candidateId: 'canonical-1', sha256: 'a'.repeat(64) }
+  const profile = createHashBoundValue({ version: 1 })
+  const runDir = path.join(dataDir, 'runs', runId)
+  const runningRows = ['running-right', 'running-left']
+  const frames = Object.fromEntries(runningRows.map((actionId) => {
+    const framePath = path.join(runDir, 'quality-first', 'frames', actionId, '01.png')
+    return [actionId, { path: framePath, sha256: writePngFixture(framePath) }]
+  }))
+  const checkpointPath = path.join(runDir, 'full-pet-action-checkpoints.json')
+  const checkpoints = { actions: Object.fromEntries(runningRows.map((actionId) => [actionId, {
+    ok: true, row: { frames: [{ relativePath: path.relative(dataDir, frames[actionId].path), sha256: frames[actionId].sha256 }] }
+  }])) }
+  fs.writeFileSync(checkpointPath, JSON.stringify(checkpoints))
+  writeRun({ dataDir, run: {
+    runId, status: 'generating', currentStep: 'running-left', generationLease: { commandId: 'retry-action' },
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
+    qualityFirst: { acceptedCanonical: canonical, actionResults: { idle: { ok: true } } }
+  } })
+  settleGeneratingRunAfterCommandTermination({ dataDir, runId, cancellationReason: 'Approval revoked' })
+  const loaded = []
+  const packageAttempts = []
+  const result = await runQualityFirstActionRepair({
+    dataDir, runId, actionId: 'waving', plan: { hash: 'plan' }, profile,
+    runtime: {
+      runAction: async ({ actionId }) => {
+        assert.equal(actionId, 'waving')
+        return { actionId, ok: true }
+      },
+      persistActionResult: async ({ actionId }) => assert.equal(actionId, 'waving'),
+      loadActionCheckpoint: async ({ actionId, canonical: expectedCanonical, profile: expectedProfile }) => {
+        assert.deepEqual(expectedCanonical, canonical)
+        assert.deepEqual(expectedProfile, profile)
+        loaded.push(actionId)
+        return { actionId, ok: true, checkpointReused: true }
+      },
+      finalizePackage: async ({ actionResults }) => {
+        assert.equal(actionResults.waving.ok, true)
+        const included = runningRows.filter((actionId) => actionResults[actionId]?.ok === true)
+        packageAttempts.push(included)
+        if (failedRow && included.includes(failedRow)) {
+          throw Object.assign(new Error(`Official full-pet row ${failedRow} failed QA`), {
+            code: 'official_full_pet_row_qa_failed', actionId: failedRow
+          })
+        }
+        return { artifacts: { spritesheet: '/new/sheet.webp' } }
+      }
+    }
+  })
+  assert.deepEqual(loaded, runningRows)
+  assert.deepEqual(packageAttempts, failedRow ? [runningRows, []] : [runningRows])
+  assert.equal(result.run.status, 'ready_for_review')
+  assert.equal(result.run.qualityFirst.actionResults.waving.ok, true)
+  for (const actionId of runningRows) {
+    const action = result.run.qualityFirst.actionResults[actionId]
+    assert.equal(action?.ok, !failedRow)
+    if (failedRow) assert.equal(action.failureCode, 'running_pair_atlas_qa_failed')
+    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(frames[actionId].path)).digest('hex'), frames[actionId].sha256)
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(checkpointPath)).actions, checkpoints.actions)
+  if (failedRow) {
+    assert.equal(readCreatorWorkflowDiagnostics({ pluginDataDir: dataDir, runId }).progress.canResumeRunningLeftPackage, undefined)
+    await runQualityFirstActionRepair({
+      dataDir, runId, actionId: 'running-right', plan: { hash: 'plan' }, profile,
+      runtime: {
+        runAction: async ({ reuseCheckpoint }) => {
+          assert.equal(reuseCheckpoint, false)
+          return { actionId: 'running-right', ok: true }
+        },
+        persistActionResult: async () => {},
+        mirrorRunningLeft: async () => ({ actionId: 'running-left', ok: true }),
+        finalizePackage: async ({ actionResults }) => {
+          for (const actionId of ['waving', ...runningRows]) assert.equal(actionResults[actionId].ok, true)
+          return { artifacts: { spritesheet: '/replacement/sheet.webp' } }
+        }
+      }
+    })
   }
 })
 

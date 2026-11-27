@@ -938,13 +938,18 @@
                   '<span>',
                   `${escapeHtml(actionId)}: ${escapeHtml(safeFailureCondition(actionAvailability[actionId]?.reason))}`,
                   actionId === 'running-left'
-                    ? ' (derived from running-right)'
+                    ? review?.repairCoverage?.canRecoverRunningLeft
+                      ? ' <button data-retry-pet-action="running-left">Derive running-left from accepted running-right</button>'
+                      : ' (derived from running-right)'
                     : canRetryAction(actionId)
-                      ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">Retry action</button>`
+                      ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">${actionId === 'running-right' && review?.repairCoverage?.rejectedRunningPair ? 'Regenerate running pair' : 'Retry action'}</button>`
                       : '',
                   '</span>'
                 ].join('')
               )),
+              review?.repairCoverage?.canResumeRunningLeftPackage
+                ? '<span><button data-retry-pet-action="running-left">Finish packaging saved running rows</button></span>'
+                : '',
               '<span>Automated QA is technical evidence; human visual approval is still required.</span>',
               canRetryIdentity
                 ? '<span><button data-retry-pet-identity="true">Regenerate canonical identity</button></span>'
@@ -1843,6 +1848,7 @@
         const actionId = event.target?.dataset?.retryPetAction
         const retryIdentity = event.target?.dataset?.retryPetIdentity === 'true'
         if (!actionId && !retryIdentity) return
+        const resumePackage = actionId === 'running-left' && state.fullPetReview?.repairCoverage?.canResumeRunningLeftPackage
         state.generationInFlight = true
         renderRun()
         try {
@@ -1859,7 +1865,11 @@
           setStatus(
             retryIdentity
               ? 'Canonical identity regenerated. Review every action again.'
-              : `Action ${actionId} regenerated. Review the rebuilt pet output.`,
+              : actionId === 'running-left'
+                ? resumePackage
+                  ? 'Saved running rows packaged. Review the rebuilt pet output.'
+                  : 'Running-left derived from the accepted running-right. Review the rebuilt pet output.'
+                : `Action ${actionId} regenerated. Review the rebuilt pet output.`,
             'ok'
           )
         } catch (error) {
