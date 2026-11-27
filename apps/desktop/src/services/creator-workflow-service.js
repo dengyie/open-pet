@@ -1446,6 +1446,7 @@ const createActionProgressViews = ({ checkpoints = null, runStatus = '', current
   const status = normalizeText(runStatus)
   const generating = status === 'generating' || (
     status !== 'failed' &&
+    status !== 'cancelled' &&
     status !== 'ready_for_review' &&
     status !== 'approved' &&
     status !== 'imported' &&
