@@ -4,6 +4,7 @@ const crypto = require('node:crypto')
 const { normalizeRigProvenance } = require('./canonical-support-rig')
 
 const CHECKPOINT_VERSION = 1
+const RUNNING_PAIR_ATLAS_FAILURE = 'running_pair_atlas_qa_failed'
 const SAFE_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/
 
 const checkpointPath = ({ dataDir, runId }) => path.join(dataDir, 'runs', runId, 'full-pet-action-checkpoints.json')
@@ -182,18 +183,23 @@ const resolveReusableActionResult = ({ dataDir, runId, actionId, planHash, canon
   }
 }
 
+const hasRejectedRunningPair = (run) => ['running-right', 'running-left'].some((actionId) =>
+  run.qualityFirst?.actionResults?.[actionId]?.failureCode === RUNNING_PAIR_ATLAS_FAILURE)
+
 const canResumeRunningMirrorPackaging = ({ run, checkpoints }) => {
   const packagedActions = run.qualityFirst?.package?.basicActions?.availableActionIds
   const needsRunningRows = Array.isArray(packagedActions)
     ? !packagedActions.includes('running-right') || !packagedActions.includes('running-left')
     : !run.qualityFirst?.package && !run.artifacts?.spritesheet && !run.artifacts?.bundle
-  return needsRunningRows && run.qualityFirst?.actionResults?.idle?.ok === true &&
+  return needsRunningRows && !hasRejectedRunningPair(run) && run.qualityFirst?.actionResults?.idle?.ok === true &&
     checkpoints?.['running-left']?.ok === true && Boolean(checkpoints['running-left'].row?.frames?.length)
 }
 
 module.exports = {
   CHECKPOINT_VERSION,
+  RUNNING_PAIR_ATLAS_FAILURE,
   canResumeRunningMirrorPackaging,
+  hasRejectedRunningPair,
   invalidateActionCheckpoint,
   invalidateAllActionCheckpoints,
   readActionCheckpoints,

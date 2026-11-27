@@ -942,7 +942,7 @@
                       ? ' <button data-retry-pet-action="running-left">Derive running-left from accepted running-right</button>'
                       : ' (derived from running-right)'
                     : canRetryAction(actionId)
-                      ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">Retry action</button>`
+                      ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">${actionId === 'running-right' && review?.repairCoverage?.rejectedRunningPair ? 'Regenerate running pair' : 'Retry action'}</button>`
                       : '',
                   '</span>'
                 ].join('')

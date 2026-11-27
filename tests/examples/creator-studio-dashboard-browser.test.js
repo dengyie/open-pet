@@ -1603,6 +1603,26 @@ test('creator studio dashboard offers only mirror recovery for an unreported acc
   const packageResponse = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/runs/${runId}/actions/running-left/retry`)
   await packageRecovery.click()
   assert.equal((await packageResponse).status(), 401)
+
+  const savedRun = readRun({ dataDir, runId })
+  const rejected = { ok: false, failureCode: 'running_pair_atlas_qa_failed' }
+  writeRun({ dataDir, run: {
+    ...savedRun, status: 'ready_for_review',
+    qualityFirst: {
+      ...savedRun.qualityFirst,
+      actionResults: { idle: { ok: true }, waving: { ok: true }, 'running-right': rejected, 'running-left': rejected },
+      package: { basicActions: { availableActionIds: ['idle', 'waving'] } }
+    }
+  } })
+  await page.reload()
+  await page.waitForFunction(() => document.querySelector('#status-line')?.textContent === 'Loaded latest run.')
+  assert.equal(await packageRecovery.count(), 0)
+  assert.equal(await mirror.count(), 0)
+  assert.match(await panel.textContent(), /Available actions: idle, waving/)
+  const regenerate = panel.getByRole('button', { name: 'Regenerate running pair' })
+  const regenerateResponse = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/runs/${runId}/actions/running-right/retry`)
+  await regenerate.click()
+  assert.equal((await regenerateResponse).status(), 401)
 })
 
 test('creator studio dashboard shows imported full-pet review completion details', async (t) => {

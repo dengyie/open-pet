@@ -32,7 +32,9 @@ const {
   normalizeStoredCandidateDecision
 } = require('./candidate-decision')
 const {
+  RUNNING_PAIR_ATLAS_FAILURE,
   canResumeRunningMirrorPackaging,
+  hasRejectedRunningPair,
   readActionCheckpoints,
   invalidateActionCheckpoint,
   invalidateAllActionCheckpoints
@@ -816,7 +818,11 @@ const finalizeRepairPackage = async ({ runtime, optionalRows, ...options }) => {
     return await runtime.finalizePackage(options)
   } catch (error) {
     if (error?.code !== 'official_full_pet_row_qa_failed' || !optionalRows.includes(error.actionId)) throw error
-    for (const actionId of optionalRows) delete options.actionResults[actionId]
+    for (const actionId of ['running-right', 'running-left']) {
+      options.actionResults[actionId] = createQualityFirstActionResultView({
+        actionId, disposition: 'omitted', failureCode: RUNNING_PAIR_ATLAS_FAILURE
+      })
+    }
     return runtime.finalizePackage(options)
   }
 }
@@ -1197,7 +1203,9 @@ const runQualityFirstActionRepair = async ({
   }
   let mirrorSource
   let savedMirror
+  const rejectedRunningPair = hasRejectedRunningPair(run)
   if (mirrorOnly) {
+    if (rejectedRunningPair) throw new Error('Creator Studio running pair failed atlas QA; regenerate running-right')
     const checkpoints = readActionCheckpoints({ dataDir, runId }).actions
     const resumePackaging = canResumeRunningMirrorPackaging({ run, checkpoints })
     if (!['failed', 'cancelled', 'ready_for_review', 'recovery-required'].includes(run.status) ||
@@ -1217,9 +1225,10 @@ const runQualityFirstActionRepair = async ({
   // Interrupted finalization may leave an accepted checkpoint ahead of the
   // public run. The host revalidates all bindings/assets before reusing it;
   // stale checkpoints still fall through to normal generation.
-  const unreportedCheckpoint = run.qualityFirst?.actionResults?.[normalizedActionId]?.ok !== true &&
-    readActionCheckpoints({ dataDir, runId }).actions?.[normalizedActionId]?.ok === true
   const runningRight = normalizedActionId === 'running-right'
+  const unreportedCheckpoint = !(runningRight && rejectedRunningPair) &&
+    run.qualityFirst?.actionResults?.[normalizedActionId]?.ok !== true &&
+    readActionCheckpoints({ dataDir, runId }).actions?.[normalizedActionId]?.ok === true
   if (!mirrorOnly && !unreportedCheckpoint && !runningRight) {
     invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
   }

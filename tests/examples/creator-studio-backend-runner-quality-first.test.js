@@ -2114,10 +2114,30 @@ for (const failedRow of ['', 'running-left']) test(`repairing another action kee
   assert.equal(result.run.status, 'ready_for_review')
   assert.equal(result.run.qualityFirst.actionResults.waving.ok, true)
   for (const actionId of runningRows) {
-    assert.equal(result.run.qualityFirst.actionResults[actionId]?.ok, failedRow ? undefined : true)
+    const action = result.run.qualityFirst.actionResults[actionId]
+    assert.equal(action?.ok, !failedRow)
+    if (failedRow) assert.equal(action.failureCode, 'running_pair_atlas_qa_failed')
     assert.equal(crypto.createHash('sha256').update(fs.readFileSync(frames[actionId].path)).digest('hex'), frames[actionId].sha256)
   }
   assert.deepEqual(JSON.parse(fs.readFileSync(checkpointPath)).actions, checkpoints.actions)
+  if (failedRow) {
+    assert.equal(readCreatorWorkflowDiagnostics({ pluginDataDir: dataDir, runId }).progress.canResumeRunningLeftPackage, undefined)
+    await runQualityFirstActionRepair({
+      dataDir, runId, actionId: 'running-right', plan: { hash: 'plan' }, profile,
+      runtime: {
+        runAction: async ({ reuseCheckpoint }) => {
+          assert.equal(reuseCheckpoint, false)
+          return { actionId: 'running-right', ok: true }
+        },
+        persistActionResult: async () => {},
+        mirrorRunningLeft: async () => ({ actionId: 'running-left', ok: true }),
+        finalizePackage: async ({ actionResults }) => {
+          for (const actionId of ['waving', ...runningRows]) assert.equal(actionResults[actionId].ok, true)
+          return { artifacts: { spritesheet: '/replacement/sheet.webp' } }
+        }
+      }
+    })
+  }
 })
 
 for (const { actionId, mirrorFails } of [{ actionId: 'waving' }, { actionId: 'running-right' }, { actionId: 'running-right', mirrorFails: true }]) test(`dependent ${mirrorFails ? 'mirror' : 'package'} failure rolls back ${actionId} state and keeps the previous package`, async () => {
