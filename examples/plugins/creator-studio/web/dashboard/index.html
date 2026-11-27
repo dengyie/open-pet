@@ -873,10 +873,9 @@
       }
 
       const renderFullPetReview = (review, run) => {
-        if (!review?.spritesheetUrl) return 'Generated pet-pack review artifacts will appear here before import.'
         const sourceValidation = review?.sourceImageValidation || {}
         const atlasValidation = review?.atlasValidation || {}
-        const basicActions = atlasValidation?.basicActions || {}
+        const basicActions = review?.repairCoverage || atlasValidation?.basicActions || {}
         const safeActionId = (value) => {
           const actionId = String(value || '').trim()
           return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(actionId) ? actionId : ''
@@ -903,7 +902,35 @@
           : [artReadiness.approvalId].filter(Boolean)
         const rowValidationRows = Array.isArray(review?.rowValidation?.rows) ? review.rowValidation.rows : []
         const showsMismatch = run?.status === 'ready_for_review' && review?.sourceImageMatchesCurrent === false
-        const canRepair = ['failed', 'ready_for_review'].includes(String(run?.status || ''))
+        const canRepair = Boolean(review?.repairCoverage) || ['failed', 'ready_for_review'].includes(String(run?.status || ''))
+        const actionSummary = availableActionIds.length || omittedActionIds.length
+          ? [
+              '<div class="review-card review-summary">',
+              '<strong>Action availability</strong>',
+              `<span>Available actions: ${escapeHtml(availableActionIds.join(', ') || 'none')}</span>`,
+              `<span>Omitted actions: ${escapeHtml(omittedActionIds.join(', ') || 'none')}</span>`,
+              ...omittedActionIds.map((actionId) => (
+                [
+                  '<span>',
+                  `${escapeHtml(actionId)}: ${escapeHtml(safeFailureCondition(actionAvailability[actionId]?.reason))}`,
+                  actionId === 'running-left'
+                    ? ' (derived from running-right)'
+                    : canRepair
+                      ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">Retry action</button>`
+                      : '',
+                  '</span>'
+                ].join('')
+              )),
+              '<span>Automated QA is technical evidence; human visual approval is still required.</span>',
+              canRepair
+                ? '<span><button data-retry-pet-identity="true">Regenerate canonical identity</button></span>'
+                : '',
+              '</div>'
+            ].join('')
+          : ''
+        if (!review?.spritesheetUrl) {
+          return actionSummary || 'Generated pet-pack review artifacts will appear here before import.'
+        }
         return [
           renderImportedReviewNotice(run),
           showsMismatch
@@ -934,29 +961,7 @@
             ? `<p>Provider art status: production-art-ready (human approval record${artApprovalIds.length === 1 ? '' : 's'} ${escapeHtml(artApprovalIds.join(', ') || 'approved')})</p>`
             : '<p>Provider art status: technical-chain-ready; no matching human art approval.</p>',
           '</div>',
-          availableActionIds.length || omittedActionIds.length
-            ? [
-                '<div class="review-card review-summary">',
-                '<strong>Action availability</strong>',
-                `<span>Available actions: ${escapeHtml(availableActionIds.join(', ') || 'none')}</span>`,
-                `<span>Omitted actions: ${escapeHtml(omittedActionIds.join(', ') || 'none')}</span>`,
-                ...omittedActionIds.map((actionId) => (
-                  [
-                    '<span>',
-                    `${escapeHtml(actionId)}: ${escapeHtml(safeFailureCondition(actionAvailability[actionId]?.reason))}`,
-                    canRepair && actionId !== 'running-left'
-                      ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">Retry action</button>`
-                      : ' (derived from running-right)',
-                    '</span>'
-                  ].join('')
-                )),
-                '<span>Automated QA is technical evidence; human visual approval is still required.</span>',
-                canRepair
-                  ? '<span><button data-retry-pet-identity="true">Regenerate canonical identity</button></span>'
-                  : '',
-                '</div>'
-              ].join('')
-            : '',
+          actionSummary,
           '<div class="review-grid two-up">',
           '<div class="review-card">',
           '<strong>Source image preview</strong>',

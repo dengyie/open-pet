@@ -1785,6 +1785,22 @@ const createActionReview = ({ dataDir, run }) => {
   }
 }
 
+const createCancelledFullPetRepairCoverage = (run) => {
+  const qualityFirst = run.qualityFirst
+  if (run.status !== 'cancelled' || run.generationTask?.pipeline !== 'quality-first-v1' ||
+    !qualityFirst?.acceptedCanonical?.candidateId || !qualityFirst.acceptedCanonical.sha256) return null
+  const actions = qualityFirst.actionResults || {}
+  const availableActionIds = OFFICIAL_FULL_PET_ACTION_IDS.filter((actionId) => actions[actionId]?.ok === true)
+  const omittedActionIds = OFFICIAL_FULL_PET_ACTION_IDS.filter((actionId) => !availableActionIds.includes(actionId))
+  return {
+    availableActionIds,
+    omittedActionIds,
+    actionAvailability: Object.fromEntries(omittedActionIds.map((actionId) => [
+      actionId, { reason: actions[actionId]?.failureCode || 'not-generated' }
+    ]))
+  }
+}
+
 const createFullPetReview = ({ dataDir, run }) => {
   if (run.artifacts?.actionFrames) return null
   const hasFullPetArtifacts = Boolean(
@@ -1841,6 +1857,7 @@ const createFullPetReview = ({ dataDir, run }) => {
     reviewGate: publicReviewState.reviewGate,
     sourceImageValidation: createPublicLogValue({ dataDir, value: publicSourceImageValidation }),
     atlasValidation: createPublicLogValue({ dataDir, value: atlasValidation }),
+    repairCoverage: createPublicLogValue({ dataDir, value: createCancelledFullPetRepairCoverage(run) }),
     rowValidation: createPublicLogValue({ dataDir, value: rowValidation }),
     artReadiness: createPublicLogValue({
       dataDir,

@@ -1524,6 +1524,34 @@ test('creator studio dashboard shows imported action handoff failure details', a
   }
 })
 
+for (const atlasRetained of [true, false]) test(`creator studio dashboard retains targeted repair controls for a cancelled run ${atlasRetained ? 'with' : 'without'} a packaged atlas`, async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-cancelled-repair-'))
+  const run = await seedImportedFullPetRun(dataDir)
+  const previousRun = readRun({ dataDir, runId: run.runId })
+  writeRun({ dataDir, run: {
+    ...previousRun,
+    status: 'cancelled',
+    currentStep: 'generate',
+    importStatus: 'not-imported',
+    importedPackId: '',
+    activatedPackId: '',
+    generationTask: { ...previousRun.generationTask, pipeline: 'quality-first-v1' },
+    qualityFirst: {
+      acceptedCanonical: { candidateId: 'canonical-1', sha256: 'a'.repeat(64) },
+      actionResults: { idle: { ok: true }, waving: { ok: false, failureCode: 'identity-descriptor-distance-high' } },
+      omittedActionIds: ['waving']
+    },
+    artifacts: atlasRetained ? previousRun.artifacts : {}
+  } })
+  const server = await openDashboardServer(dataDir, t)
+  const { page } = await openDashboardPage(server, t)
+  const panel = page.locator('#full-pet-review-panel')
+
+  assert.equal(await panel.locator('[data-retry-pet-action="waving"]').count(), 1)
+  assert.equal(await panel.locator('[data-retry-pet-action="idle"]').count(), 0)
+  assert.equal(await panel.locator('[data-retry-pet-identity]').count(), 1)
+})
+
 test('creator studio dashboard shows imported full-pet review completion details', async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-browser-imported-full-pet-'))
   await seedImportedFullPetRun(dataDir)
