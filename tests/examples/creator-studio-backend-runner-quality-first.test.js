@@ -1908,6 +1908,93 @@ for (const checkpointReused of [false, true]) test(`official jumping row QA fail
   }
 })
 
+for (const scenario of ['right not yet reported', 'mirror fails', 'final QA fails', 'right checkpoint invalid', 'left already saved']) test(`mirror-only recovery: ${scenario}`, async () => {
+  const dataDir = createDataDir()
+  const created = createRun({ dataDir, input: {
+    petName: 'Interrupted Mirror', backend: 'provider',
+    generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1', actions: [{ actionId: 'running-right' }], questions: [] }
+  } })
+  const runId = created.runId
+  const right = { actionId: 'running-right', ok: true, selectedCandidateId: 'accepted-right' }
+  const actionResults = { idle: { ok: true }, ...(scenario === 'right not yet reported' ? {} : { 'running-right': right }) }
+  const canonical = { candidateId: 'canonical-1', sha256: 'a'.repeat(64) }
+  const artifacts = { spritesheet: '/old/sheet.webp' }
+  writeRun({ dataDir, run: {
+    ...created, status: 'cancelled', artifacts, generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1' },
+    qualityFirst: { acceptedCanonical: canonical, actionResults }
+  } })
+  const checkpointPath = path.join(dataDir, 'runs', runId, 'full-pet-action-checkpoints.json')
+  const framesDir = path.join(dataDir, 'runs', runId, 'quality-first', 'frames')
+  const framePath = path.join(framesDir, 'running-right', '01.png')
+  const leftFramePath = path.join(framesDir, 'running-left', '01.png')
+  writePngFixture(framePath)
+  const checkpoint = { ok: true, row: { frames: [{ relativePath: `runs/${runId}/quality-first/frames/running-right/01.png` }] } }
+  fs.writeFileSync(checkpointPath, JSON.stringify({ actions: {
+    'running-right': checkpoint,
+    ...(scenario === 'left already saved' ? { 'running-left': { ok: true } } : {})
+  } }))
+  const calls = []
+  const profile = createHashBoundValue({ version: 1 })
+  const repair = runQualityFirstActionRepair({
+    dataDir, runId, actionId: 'running-left', plan: { hash: 'plan' }, profile,
+    runtime: {
+      loadActionCheckpoint: async (input) => {
+        calls.push('load')
+        assert.deepEqual(input, { actionId: 'running-right', canonical, profile })
+        return scenario === 'right checkpoint invalid' ? null : right
+      },
+      mirrorRunningLeft: async ({ source }) => {
+        calls.push('mirror')
+        assert.equal(source, right)
+        return { ok: scenario !== 'mirror fails', actionId: 'running-left', selectedCandidateId: 'derived-left' }
+      },
+      persistActionResult: async ({ actionId }) => {
+        calls.push('persist')
+        assert.equal(actionId, 'running-left')
+        writePngFixture(leftFramePath)
+        fs.writeFileSync(checkpointPath, JSON.stringify({ actions: {
+          'running-right': checkpoint, 'running-left': { ok: true }
+        } }))
+      },
+      finalizePackage: async ({ actionResults }) => {
+        calls.push('package')
+        assert.equal(actionResults['running-right'].selectedCandidateId, 'accepted-right')
+        assert.equal(actionResults['running-left'].ok, true)
+        if (scenario === 'final QA fails') throw new Error('Official full-pet row running-left failed QA')
+        return { artifacts: {} }
+      }
+    }
+  })
+  if (scenario === 'right not yet reported') {
+    assert.equal((await repair).run.status, 'ready_for_review')
+    assert.deepEqual(calls, ['load', 'mirror', 'persist', 'package'])
+  } else {
+    await assert.rejects(repair, {
+      message: {
+        'mirror fails': 'Creator Studio could not derive the running-left row',
+        'final QA fails': 'Official full-pet row running-left failed QA',
+        'right checkpoint invalid': 'Creator Studio mirror recovery requires a valid running-right checkpoint',
+        'left already saved': 'Creator Studio mirror recovery requires a missing running-left row'
+      }[scenario]
+    })
+    assert.deepEqual(calls, {
+      'mirror fails': ['load', 'mirror'],
+      'final QA fails': ['load', 'mirror', 'persist', 'package'],
+      'right checkpoint invalid': ['load'],
+      'left already saved': []
+    }[scenario])
+    const stored = readRun({ dataDir, runId })
+    assert.deepEqual(stored.qualityFirst.actionResults, actionResults)
+    assert.deepEqual(stored.artifacts, artifacts)
+    assert.equal(fs.existsSync(leftFramePath), false)
+    if (scenario === 'final QA fails') {
+      assert.equal(JSON.parse(fs.readFileSync(checkpointPath)).actions['running-left'], undefined)
+    }
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(checkpointPath)).actions['running-right'], checkpoint)
+  assert.deepEqual(fs.readFileSync(framePath), LEGACY_PNG_BYTES)
+})
+
 for (const { actionId, mirrorFails } of [{ actionId: 'waving' }, { actionId: 'running-right' }, { actionId: 'running-right', mirrorFails: true }]) test(`dependent ${mirrorFails ? 'mirror' : 'package'} failure rolls back ${actionId} state and keeps the previous package`, async () => {
   const dataDir = createDataDir()
   const created = createRun({ dataDir, input: { petName: 'Interrupted Pet', backend: 'provider', generationTask: { mode: 'full-pet', pipeline: 'quality-first-v1', actions: [{ actionId: 'idle', name: 'Idle', frameCount: 6 }], questions: [] } } })

@@ -938,7 +938,9 @@
                   '<span>',
                   `${escapeHtml(actionId)}: ${escapeHtml(safeFailureCondition(actionAvailability[actionId]?.reason))}`,
                   actionId === 'running-left'
-                    ? ' (derived from running-right)'
+                    ? review?.repairCoverage?.canRecoverRunningLeft
+                      ? ' <button data-retry-pet-action="running-left">Derive running-left from accepted running-right</button>'
+                      : ' (derived from running-right)'
                     : canRetryAction(actionId)
                       ? ` <button data-retry-pet-action="${escapeHtml(actionId)}">Retry action</button>`
                       : '',
@@ -1859,7 +1861,9 @@
           setStatus(
             retryIdentity
               ? 'Canonical identity regenerated. Review every action again.'
-              : `Action ${actionId} regenerated. Review the rebuilt pet output.`,
+              : actionId === 'running-left'
+                ? 'Running-left derived from the accepted running-right. Review the rebuilt pet output.'
+                : `Action ${actionId} regenerated. Review the rebuilt pet output.`,
             'ok'
           )
         } catch (error) {

@@ -3415,21 +3415,18 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
       persistCandidate: persistCanonicalCandidate
     })
   }
-  const runAction = async ({ actionId, canonical, profile, reuseCheckpoint = true }) => {
-    const action = plan.actions.find((entry) => entry.actionId === actionId)
-    if (!action) return { ok: false, actionId, disposition: 'omitted', failureCode: 'action_not_in_plan', candidates: [] }
-    const actionProfile = profile || readPersistedScaleProfile()
-    let reusable = reuseCheckpoint ? resolveReusableActionResult({
+  const loadActionCheckpoint = async ({ actionId, canonical, profile }) => {
+    let reusable = resolveReusableActionResult({
       dataDir,
       runId: run.runId,
       actionId,
       planHash: plan.hash,
       canonicalHash: canonical?.sha256,
-      profileHash: actionProfile?.hash,
+      profileHash: profile?.hash,
       processorVersion: processorVersionForAction(actionId),
       qualityProfileHash: qualityProfile.hash,
       requireBindings: true
-    }) : null
+    })
     if (reusable?.row?.quality === 'approved-rig') {
       try {
         await validateCanonicalRigRow({ dataDir, provenance: reusable.row.provenance, frames: reusable.row.frames, actionId, canonicalSha256: canonical.sha256 })
@@ -3437,7 +3434,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
         reusable = null
       }
     }
-    if (reusable) {
+    if (reusable?.row.frames.length) {
       const frames = reusable.row.frames.map((frame, index) => ({
         ...frame,
         index: Number.isInteger(frame.frameIndex) ? frame.frameIndex : (Number.isInteger(frame.index) ? frame.index : index),
@@ -3465,6 +3462,14 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
         candidates: []
       }
     }
+    return null
+  }
+  const runAction = async ({ actionId, canonical, profile, reuseCheckpoint = true }) => {
+    const action = plan.actions.find((entry) => entry.actionId === actionId)
+    if (!action) return { ok: false, actionId, disposition: 'omitted', failureCode: 'action_not_in_plan', candidates: [] }
+    const actionProfile = profile || readPersistedScaleProfile()
+    const reusable = reuseCheckpoint ? await loadActionCheckpoint({ actionId, canonical, profile: actionProfile }) : null
+    if (reusable) return reusable
     const canonicalPath = path.join(dataDir, canonical.relativePath)
     const resolveStartReference = createVideoStartReferenceResolver({ dataDir, run, settings, action, canonical })
     const generateRig = async ({ candidateId }) => {
@@ -4078,6 +4083,7 @@ const createQualityFirstHostRuntime = async ({ dataDir, run, planOverride = null
     sourceReference,
     planRelativePath,
     createCharacterScaleProfile: createRuntimeCharacterScaleProfile,
+    loadActionCheckpoint,
     runAction,
     materializeActionCandidate,
     mirrorRunningLeft,

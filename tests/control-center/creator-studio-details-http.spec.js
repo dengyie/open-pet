@@ -132,6 +132,43 @@ for (const scenario of ['keeps the review and recovery controls', 'shows saved r
   expect(retryPayload.actionId).toBe('waving')
 })
 
+test('Create offers mirror-only recovery for the latest interrupted run after refresh', async ({ page }) => {
+  let retryPayload
+  await page.route('**/api/v1/**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname.replace('/api/v1', '')
+    if (pathname === '/creator/state') {
+      const data = {
+        ok: true, provider: { ready: true }, editableTarget: {}, dashboard, hatchPetAgent: { ok: true },
+        lastRun: {
+          runId, state: 'cancelled', mode: 'full-pet', diagnostics: {
+            runStatus: 'cancelled', progress: {
+              qualityFirst: { pipeline: 'quality-first-v1' },
+              actions: [{ actionId: 'running-right', status: 'passed' }, { actionId: 'running-left', status: 'pending' }]
+            }
+          }
+        }
+      }
+      return route.fulfill({ json: { ok: true, data, meta: { requestId: 'mirror-test', elapsedMs: 1 } } })
+    }
+    if (pathname === `/creator/runs/${runId}/retry-action`) {
+      retryPayload = request.postDataJSON()
+    }
+    return route.abort()
+  })
+  await page.addInitScript(() => {
+    window.openpetBackend = { getBackend: () => ({ baseUrl: location.origin + '/api/v1', sessionToken: 'mirror-test' }) }
+  })
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const { demoControlCenterAPI } = await import('/src/api/demo-control-center-api.ts')
+    window.controlCenterAPI = demoControlCenterAPI
+  })
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  await page.getByTestId('creator-last-run').getByTestId('creator-recover-running-left').click()
+  await expect.poll(() => retryPayload?.actionId).toBe('running-left')
+})
+
 for (const [pane, initiallyRunning] of [['Create', false], ['Plugins', false], ['Create', true], ['Plugins', true]]) {
   const scenario = initiallyRunning ? 'opens the native dashboard without restarting Creator Studio' : 'starts Creator Studio over HTTP before opening its native dashboard'
   test(`${pane} ${scenario}`, async ({ page }) => {

@@ -742,6 +742,20 @@ const PackageQualityReview = ({ progress }: { progress: CreatorWorkflowProgressV
   )
 }
 
+const canRecoverRunningMirror = (run: CreatorWorkflowResult['run'], diagnostics: CreatorWorkflowResult['diagnostics']) => {
+  const progress = diagnostics?.progress
+  return run?.mode === 'full-pet' && progress?.qualityFirst?.pipeline === 'quality-first-v1' &&
+    ['cancelled', 'failed', 'ready_for_review', 'recovery-required'].includes(String(diagnostics?.runStatus || progress.runStatus)) &&
+    progress.actions?.some((action) => action.actionId === 'running-right' && action.status === 'passed') &&
+    progress.actions?.some((action) => action.actionId === 'running-left' && ['pending', 'failed'].includes(action.status))
+}
+
+const RunningMirrorRecoveryButton = ({ disabled, onRecover }: { disabled: boolean, onRecover: () => void | Promise<void> }) => (
+  <button type="button" className="ghost" disabled={disabled} onClick={onRecover} data-testid="creator-recover-running-left">
+    从已通过的 running-right 镜像生成 running-left
+  </button>
+)
+
 const ResultCard = ({
   result,
   running,
@@ -807,13 +821,14 @@ const ResultCard = ({
     : (progress?.failedActionIds || progressActions.filter((action) => action.status === 'failed').map((action) => action.actionId))
   const canRepairFullPet = result.run?.mode === 'full-pet' &&
     ['review-required', 'preview-ready', 'completed', 'import-failed'].includes(String(result.state))
+  const canRecoverRunningLeft = canRecoverRunningMirror(result.run, diagnostics)
   const repairableActionIds = canRepairFullPet
     ? createUniqueActionIds([
       ...failedActionIds,
       ...(basicActions?.omittedActionIds || []),
       ...(basicActions?.missingRequiredOfficialActionIds || []),
       ...progressActions.filter((action) => action.status === 'failed').map((action) => action.actionId)
-    ]).filter((actionId) => actionId !== 'running-left')
+    ]).filter((actionId) => actionId !== 'running-left' && !(canRecoverRunningLeft && actionId === 'running-right'))
     : []
   const canImportAvailable = result.run?.mode === 'full-pet' &&
     availableActionIds.length > 0 &&
@@ -911,7 +926,7 @@ const ResultCard = ({
           <strong>降级占位动作</strong> {result.degradedActionIds.join(', ')}；当前可运行但不是通过质量门的真实动作，请重新生成。
         </span>
       ) : null}
-      {canImportAvailable || repairableActionIds.length ? (
+      {canImportAvailable || repairableActionIds.length || canRecoverRunningLeft ? (
         <div className="header-actions" data-testid="creator-main-ctas">
           {canImportAvailable ? (
             <button
@@ -934,6 +949,12 @@ const ResultCard = ({
             >
               一键重生成失败动作
             </button>
+          ) : null}
+          {canRecoverRunningLeft ? (
+            <RunningMirrorRecoveryButton
+              disabled={running || previewing}
+              onRecover={() => onRetryFullPetAction('running-left')}
+            />
           ) : null}
         </div>
       ) : null}
@@ -1413,6 +1434,9 @@ export function CreatorPane({
             <span><strong>Mode</strong> {creatorState.lastRun.mode || '-'}</span>
             <span><strong>Run ID</strong> {creatorState.lastRun.runId || '-'}</span>
           </div>
+          {canRecoverRunningMirror(creatorState.lastRun, creatorState.lastRun.diagnostics) ? (
+            <RunningMirrorRecoveryButton disabled={running || previewing} onRecover={() => onRetryFullPetAction('running-left')} />
+          ) : null}
         </div>
       ) : null}
 

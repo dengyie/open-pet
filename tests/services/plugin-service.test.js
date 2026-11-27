@@ -4820,7 +4820,7 @@ test('Creator Studio dashboard retries through its service bridge and the host c
       ...(token ? { 'x-openpet-creator-studio-repair-token': token } : {})
     }
   })
-  for (const operation of ['actions/jumping', 'identity']) {
+  for (const operation of ['actions/jumping', 'actions/running-left', 'identity']) {
     assert.equal((await retry(operation)).status, 401)
     assert.equal((await retry(operation, serviceEnv.OPENPET_SERVICE_BRIDGE_TOKEN)).status, 403)
   }

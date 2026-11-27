@@ -1145,18 +1145,18 @@ const runQualityFirstActionRepair = async ({
   profile,
   now = () => new Date().toISOString()
 } = {}) => {
-  if (!runtime?.runAction || !runtime?.persistActionResult || !runtime?.finalizePackage) {
+  const normalizedActionId = String(actionId || '').trim()
+  const mirrorOnly = normalizedActionId === 'running-left'
+  if (!(mirrorOnly ? runtime?.loadActionCheckpoint && runtime?.mirrorRunningLeft : runtime?.runAction) ||
+    !runtime?.persistActionResult || !runtime?.finalizePackage) {
     throw new Error('Quality-first action repair requires a complete host runtime')
   }
   const run = readRun({ dataDir, runId })
-  const normalizedActionId = String(actionId || '').trim()
   if (run.generationTask?.pipeline !== 'quality-first-v1' || run.generationTask?.mode !== 'full-pet') {
     throw new Error('Quality-first action repair requires a quality-first full-pet run')
   }
-  if (!GENERATED_FULL_PET_ACTION_IDS.includes(normalizedActionId)) {
-    throw new Error(normalizedActionId === 'running-left'
-      ? 'Creator Studio running-left repair must regenerate running-right and derive its mirror'
-      : `Creator Studio cannot repair unknown generated action: ${normalizedActionId || '(missing)'}`)
+  if (!mirrorOnly && !GENERATED_FULL_PET_ACTION_IDS.includes(normalizedActionId)) {
+    throw new Error(`Creator Studio cannot repair unknown generated action: ${normalizedActionId || '(missing)'}`)
   }
   const canonical = run.qualityFirst?.acceptedCanonical
   if (!canonical?.candidateId || !canonical?.sha256) {
@@ -1170,6 +1170,16 @@ const runQualityFirstActionRepair = async ({
   )) {
     throw new Error('Quality-first idle recovery requires scale-profile reconstruction support')
   }
+  let mirrorSource
+  if (mirrorOnly) {
+    if (!['failed', 'cancelled', 'ready_for_review', 'recovery-required'].includes(run.status) ||
+      run.qualityFirst?.actionResults?.['running-left']?.ok === true ||
+      readActionCheckpoints({ dataDir, runId }).actions?.['running-left']?.ok === true) {
+      throw new Error('Creator Studio mirror recovery requires a missing running-left row')
+    }
+    mirrorSource = await runtime.loadActionCheckpoint({ actionId: 'running-right', canonical, profile })
+    if (mirrorSource?.ok !== true) throw new Error('Creator Studio mirror recovery requires a valid running-right checkpoint')
+  }
   const startedAt = now()
   const evidenceArchive = archiveRepairEvidence({ dataDir, run, scope: 'action', actionId: normalizedActionId, archivedAt: startedAt })
   // Interrupted finalization may leave an accepted checkpoint ahead of the
@@ -1178,7 +1188,7 @@ const runQualityFirstActionRepair = async ({
   const unreportedCheckpoint = run.qualityFirst?.actionResults?.[normalizedActionId]?.ok !== true &&
     readActionCheckpoints({ dataDir, runId }).actions?.[normalizedActionId]?.ok === true
   const runningRight = normalizedActionId === 'running-right'
-  if (!unreportedCheckpoint && !runningRight) {
+  if (!mirrorOnly && !unreportedCheckpoint && !runningRight) {
     invalidateActionCheckpoint({ dataDir, runId, actionId: normalizedActionId, reason: 'quality-first-action-repair', now })
   }
   const lease = createGenerationLease({ commandId: 'retry-action', startedAt, leaseId: `${runId}-retry-action-${startedAt}` })
@@ -1192,7 +1202,7 @@ const runQualityFirstActionRepair = async ({
       phase: normalizedActionId === 'idle' ? 'generating-idle' : 'generating-actions',
       nextAction: normalizedActionId === 'idle' ? 'generate-idle' : 'generate-actions'
     },
-    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: `Regenerating ${normalizedActionId}`, updatedAt: startedAt })
+    backendStatus: createBackendStatus({ backend: PROVIDER_BACKEND, state: 'running', message: mirrorOnly ? 'Deriving running-left from running-right' : `Regenerating ${normalizedActionId}`, updatedAt: startedAt })
   }
   writeRun({ dataDir, run: generatingRun })
   const stopLeaseHeartbeat = createGenerationLeaseHeartbeat({ dataDir, runId, leaseId: lease.leaseId, now })
@@ -1202,10 +1212,13 @@ const runQualityFirstActionRepair = async ({
     let effectiveProfile = profile
     let result
     try {
-      result = await runtime.runAction({
-        actionId: normalizedActionId, canonical, profile: effectiveProfile, plan,
-        ...(runningRight && !unreportedCheckpoint ? { reuseCheckpoint: false } : {})
-      })
+      result = mirrorOnly
+        ? await runtime.mirrorRunningLeft({ source: mirrorSource, profile: effectiveProfile, canonical })
+        : await runtime.runAction({
+          actionId: normalizedActionId, canonical, profile: effectiveProfile, plan,
+          ...(runningRight && !unreportedCheckpoint ? { reuseCheckpoint: false } : {})
+        })
+      if (mirrorOnly && result?.ok !== true) throw new Error('Creator Studio could not derive the running-left row')
     } catch (error) {
       if (!runningRight || error?.startFrameRejected !== true) throw error
       const failureCode = executionFailureCode(error, 'video_start_frame_rejected')
@@ -1249,6 +1262,9 @@ const runQualityFirstActionRepair = async ({
     const actionResults = {
       ...(run.qualityFirst?.actionResults || {}),
       [normalizedActionId]: createQualityFirstActionResultView(result)
+    }
+    if (mirrorOnly && actionResults['running-right']?.ok !== true) {
+      actionResults['running-right'] = createQualityFirstActionResultView(mirrorSource)
     }
     if (normalizedActionId === 'running-right') {
       actionResults['running-left'] = createQualityFirstActionResultView({
