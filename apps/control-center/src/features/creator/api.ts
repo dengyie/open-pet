@@ -14,6 +14,7 @@ import type {
   CreatorGenerateNewCharacterRequest,
   CreatorImportAvailableActionsRequest,
   CreatorLastRunResult,
+  CreatorLastRunViewState,
   CreatorReferencePickerResult,
   CreatorRetryActionRequest,
   CreatorRetryIdentityRequest,
@@ -24,6 +25,41 @@ import type {
 const object = (value: unknown): value is Record<string, unknown> => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
 )
+
+const firstText = (...values: unknown[]) => values.find((value): value is string => typeof value === 'string' && value.trim().length > 0) || ''
+
+const backendRunState = (status: string): CreatorLastRunViewState['state'] => {
+  switch (status) {
+    case 'cancelled': return 'cancelled'
+    case 'generating': return 'generating'
+    case 'awaiting_identity_review': return 'awaiting-identity-review'
+    case 'ready_for_review':
+    case 'approved': return 'review-required'
+    case 'failed':
+    case 'recovery-required': return 'recovery-required'
+    case 'imported':
+    case 'completed': return 'completed'
+    default: return 'missing-input'
+  }
+}
+
+const normalizePersistedRun = (value: unknown): CreatorLastRunViewState | null => {
+  if (!object(value) || !object(value.state)) return null
+  const persisted = value.state
+  const runId = firstText(value.runId, persisted.runId, value.id)
+  if (!runId) return null
+  return {
+    runId,
+    state: backendRunState(firstText(value.status, persisted.status)),
+    mode: firstText(value.mode, persisted.mode),
+    commandId: firstText(persisted.commandId),
+    message: firstText(persisted.message, persisted.error),
+    importedActionId: firstText(persisted.importedActionId),
+    importedPackId: firstText(persisted.importedPackId),
+    activatedPackId: firstText(persisted.activatedPackId),
+    diagnostics: (value.diagnostics ?? persisted.diagnostics) as CreatorLastRunViewState['diagnostics']
+  }
+}
 
 const stateSchema = v.custom<CreatorStateViewState>((value) => (
   object(value) && value.ok === true && object(value.provider) && object(value.hatchPetAgent)
@@ -62,6 +98,15 @@ export function resolveCreatorJob(job: Job | null): CreatorJobResolution {
   if (job.status === 'succeeded') {
     const parsedWorkflow = v.safeParse(workflowSchema, job.result)
     if (parsedWorkflow.success) return { kind: 'succeeded', result: parsedWorkflow.output }
+    const result = job.result
+    if (object(result) && result.ok === true && object(result.repair) &&
+      result.repair.scope === 'action' && result.repair.actionId === 'running-left' && typeof result.message === 'string') {
+      const run = normalizePersistedRun(result.run)
+      if (run) return { kind: 'succeeded', result: {
+        ok: true, state: run.state, code: 'action_repair_review_required', message: result.message,
+        run, diagnostics: run.diagnostics
+      } }
+    }
     const parsedExport = v.safeParse(exportSchema, job.result)
     if (parsedExport.success) return { kind: 'succeeded', result: parsedExport.output }
     return { kind: 'failed', message: 'Creator Job returned an invalid result.' }
@@ -81,8 +126,14 @@ export function createCreatorHttpApi(client: ApiClient = backendClient) {
       : client.request({ method, path, requestSchema: v.unknown(), body, responseSchema, job, retry: false })
   )
   return {
-    getState: () => request('GET', '/creator/state', stateSchema),
-    getLastRun: () => request('GET', '/creator/last-run', lastRunSchema),
+    getState: async () => {
+      const state = await request('GET', '/creator/state', stateSchema)
+      return { ...state, lastRun: normalizePersistedRun(state.lastRun) ?? state.lastRun }
+    },
+    getLastRun: async () => {
+      const result = await request('GET', '/creator/last-run', lastRunSchema)
+      return { ...result, run: normalizePersistedRun(result.run) ?? result.run }
+    },
     bindReference: (body: CreatorBindReferenceRequest) => request('POST', '/creator/references', bindSchema, body),
     deleteReference: (body: CreatorBindReferenceRequest) => request('DELETE', `/creator/references?targetType=${encodeURIComponent(body.targetType)}&targetId=${encodeURIComponent(body.targetId)}`, v.custom<{ deleted: boolean }>((value) => object(value) && value.deleted === true)),
     generateNewCharacter: (body: CreatorGenerateNewCharacterRequest) => request('POST', '/creator/characters/generate', jobStartSchema, body, true),

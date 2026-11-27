@@ -141,7 +141,7 @@ test('Create offers mirror-only recovery for the latest interrupted run after re
       const data = {
         ok: true, provider: { ready: true }, editableTarget: {}, dashboard, hatchPetAgent: { ok: true },
         lastRun: {
-          runId, state: 'cancelled', mode: 'full-pet', diagnostics: {
+          id: runId, status: 'cancelled', state: { runId, creatorExecution: 'backend', status: 'cancelled' }, mode: 'full-pet', diagnostics: {
             runStatus: 'cancelled', progress: {
               qualityFirst: { pipeline: 'quality-first-v1' },
               actions: [{ actionId: 'running-right', status: 'passed' }, { actionId: 'running-left', status: 'pending' }]
@@ -153,6 +153,18 @@ test('Create offers mirror-only recovery for the latest interrupted run after re
     }
     if (pathname === `/creator/runs/${runId}/retry-action`) {
       retryPayload = request.postDataJSON()
+      return route.fulfill({ status: 202, json: { ok: true, data: { jobId: 'mirror-job' }, meta: { requestId: 'mirror-test', elapsedMs: 1 } } })
+    }
+    if (pathname === '/jobs/mirror-job') {
+      const data = {
+        jobId: 'mirror-job', status: 'succeeded',
+        result: {
+          ok: true, message: 'Repaired action running-left',
+          run: { id: runId, status: 'ready_for_review', mode: 'full-pet', state: { creatorExecution: 'backend' } },
+          repair: { scope: 'action', actionId: 'running-left' }
+        }
+      }
+      return route.fulfill({ json: { ok: true, data, meta: { requestId: 'mirror-test', elapsedMs: 1 } } })
     }
     return route.abort()
   })
@@ -165,8 +177,14 @@ test('Create offers mirror-only recovery for the latest interrupted run after re
     window.controlCenterAPI = demoControlCenterAPI
   })
   await page.getByRole('button', { name: 'Create', exact: true }).click()
-  await page.getByTestId('creator-last-run').getByTestId('creator-recover-running-left').click()
-  await expect.poll(() => retryPayload?.actionId).toBe('running-left')
+  const latestRun = page.getByTestId('creator-last-run')
+  await expect(latestRun).toContainText(`Run ID ${runId}`)
+  await expect(latestRun).toContainText('State 已取消')
+  await latestRun.getByTestId('creator-recover-running-left').click()
+  const result = page.getByTestId('creator-result')
+  await expect(result).toContainText('Repaired action running-left')
+  await expect(result).toContainText('需要复查')
+  expect(retryPayload?.actionId).toBe('running-left')
 })
 
 for (const [pane, initiallyRunning] of [['Create', false], ['Plugins', false], ['Create', true], ['Plugins', true]]) {

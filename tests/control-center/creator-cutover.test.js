@@ -31,6 +31,25 @@ test("Creator Control Center API uses backend routes and Job timeouts for long o
 	])
 })
 
+test("Creator Control Center normalizes stored run identity and status but leaves Shell runs intact", async () => {
+	const { createCreatorHttpApi } = await import("../../apps/control-center/src/features/creator/api.ts")
+	const diagnostics = { runStatus: "cancelled" }
+	const stored = { id: "persisted", mode: "full-pet", status: "cancelled", state: { status: "generating" }, diagnostics }
+	const shell = { runId: "shell", state: "completed", mode: "full-pet" }
+	const responses = [
+		{ ok: true, lastRun: stored },
+		{ ok: true, run: { ...stored, id: undefined, state: { runId: "nested", status: "generating" } } },
+		{ ok: true, run: shell },
+	]
+	const api = createCreatorHttpApi({ request: async () => responses.shift() })
+	const { lastRun } = await api.getState()
+	assert.equal(lastRun.runId, "persisted")
+	assert.equal(lastRun.state, "cancelled")
+	assert.equal(lastRun.diagnostics, diagnostics)
+	assert.equal((await api.getLastRun()).run.runId, "nested")
+	assert.equal((await api.getLastRun()).run, shell)
+})
+
 test("Creator Job resolution rejects restart failures and accepts workflow/export results", async () => {
 	const { resolveCreatorJob } = await import("../../apps/control-center/src/features/creator/api.ts")
 	assert.deepEqual(resolveCreatorJob(null), { kind: "pending" })
