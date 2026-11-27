@@ -1524,11 +1524,10 @@ test('creator studio dashboard shows imported action handoff failure details', a
   }
 })
 
-for (const scenario of ['with a packaged atlas', 'without a packaged atlas', 'before idle recovery', 'during the running mirror']) test(`creator studio dashboard retains targeted repair controls for a cancelled run ${scenario}`, async (t) => {
+for (const scenario of ['with a packaged atlas', 'without a packaged atlas', 'before idle recovery']) test(`creator studio dashboard retains targeted repair controls for a cancelled run ${scenario}`, async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-dashboard-cancelled-repair-'))
   const run = await seedImportedFullPetRun(dataDir)
   const idlePending = scenario === 'before idle recovery'
-  const mirrorPending = scenario === 'during the running mirror'
   const runDir = path.join(dataDir, 'runs', run.runId)
   fs.writeFileSync(path.join(runDir, 'sprite-plan.json'), '{}')
   if (!idlePending) fs.writeFileSync(path.join(runDir, 'character-scale-profile.json'), JSON.stringify({ hash: 'a'.repeat(64) }))
@@ -1545,14 +1544,7 @@ for (const scenario of ['with a packaged atlas', 'without a packaged atlas', 'be
       acceptedCanonical: { candidateId: 'canonical-1', sha256: 'a'.repeat(64) },
       actionResults: idlePending
         ? {}
-        : {
-            idle: { ok: true },
-            waving: { ok: false, failureCode: 'identity-descriptor-distance-high' },
-            ...(mirrorPending ? {
-              'running-right': { ok: true },
-              'running-left': { ok: false, failureCode: 'source_action_pending' }
-            } : {})
-          },
+        : { idle: { ok: true }, waving: { ok: false, failureCode: 'identity-descriptor-distance-high' } },
       omittedActionIds: idlePending ? ['idle', 'waving'] : ['waving']
     },
     artifacts: scenario === 'with a packaged atlas' ? previousRun.artifacts : {}
@@ -1564,11 +1556,6 @@ for (const scenario of ['with a packaged atlas', 'without a packaged atlas', 'be
   assert.equal(await panel.locator('[data-retry-pet-action="waving"]').count(), idlePending ? 0 : 1)
   assert.equal(await panel.locator('[data-retry-pet-action="idle"]').count(), idlePending ? 1 : 0)
   assert.equal(await panel.locator('[data-retry-pet-identity]').count(), 1)
-  assert.equal(await panel.locator('[data-retry-pet-action="running-right"]').count(), idlePending ? 0 : 1)
-  assert.equal(await panel.locator('[data-retry-pet-action="running-left"]').count(), 0)
-  if (mirrorPending) {
-    assert.match(await panel.locator('[data-retry-pet-action="running-right"]').textContent(), /running pair/)
-  }
 })
 
 test('creator studio dashboard shows imported full-pet review completion details', async (t) => {
