@@ -18,6 +18,83 @@ const plugin = {
   }
 }
 
+test('Create keeps the review and recovery controls after native approval is revoked during action retry', async ({ page }) => {
+  const reviewRun = { runId, state: 'review-required', mode: 'full-pet' }
+  const cancelledRun = { ...reviewRun, state: 'cancelled', commandId: 'retry-action' }
+  let retried = false
+  let retryPayload
+  await page.route('**/api/v1/**', async (route) => {
+    const request = route.request()
+    const pathname = new URL(request.url()).pathname.replace('/api/v1', '')
+    let data
+    let status = 200
+    switch (pathname) {
+      case '/creator/state':
+        data = {
+          ok: true, provider: { ready: true }, editableTarget: {}, dashboard,
+          hatchPetAgent: { ok: true },
+          lastRun: retried ? cancelledRun : reviewRun
+        }
+        break
+      case '/creator/characters/generate':
+        status = 202
+        data = { jobId: 'review-job' }
+        break
+      case '/jobs/review-job':
+        data = {
+          jobId: 'review-job', status: 'succeeded',
+          result: {
+            ok: true, state: 'review-required', code: 'review_required', message: 'Ready for review',
+            run: reviewRun, availableActionIds: ['idle'], failedActionIds: ['waving']
+          }
+        }
+        break
+      case `/creator/runs/${runId}/retry-action`:
+        retryPayload = request.postDataJSON()
+        retried = true
+        status = 202
+        data = { jobId: 'retry-job' }
+        break
+      case '/jobs/retry-job':
+        data = {
+          jobId: 'retry-job', status: 'succeeded',
+          result: {
+            ok: true, state: 'cancelled', code: 'native_execution_revoked',
+            message: 'Native execution approval was revoked; generation cancelled.',
+            run: cancelledRun
+          }
+        }
+        break
+      default:
+        return route.abort()
+    }
+    await route.fulfill({ status, json: { ok: true, data, meta: { requestId: 'retry-http-test', elapsedMs: 1 } } })
+  })
+  await page.addInitScript(() => {
+    window.openpetBackend = { getBackend: () => ({ baseUrl: location.origin + '/api/v1', sessionToken: 'retry-http-test' }) }
+  })
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const { demoControlCenterAPI } = await import('/src/api/demo-control-center-api.ts')
+    window.controlCenterAPI = demoControlCenterAPI
+  })
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  await page.getByLabel('Character name').fill('Retry Cat')
+  await page.getByTestId('creator-new-reference-input').click()
+  await page.getByTestId('creator-generate-new-character').click()
+
+  const result = page.getByTestId('creator-result')
+  const retry = result.getByTestId('creator-retry-failed-actions')
+  const importAvailable = result.getByTestId('creator-import-available-actions')
+  await expect(importAvailable).toHaveText('导入可用动作（1）')
+  await retry.click()
+  await expect(result).toContainText('Native execution approval was revoked; generation cancelled.')
+  await expect(result).toContainText('需要复查')
+  await expect(importAvailable).toBeEnabled()
+  await expect(retry).toBeEnabled()
+  expect(retryPayload.actionId).toBe('waving')
+})
+
 for (const [pane, initiallyRunning] of [['Create', false], ['Plugins', false], ['Create', true], ['Plugins', true]]) {
   const scenario = initiallyRunning ? 'opens the native dashboard without restarting Creator Studio' : 'starts Creator Studio over HTTP before opening its native dashboard'
   test(`${pane} ${scenario}`, async ({ page }) => {

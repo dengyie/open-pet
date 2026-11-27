@@ -169,7 +169,17 @@ export function useCreatorPane(active: boolean) {
   }, [active, running])
 
   const syncAfterWorkflow = async (nextResult: CreatorWorkflowResult) => {
-    setResult(nextResult)
+    setResult((current) => {
+      const cancelledRetry = nextResult.state === 'cancelled' &&
+        nextResult.code === 'native_execution_revoked' &&
+        nextResult.run?.commandId === 'retry-action'
+      if (cancelledRetry && current?.run?.mode === 'full-pet' &&
+        current.run.runId && current.run.runId === nextResult.run?.runId &&
+        ['review-required', 'preview-ready', 'completed', 'import-failed'].includes(current.state)) {
+        return { ...current, message: nextResult.message }
+      }
+      return nextResult
+    })
     setStatus(nextResult.message || '')
     setCreatorState((current) => cloneCreatorState({
       ...current,
