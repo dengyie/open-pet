@@ -651,9 +651,13 @@
           fragment.delete(key)
           url.hash = fragment.toString()
           window.history.replaceState(null, '', url)
-          window.sessionStorage.setItem(key, token)
         }
-        return token || window.sessionStorage.getItem(key)
+        try {
+          if (token) window.sessionStorage.setItem(key, token)
+          return token || window.sessionStorage.getItem(key)
+        } catch (_) {
+          return token
+        }
       })()
       const isFullPetRun = (run) => run?.generationTask?.mode === 'full-pet'
       const defaultGenerateLabel = (run = state.run) => (isFullPetRun(run) ? 'Generate pet pack' : 'Generate action')
