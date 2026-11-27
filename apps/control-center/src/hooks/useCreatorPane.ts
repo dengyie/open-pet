@@ -176,6 +176,7 @@ export function useCreatorPane(active: boolean) {
       if (cancelledRetry && current?.run?.mode === 'full-pet' &&
         current.run.runId && current.run.runId === nextResult.run?.runId &&
         ['review-required', 'preview-ready', 'completed', 'import-failed'].includes(current.state)) {
+        if (nextResult.diagnostics?.progress) return { ...nextResult, state: current.state }
         return { ...current, message: nextResult.message }
       }
       return nextResult

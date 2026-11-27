@@ -18,7 +18,7 @@ const plugin = {
   }
 }
 
-test('Create keeps the review and recovery controls after native approval is revoked during action retry', async ({ page }) => {
+for (const repairSaved of [false, true]) test(`Create ${repairSaved ? 'shows saved repairs' : 'keeps the review and recovery controls'} after native approval is revoked during action retry`, async ({ page }) => {
   const reviewRun = { runId, state: 'review-required', mode: 'full-pet' }
   const cancelledRun = { ...reviewRun, state: 'cancelled', commandId: 'retry-action' }
   let retried = false
@@ -61,7 +61,22 @@ test('Create keeps the review and recovery controls after native approval is rev
           result: {
             ok: true, state: 'cancelled', code: 'native_execution_revoked',
             message: 'Native execution approval was revoked; generation cancelled.',
-            run: cancelledRun
+            run: cancelledRun,
+            ...(repairSaved ? {
+              availableActionIds: ['idle', 'waving'],
+              failedActionIds: [],
+              diagnostics: {
+                progress: {
+                  actions: [
+                    { actionId: 'idle', status: 'passed', importable: true },
+                    {
+                      actionId: 'waving', status: 'passed', importable: true,
+                      assets: [{ kind: 'row', relativePath: `runs/${runId}/waving/repaired.png`, label: 'Saved waving candidate' }]
+                    }
+                  ]
+                }
+              }
+            } : {})
           }
         }
         break
@@ -91,7 +106,14 @@ test('Create keeps the review and recovery controls after native approval is rev
   await expect(result).toContainText('Native execution approval was revoked; generation cancelled.')
   await expect(result).toContainText('需要复查')
   await expect(importAvailable).toBeEnabled()
-  await expect(retry).toBeEnabled()
+  if (repairSaved) {
+    await expect(importAvailable).toHaveText('导入可用动作（2）')
+    await expect(result.getByTestId('creator-action-chip-waving')).toHaveAttribute('data-status', 'passed')
+    await expect(result.getByTestId('creator-asset-review')).toContainText('Saved waving candidate')
+    await expect(retry).toHaveCount(0)
+  } else {
+    await expect(retry).toBeEnabled()
+  }
   expect(retryPayload.actionId).toBe('waving')
 })
 
