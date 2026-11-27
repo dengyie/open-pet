@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('path')
 const Module = require('module')
+const { createPetMovementPolicy } = require('../../apps/desktop/src/pet/pet-movement-policy')
 
 const projectRoot = path.join(__dirname, '..', '..')
 const petIndexPath = path.join(projectRoot, 'apps', 'desktop', 'index.html')
@@ -29,7 +30,7 @@ const createBrowserWindowStub = (instances) => class BrowserWindowStub {
     this.moveTopCalls = 0
     this.restoreCalls = 0
     this.showCalls = 0
-    this.bounds = { x: 0, y: 0, width: options.width, height: options.height }
+    this.bounds = { x: options.x ?? 0, y: options.y ?? 0, width: options.width, height: options.height }
     instances.push(this)
   }
 
@@ -134,6 +135,63 @@ test('createWindow preserves automatic loading by default', () => {
   assert.equal(petWindow.options.alwaysOnTop, true)
 })
 
+const createDualDisplayScreen = () => {
+  const primary = { id: 1, workArea: { x: 0, y: 0, width: 1920, height: 1040 } }
+  const secondary = { id: 2, workArea: { x: 1920, y: 24, width: 1280, height: 1000 } }
+  const getDisplayNearestPoint = ({ x }) => x >= 1920 ? secondary : primary
+  return {
+    getPrimaryDisplay: () => primary,
+    getAllDisplays: () => [primary, secondary],
+    getDisplayNearestPoint,
+    getDisplayMatching: ({ x, width }) => getDisplayNearestPoint({ x: x + width / 2 })
+  }
+}
+
+test('createWindow restores the saved Home landing point on the secondary display for walking', () => {
+  const { applyWindowScale, createWindow } = loadWindowModule()
+  const screen = createDualDisplayScreen()
+  const homeAnchor = { displayId: '2', x: 2550, y: 984 }
+  const petWindow = createWindow({ BrowserWindow: createBrowserWindowStub([]), screen, homeAnchor })
+
+  applyWindowScale(petWindow, 1)
+  const windowBounds = petWindow.getBounds()
+  assert.deepEqual(windowBounds, { x: 2475, y: 834, width: 150, height: 150 })
+  assert.equal(screen.getDisplayMatching(windowBounds).id, 2)
+
+  const movement = createPetMovementPolicy({ screen }).clampMoveBy({
+    windowBounds,
+    delta: { x: 16, y: 0 },
+    settings: { grounded: true, home: { enabled: true, anchor: homeAnchor } }
+  })
+  assert.equal(movement.displayId, '2')
+  assert.equal(movement.landingX, 2566)
+  assert.equal(movement.landingY, homeAnchor.y)
+})
+
+test('createWindow clamps Home from a disconnected display to the nearest available work area', () => {
+  const { createWindow } = loadWindowModule()
+  const screen = createDualDisplayScreen()
+  const petWindow = createWindow({
+    BrowserWindow: createBrowserWindowStub([]),
+    screen,
+    homeAnchor: { displayId: '3', x: 3900, y: 1200 }
+  })
+
+  assert.deepEqual(petWindow.getBounds(), { x: 2900, y: 724, width: 300, height: 300 })
+})
+
+test('a matching display ID wins over the old Home coordinates after a display is rearranged', () => {
+  const { createWindow } = loadWindowModule()
+  const screen = createDualDisplayScreen()
+  const petWindow = createWindow({
+    BrowserWindow: createBrowserWindowStub([]),
+    screen,
+    homeAnchor: { displayId: '2', x: 700, y: 984 }
+  })
+
+  assert.deepEqual(petWindow.getBounds(), { x: 1920, y: 684, width: 300, height: 300 })
+})
+
 test('createSettingsWindow uses normal app stacking instead of pet-level always-on-top', () => {
   const instances = []
   const { createSettingsWindow, createWindow } = loadWindowModule()
@@ -223,6 +281,35 @@ test('applyWindowScale uses the reduced visual base size for user scale values',
     width: 75,
     height: 75
   })
+})
+
+test('applyWindowScale commits no negative coordinates when growing at the work area origin', () => {
+  const { applyWindowScale, createWindow } = loadWindowModule()
+  const petWindow = createWindow({ BrowserWindow: createBrowserWindowStub([]), screen: createScreenStub() })
+  petWindow.setBounds({ x: 0, y: 0, width: 150, height: 150 })
+  const commits = []
+  petWindow.setContentBounds = (bounds) => {
+    commits.push(bounds)
+    petWindow.setBounds(bounds)
+  }
+
+  applyWindowScale(petWindow, 1.2)
+  applyWindowScale(petWindow, 1)
+
+  assert.deepEqual(commits, [
+    { x: 0, y: 0, width: 180, height: 180 },
+    { x: 0, y: 0, width: 150, height: 150 }
+  ])
+})
+
+test('applyPetViewport fits oversized bounds inside the current secondary work area', () => {
+  const { applyPetViewport, createWindow } = loadWindowModule()
+  const petWindow = createWindow({ BrowserWindow: createBrowserWindowStub([]), screen: createDualDisplayScreen() })
+  petWindow.setBounds({ x: 1920, y: 24, width: 150, height: 150 })
+
+  applyPetViewport(petWindow, { width: 1600, height: 1100, scale: 1, topInset: 64 })
+
+  assert.deepEqual(petWindow.getBounds(), { x: 1920, y: 24, width: 1280, height: 1000 })
 })
 
 test('applyPetViewport resizes around bottom center for dynamic action bounds', () => {

@@ -267,9 +267,7 @@ const registerPetWindowLifecycle = ({
   maybeRunPackagedCreatorStudioUiE2e = noop,
   maybeRunPackagedCreateUiSmoke = noop
 }) => {
-  let activePetWindow = petWindow
-
-  activePetWindow.webContents.on('did-finish-load', () => {
+  const syncLoadedWindow = (activePetWindow) => {
     const settings = petService.getSettings()
     applyWindowScale(activePetWindow, settings.scale)
     activePetWindow.webContents.send(IPC.SETTINGS_CHANGED, createPetRendererSettings(
@@ -288,13 +286,18 @@ const registerPetWindowLifecycle = ({
       app,
       openControlCenter: () => createSettingsWindow(getPetWindow())
     })
-  })
-  loadPetWindow(activePetWindow)
+  }
+  const loadWithLifecycle = (activePetWindow) => {
+    activePetWindow.webContents.on('did-finish-load', () => syncLoadedWindow(activePetWindow))
+    loadPetWindow(activePetWindow)
+  }
+  loadWithLifecycle(petWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      activePetWindow = createWindow()
+      const activePetWindow = createWindow({ load: false })
       setPetWindow(activePetWindow)
+      loadWithLifecycle(activePetWindow)
     }
   })
 }

@@ -15,6 +15,7 @@ const CONTROL_CENTER_WIDTH = 900
 const CONTROL_CENTER_HEIGHT = 640
 const RESIZE_ANCHOR = Symbol('openpet.resizeAnchor')
 const PET_VIEWPORT = Symbol('openpet.viewport')
+const PET_SCREEN = Symbol('openpet.screen')
 
 const toFiniteNumber = (value, fallback) => (
   Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -53,34 +54,71 @@ const getResizeAnchor = (petWindow, bounds) => {
   }
 }
 
+const clampWindowBounds = ({ x, y, width, height }, workArea) => {
+  width = Math.min(width, workArea.width)
+  height = Math.min(height, workArea.height)
+  return {
+    x: Math.min(Math.max(Math.round(x), workArea.x), workArea.x + workArea.width - width),
+    y: Math.min(Math.max(Math.round(y), workArea.y), workArea.y + workArea.height - height),
+    width,
+    height
+  }
+}
+
+const getHomePlacement = (screen, homeAnchor, width, height) => {
+  const anchor = { centerX: homeAnchor.x, bottomY: homeAnchor.y }
+  const display = screen.getAllDisplays().find(({ id }) => String(id) === String(homeAnchor.displayId))
+    || screen.getDisplayNearestPoint({ x: homeAnchor.x, y: homeAnchor.y })
+    || screen.getPrimaryDisplay()
+  const bounds = clampWindowBounds({
+    x: anchor.centerX - width / 2,
+    y: anchor.bottomY - height,
+    width,
+    height
+  }, display.workArea)
+  return { bounds, anchor: { ...anchor, lastAppliedBounds: bounds } }
+}
+
+const restorePetHome = (petWindow, homeAnchor) => {
+  if (!petWindow || petWindow.isDestroyed() || !homeAnchor) return
+  const { width, height } = petWindow.getBounds()
+  const { bounds, anchor } = getHomePlacement(petWindow[PET_SCREEN], homeAnchor, width, height)
+  petWindow[RESIZE_ANCHOR] = anchor
+  petWindow.setBounds(bounds)
+}
+
+const getDefaultPetBounds = (workArea) => clampWindowBounds({
+  x: workArea.x + workArea.width - BASE_WIDTH - 40,
+  y: workArea.y + workArea.height - BASE_HEIGHT - 40,
+  width: BASE_WIDTH,
+  height: BASE_HEIGHT
+}, workArea)
+
 const resizeWindowAroundBottomCenter = (petWindow, targetWidth, targetHeight) => {
   const bounds = petWindow.getBounds()
-  if (!isValidWindowSize(bounds)) {
+  const validSize = isValidWindowSize(bounds)
+  let currentBounds = bounds
+  if (!validSize) {
     const [fallbackX, fallbackY] = typeof petWindow.getPosition === 'function' ? petWindow.getPosition() : [0, 0]
-    const nextBounds = {
+    currentBounds = {
       x: toFiniteNumber(bounds?.x, fallbackX),
       y: toFiniteNumber(bounds?.y, fallbackY),
       width: targetWidth,
       height: targetHeight
     }
-    petWindow[RESIZE_ANCHOR] = {
-      centerX: nextBounds.x + targetWidth / 2,
-      bottomY: nextBounds.y + targetHeight,
-      lastAppliedBounds: nextBounds
-    }
-    petWindow.setBounds(nextBounds)
-    return
   }
-  const anchor = getResizeAnchor(petWindow, bounds)
-  if (targetWidth === bounds.width && targetHeight === bounds.height) return
-  const nextBounds = {
-    x: Math.round(anchor.centerX - targetWidth / 2),
-    y: Math.round(anchor.bottomY - targetHeight),
+  const screen = petWindow[PET_SCREEN] || electron.screen
+  const { workArea } = screen.getDisplayMatching(currentBounds)
+  const anchor = getResizeAnchor(petWindow, currentBounds)
+  const nextBounds = clampWindowBounds({
+    x: anchor.centerX - targetWidth / 2,
+    y: anchor.bottomY - targetHeight,
     width: targetWidth,
     height: targetHeight
-  }
+  }, workArea)
+  if (boundsEqual(bounds, nextBounds)) return
   petWindow[RESIZE_ANCHOR] = { ...anchor, lastAppliedBounds: nextBounds }
-  if (typeof petWindow.setContentBounds === 'function') {
+  if (validSize && typeof petWindow.setContentBounds === 'function') {
     petWindow.setContentBounds(nextBounds)
   } else {
     petWindow.setBounds(nextBounds)
@@ -94,8 +132,8 @@ const applyWindowScale = (petWindow, scale) => {
     applyPetViewport(petWindow, { ...petWindow[PET_VIEWPORT], scale: safeScale })
     return
   }
-  const targetWidth = Math.round(BASE_WIDTH * safeScale)
-  const targetHeight = Math.round(BASE_HEIGHT * safeScale)
+  const targetWidth = Math.max(1, Math.round(BASE_WIDTH * safeScale))
+  const targetHeight = Math.max(1, Math.round(BASE_HEIGHT * safeScale))
   resizeWindowAroundBottomCenter(petWindow, targetWidth, targetHeight)
 }
 
@@ -167,10 +205,12 @@ const applyNavigationLock = (win, allowedEntryPath) => {
   return win
 }
 
-const createWindow = ({ load = true, BrowserWindow = electron.BrowserWindow, screen = electron.screen } = {}) => {
+const createWindow = ({ load = true, BrowserWindow = electron.BrowserWindow, screen = electron.screen, homeAnchor } = {}) => {
+  const placement = homeAnchor
+    ? getHomePlacement(screen, homeAnchor, BASE_WIDTH, BASE_HEIGHT)
+    : { bounds: getDefaultPetBounds(screen.getPrimaryDisplay().workArea) }
   const petWindow = new BrowserWindow({
-    width: BASE_WIDTH,
-    height: BASE_HEIGHT,
+    ...placement.bounds,
     frame: false,
     transparent: true,
     resizable: false,
@@ -185,11 +225,8 @@ const createWindow = ({ load = true, BrowserWindow = electron.BrowserWindow, scr
     }
   })
 
-  const { workArea } = screen.getPrimaryDisplay()
-  petWindow.setPosition(
-    workArea.x + workArea.width - BASE_WIDTH - 40,
-    workArea.y + workArea.height - BASE_HEIGHT - 40
-  )
+  petWindow[PET_SCREEN] = screen
+  petWindow[RESIZE_ANCHOR] = placement.anchor
   petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   applyNavigationLock(petWindow, PET_ENTRY_PATH)
   if (load) loadPetWindow(petWindow)
@@ -247,4 +284,4 @@ const createSettingsWindow = (petWindow, { BrowserWindow = electron.BrowserWindo
   return settingsWindow
 }
 
-module.exports = { BASE_WIDTH, BASE_HEIGHT, PET_BASE_SCALE, PET_VIEWPORT, applyPetViewport, applyWindowScale, applyNavigationLock, createWindow, createSettingsWindow, loadPetWindow }
+module.exports = { BASE_WIDTH, BASE_HEIGHT, PET_BASE_SCALE, PET_VIEWPORT, applyPetViewport, applyWindowScale, applyNavigationLock, createWindow, createSettingsWindow, loadPetWindow, restorePetHome }
