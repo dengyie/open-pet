@@ -16,6 +16,7 @@ function inputFor(creator, job) {
 
 function context(runnerContext, creator) {
 	return {
+		jobId: runnerContext.job.id,
 		signal: runnerContext.signal,
 		tmpDir: runnerContext.tmpDir,
 		report: runnerContext.report,

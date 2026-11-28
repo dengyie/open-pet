@@ -6,7 +6,7 @@ import path from "node:path"
 import { ApiError } from "../../http/middleware.js"
 
 const require = createRequire(import.meta.url)
-const { createFullPetTask, IMAGE_PREVIEW_INLINE_MAX_BYTES, readCreatorWorkflowDiagnostics } = require("../../../../apps/desktop/src/services/creator-workflow-service.js")
+const { createFullPetTask, IMAGE_PREVIEW_INLINE_MAX_BYTES, readCreatorRunUpdatedAt, readCreatorWorkflowDiagnostics } = require("../../../../apps/desktop/src/services/creator-workflow-service.js")
 
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$/
 const SAFE_PATH = /^[^\\/][^\0]*$/
@@ -160,6 +160,16 @@ function publicRun(row) {
 	}
 }
 
+function runTimestamp(run) {
+	for (const value of [run?.updatedAt, run?.state?.updatedAt, run?.createdAt, run?.state?.createdAt]) {
+		const timestamp = typeof value === "string" && value.trim()
+			? (/^\d+$/.test(value) ? Number(value) : Date.parse(value))
+			: value
+		if (Number.isFinite(timestamp)) return timestamp
+	}
+	return -Infinity
+}
+
 function publicArtifact(row) {
 	return {
 		id: row.id,
@@ -228,7 +238,20 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 	const byId = (id) => db.prepare("SELECT * FROM creator_flows WHERE owner = ? AND id = ?").get(owner, id)
 	const runById = (id) => db.prepare("SELECT * FROM creator_runs WHERE owner = ? AND id = ?").get(owner, id)
 	const latestRun = () => db.prepare("SELECT * FROM creator_runs WHERE owner = ? ORDER BY updated_at DESC, id ASC LIMIT 1").get(owner)
-	const latestBackendRun = () => db.prepare("SELECT * FROM creator_runs WHERE owner = ? ORDER BY updated_at DESC, id ASC").all(owner).find((row) => backendRunState(row)?.creatorExecution === "backend") || null
+	const latestBackendRun = () => {
+		let pluginDataDir
+		try { pluginDataDir = creatorDataDir?.("openpet.creator-studio") } catch {}
+		let latest = null
+		for (const row of db.prepare("SELECT * FROM creator_runs WHERE owner = ? ORDER BY updated_at DESC, id ASC").all(owner)) {
+			if (backendRunState(row)?.creatorExecution !== "backend") continue
+			const diskTimestamp = runTimestamp({ updatedAt: readCreatorRunUpdatedAt({ pluginDataDir, runId: row.id }) })
+			const updatedAt = Math.max(row.updated_at, diskTimestamp)
+			if (!latest || updatedAt > latest.updated_at || (updatedAt === latest.updated_at && row.id < latest.id)) {
+				latest = { ...row, updated_at: updatedAt }
+			}
+		}
+		return latest
+	}
 	const referencedImageContentHashes = () => {
 		const hashes = new Set()
 		const rows = db.prepare("SELECT state_json FROM creator_runs WHERE owner = ?").all(owner)
@@ -417,34 +440,32 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 	const getJobInput = (jobId, fallback) => privateInputs.get(jobId) || fallback || null
 	const forgetJobInput = (jobId) => privateInputs.delete(jobId)
 
-	const getState = async () => {
-		if (typeof shell?.request === "function") {
-			const desktopState = syncResult(await authority("get-state"))
+	const latestRunView = async (operation, runKey, offlineView) => {
+		if (typeof shell?.request !== "function") {
+			const indexedRun = latestRun()
 			const backendRun = latestBackendRun()
-			if (backendRun) return {
-				...desktopState,
-				lastRun: creatorPublicRun(backendRun),
-				backendLastRun: creatorPublicRun(backendRun),
-				backend: true,
-				diagnostics: runDiagnostics(backendRun.id),
-			}
-			return desktopState
+			const backendLastRun = creatorPublicRun(backendRun)
+			const run = backendRun && (!indexedRun || backendRun.id === indexedRun.id || backendRun.updated_at > indexedRun.updated_at)
+				? backendLastRun : creatorPublicRun(indexedRun)
+			return { ...offlineView, [runKey]: run, backendLastRun, diagnostics: run?.diagnostics ?? null }
 		}
-		const run = latestRun()
-		const backendRun = latestBackendRun()
-		return { ok: true, backend: true, lastRun: creatorPublicRun(run), backendLastRun: creatorPublicRun(backendRun), diagnostics: backendRun ? runDiagnostics(backendRun.id) : run ? runDiagnostics(run.id) : null, dashboard: { available: false, reason: "desktop-shell-offline" } }
-	}
-	const getLastRun = async () => {
-		if (typeof shell?.request === "function") {
-			const desktopLastRun = syncResult(await authority("get-last-run"))
-			const backendRun = latestBackendRun()
-			if (backendRun) return { ...desktopLastRun, run: creatorPublicRun(backendRun), backendLastRun: creatorPublicRun(backendRun), diagnostics: runDiagnostics(backendRun.id) }
-			return desktopLastRun
+		const desktopView = redact(await authority(operation))
+		const backendLastRun = creatorPublicRun(latestBackendRun())
+		if (!backendLastRun) return desktopView
+		const desktopRun = desktopView[runKey]
+		const backendWins = !desktopRun || runTimestamp(backendLastRun) > runTimestamp(desktopRun)
+		const run = backendWins ? backendLastRun : desktopRun
+		return {
+			...desktopView,
+			[runKey]: run,
+			backendLastRun,
+			...(backendWins && desktopRun && runKey === "lastRun" ? { desktopLastRun: desktopRun } : {}),
+			...(runKey === "lastRun" ? { backend: true } : {}),
+			diagnostics: run.diagnostics ?? null,
 		}
-		const run = latestRun()
-		const backendRun = latestBackendRun()
-		return { ok: true, run: creatorPublicRun(run), backendLastRun: creatorPublicRun(backendRun), diagnostics: backendRun ? runDiagnostics(backendRun.id) : run ? runDiagnostics(run.id) : null }
 	}
+	const getState = () => latestRunView("get-state", "lastRun", { ok: true, backend: true, dashboard: { available: false, reason: "desktop-shell-offline" } })
+	const getLastRun = () => latestRunView("get-last-run", "run", { ok: true })
 	const getAssetPreview = async (input = {}) => {
 		object(input)
 		if (typeof shell?.request !== "function" && String(input.relativePath || "").startsWith("creator-web/")) {
@@ -645,12 +666,12 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 			return runBackendImageCharacter(input, ctx)
 		}
 		ctx.report?.({ phase: "preparing", percent: 5 })
-		const result = await authority("generate-character", input, ctx.signal)
+		const result = await authority("generate-character", ctx.jobId ? { ...input, jobId: ctx.jobId } : input, ctx.signal)
 		return finishShellWorkflow(result, input.flowId, ctx, { phase: "generating", percent: 65 })
 	}
 	const runAction = async (input, ctx = {}) => {
 		ctx.report?.({ phase: "preparing", percent: 5 })
-		const result = await authority("generate-action", input, ctx.signal)
+		const result = await authority("generate-action", ctx.jobId ? { ...input, jobId: ctx.jobId } : input, ctx.signal)
 		return finishShellWorkflow(result, input.flowId, ctx, { phase: "generating", percent: 65 })
 	}
 	const runWorkflow = async (input, ctx = {}) => {

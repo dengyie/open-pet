@@ -61,7 +61,24 @@ const normalizePersistedRun = (value: unknown): CreatorLastRunViewState | null =
   }
 }
 
-const stateSchema = v.custom<CreatorStateViewState>((value) => (
+type CreatorProgressRun = CreatorLastRunViewState & { jobId?: string }
+type CreatorState = CreatorStateViewState & {
+  lastRun: CreatorProgressRun | null
+  desktopLastRun?: CreatorProgressRun
+}
+
+export function creatorProgressRun(
+  state: CreatorState,
+  jobId: string,
+  runId = ''
+): CreatorProgressRun | null {
+  return [state.desktopLastRun, state.lastRun].find((run) =>
+    run && (!runId || run.runId === runId) &&
+      (run.jobId ? run.jobId === jobId : Boolean(runId))
+  ) ?? null
+}
+
+const stateSchema = v.custom<CreatorState>((value) => (
   object(value) && value.ok === true && object(value.provider) && object(value.hatchPetAgent)
     && object(value.editableTarget) && object(value.dashboard)
 ))

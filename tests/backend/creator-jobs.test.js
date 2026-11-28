@@ -11,7 +11,7 @@ test("Creator handlers delegate to the domain and leave private input cleanup to
 		getJobInput: (jobId) => privateInputs.get(jobId) || null,
 		forgetJobInput: (jobId) => privateInputs.delete(jobId),
 		runCharacter: async (input, context) => {
-			calls.push(["character", input])
+			calls.push(["character", input, context.jobId])
 			if (input.fail) throw new Error("creator generation failed")
 			return context.finalize(() => ({ ok: true }))
 		},
@@ -22,6 +22,7 @@ test("Creator handlers delegate to the domain and leave private input cleanup to
 	const result = await handlers["creator.character"]({ job: { id: "job-1" }, finalize: async (fn) => fn(), report() {}, signal: new AbortController().signal })
 	assert.deepEqual(result, { ok: true })
 	assert.equal(calls[0][1].referenceImageToken, "opaque")
+	assert.equal(calls[0][2], "job-1")
 	assert.equal(privateInputs.has("job-1"), true)
 	privateInputs.set("job-2", { fail: true, referenceImage: { dataBase64: "private" } })
 	await assert.rejects(() => handlers["creator.character"]({ job: { id: "job-2" }, finalize: async (fn) => fn() }), /creator generation failed/)
