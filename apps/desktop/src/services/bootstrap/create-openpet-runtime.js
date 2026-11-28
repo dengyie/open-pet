@@ -37,7 +37,7 @@ const createOpenPetRuntime = ({
   createSettingsWindow,
   createWindow,
   loadPetWindow,
-  restorePetHome,
+  restorePetPlacement,
   registerAppLifecycleLogs,
   safeRecordAppLog,
   registerIpcHandlers,
@@ -256,9 +256,9 @@ const createOpenPetRuntime = ({
       if (hydratedSettings && !hasHydratedSettings) {
         hasHydratedSettings = true
         const homeAnchor = getSavedHomeAnchor(hydratedSettings)
-        if (homeAnchor && (homeAnchor.displayId !== initialHomeAnchor?.displayId
-          || homeAnchor.x !== initialHomeAnchor?.x || homeAnchor.y !== initialHomeAnchor?.y)) {
-          restorePetHome(getPetWindow(), homeAnchor)
+        if (homeAnchor?.displayId !== initialHomeAnchor?.displayId
+          || homeAnchor?.x !== initialHomeAnchor?.x || homeAnchor?.y !== initialHomeAnchor?.y) {
+          restorePetPlacement(getPetWindow(), homeAnchor)
         }
       }
       await flushDeferredSettingsPersistence()

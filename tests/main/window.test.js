@@ -192,6 +192,20 @@ test('a matching display ID wins over the old Home coordinates after a display i
   assert.deepEqual(petWindow.getBounds(), { x: 1920, y: 684, width: 300, height: 300 })
 })
 
+test('restorePetPlacement returns to the default primary position when Home is disabled', () => {
+  const { applyWindowScale, createWindow, restorePetPlacement } = loadWindowModule()
+  const petWindow = createWindow({
+    BrowserWindow: createBrowserWindowStub([]),
+    screen: createDualDisplayScreen(),
+    homeAnchor: { displayId: '2', x: 2550, y: 984 }
+  })
+
+  restorePetPlacement(petWindow, null)
+  assert.deepEqual(petWindow.getBounds(), { x: 1580, y: 700, width: 300, height: 300 })
+  applyWindowScale(petWindow, 1)
+  assert.deepEqual(petWindow.getBounds(), { x: 1655, y: 850, width: 150, height: 150 })
+})
+
 test('createSettingsWindow uses normal app stacking instead of pet-level always-on-top', () => {
   const instances = []
   const { createSettingsWindow, createWindow } = loadWindowModule()

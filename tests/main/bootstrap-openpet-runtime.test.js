@@ -4,12 +4,12 @@ const { setImmediate: setImmediatePromise } = require('node:timers/promises')
 
 const { createOpenPetRuntime } = require('../../apps/desktop/src/services/bootstrap/create-openpet-runtime')
 
-test('bootstrap runtime wires plugin install and service block-status lookups through the created catalog service', async () => {
+const checkBootstrapRuntime = async (homeEnabled) => {
   const dialogCalls = []
   const pluginInstallCandidates = []
   const pluginServiceCandidates = []
   const createWindowCalls = []
-  const restorePetHomeCalls = []
+  const restorePetPlacementCalls = []
   const loadPetWindowCalls = []
   const smokeCalls = []
   const cleanupCalls = []
@@ -48,7 +48,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   let creatorEnabled = true
   let failNextSettingsPatch = false
   let holdNextSettingsRead
-  const backendHome = { enabled: true, anchor: { displayId: '2', x: 2550, y: 984 } }
+  const backendHome = { enabled: homeEnabled, anchor: { displayId: '2', x: 2550, y: 984 } }
   const fetchImpl = async (url, init = {}) => {
     fetchCalls.push({ url: String(url), method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
     if (String(url).endsWith('/ai/state')) return new Response(JSON.stringify({ ok: true, data: { config: {}, messages: [], petPackId: '' } }))
@@ -130,7 +130,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
       createWindowCalls.push(options)
       return petWindow
     },
-    restorePetHome: (...args) => restorePetHomeCalls.push(args),
+    restorePetPlacement: (...args) => restorePetPlacementCalls.push(args),
     loadPetWindow: (targetWindow) => loadPetWindowCalls.push(targetWindow),
     registerAppLifecycleLogs: ({ appLogService, onBeforeQuit }) => {
       appLogService.record({ event: 'app.ready' })
@@ -329,7 +329,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
 
   backend = { baseUrl: 'http://127.0.0.1:3210/api/v1', sessionToken: 'session-token' }
   await coordinatorOnReady(backend)
-  assert.deepEqual(restorePetHomeCalls, [[petWindow, backendHome.anchor]])
+  assert.deepEqual(restorePetPlacementCalls, [[petWindow, homeEnabled ? backendHome.anchor : null]])
   assert.deepEqual(fetchCalls.filter((call) => call.method === 'PATCH').map((call) => call.body.patch), [{ customCursorScope: 'openpet' }])
   assert.deepEqual(persistenceRequests.map((request) => request.patch), [
     { 'petBehavior.home.anchor': { displayId: 'new-display', x: 30, y: 40 } }
@@ -371,7 +371,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   assert.equal(persistenceRequests.length, 1, 'drag persistence must not overtake an in-flight hydrate')
   heldRead.resolve()
   await Promise.all([hydration, pendingDrag])
-  assert.equal(restorePetHomeCalls.length, 1)
+  assert.equal(restorePetPlacementCalls.length, 1)
   assert.deepEqual(persistenceRequests.at(-1).patch, { 'petBehavior.home.anchor': draggedAnchor })
   assert.deepEqual(settings.petBehavior.home.anchor, draggedAnchor)
 
@@ -410,7 +410,11 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   petWindow.didFinishLoad()
   assert.equal(smokeCalls.length, 1)
   assert.equal(cleanupCalls.length, 1)
-})
+}
+
+test('bootstrap runtime wires plugin install and service block-status lookups through the created catalog service', () => checkBootstrapRuntime(true))
+
+test('bootstrap runtime resets placement when canonical settings disable the legacy Home', () => checkBootstrapRuntime(false))
 
 test('bootstrap runtime waits for plugin shutdown before allowing app quit', async () => {
   const appHandlers = new Map()

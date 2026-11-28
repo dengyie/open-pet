@@ -79,20 +79,25 @@ const getHomePlacement = (screen, homeAnchor, width, height) => {
   return { bounds, anchor: { ...anchor, lastAppliedBounds: bounds } }
 }
 
-const restorePetHome = (petWindow, homeAnchor) => {
-  if (!petWindow || petWindow.isDestroyed() || !homeAnchor) return
+const getPetPlacement = (screen, homeAnchor, width = BASE_WIDTH, height = BASE_HEIGHT) => {
+  if (homeAnchor) return getHomePlacement(screen, homeAnchor, width, height)
+  const { workArea } = screen.getPrimaryDisplay()
+  const bounds = clampWindowBounds({
+    x: workArea.x + workArea.width - width - 40,
+    y: workArea.y + workArea.height - height - 40,
+    width,
+    height
+  }, workArea)
+  return { bounds }
+}
+
+const restorePetPlacement = (petWindow, homeAnchor) => {
+  if (!petWindow || petWindow.isDestroyed()) return
   const { width, height } = petWindow.getBounds()
-  const { bounds, anchor } = getHomePlacement(petWindow[PET_SCREEN], homeAnchor, width, height)
+  const { bounds, anchor } = getPetPlacement(petWindow[PET_SCREEN], homeAnchor, width, height)
   petWindow[RESIZE_ANCHOR] = anchor
   petWindow.setBounds(bounds)
 }
-
-const getDefaultPetBounds = (workArea) => clampWindowBounds({
-  x: workArea.x + workArea.width - BASE_WIDTH - 40,
-  y: workArea.y + workArea.height - BASE_HEIGHT - 40,
-  width: BASE_WIDTH,
-  height: BASE_HEIGHT
-}, workArea)
 
 const resizeWindowAroundBottomCenter = (petWindow, targetWidth, targetHeight) => {
   const bounds = petWindow.getBounds()
@@ -206,9 +211,7 @@ const applyNavigationLock = (win, allowedEntryPath) => {
 }
 
 const createWindow = ({ load = true, BrowserWindow = electron.BrowserWindow, screen = electron.screen, homeAnchor } = {}) => {
-  const placement = homeAnchor
-    ? getHomePlacement(screen, homeAnchor, BASE_WIDTH, BASE_HEIGHT)
-    : { bounds: getDefaultPetBounds(screen.getPrimaryDisplay().workArea) }
+  const placement = getPetPlacement(screen, homeAnchor)
   const petWindow = new BrowserWindow({
     ...placement.bounds,
     frame: false,
@@ -284,4 +287,4 @@ const createSettingsWindow = (petWindow, { BrowserWindow = electron.BrowserWindo
   return settingsWindow
 }
 
-module.exports = { BASE_WIDTH, BASE_HEIGHT, PET_BASE_SCALE, PET_VIEWPORT, applyPetViewport, applyWindowScale, applyNavigationLock, createWindow, createSettingsWindow, loadPetWindow, restorePetHome }
+module.exports = { BASE_WIDTH, BASE_HEIGHT, PET_BASE_SCALE, PET_VIEWPORT, applyPetViewport, applyWindowScale, applyNavigationLock, createWindow, createSettingsWindow, loadPetWindow, restorePetPlacement }
