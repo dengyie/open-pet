@@ -37,6 +37,21 @@ const sha256 = (filePath) => crypto.createHash('sha256').update(fs.readFileSync(
 const createSpritePng = (width = 32, height = 32, background = 'black') =>
   sharp({ create: { width, height, channels: 3, background } }).png().toBuffer()
 
+const createSpriteBmp = (width, height) => {
+  const pixelOffset = 54
+  const rowStride = Math.ceil(width * 3 / 4) * 4
+  const bytes = Buffer.alloc(pixelOffset + rowStride * height)
+  bytes.write('BM')
+  bytes.writeUInt32LE(bytes.length, 2)
+  bytes.writeUInt32LE(pixelOffset, 10)
+  bytes.writeUInt32LE(40, 14)
+  bytes.writeInt32LE(width, 18)
+  bytes.writeInt32LE(height, 22)
+  bytes.writeUInt16LE(1, 26)
+  bytes.writeUInt16LE(24, 28)
+  return bytes
+}
+
 const corruptPngImageData = (bytes) => {
   const type = bytes.indexOf('IDAT')
   const end = type + 4 + bytes.readUInt32BE(type - 4)
@@ -369,6 +384,52 @@ test('pet pack service checks actual and declared sprite dimensions', async () =
   assert.match((await service.inspectPackDirectory(source)).errors[0], /dimensions.*64x32, expected 32x32/)
   fs.writeFileSync(sprite, corruptPngImageData(fs.readFileSync(sprite)))
   assert.match((await service.inspectPackDirectory(source)).errors[0], /dimensions.*64x32, expected 32x32/)
+})
+
+test('pet pack service accepts BMP sprites and rejects wrong dimensions and truncated pixel data', async () => {
+  const service = createService()
+  const root = createTempDir('bitmap-sprite')
+  await createPetPackDirectory(root)
+  const manifestPath = path.join(root, 'pet.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath))
+  manifest.actions[0].sprite = 'sprites/idle.bmp'
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest))
+  const sprite = path.join(root, 'sprites', 'idle.bmp')
+  fs.writeFileSync(sprite, createSpriteBmp(31, 32))
+  assert.match((await service.inspectPackDirectory(root)).errors[0], /dimensions.*31x32, expected 32x32/)
+  const complete = createSpriteBmp(32, 32)
+  fs.writeFileSync(sprite, complete)
+  const inspection = await service.inspectPackDirectory(root)
+  assert.equal(inspection.valid, true)
+  const { pack } = await service.importPack(inspection.selectionId)
+  assert.equal((await service.setActivePack(pack.id)).activePackId, pack.id)
+  const truncated = complete.subarray(0, -1)
+  truncated.writeUInt32LE(truncated.length, 2)
+  fs.writeFileSync(path.join(pack.rootPath, 'sprites', 'idle.bmp'), truncated)
+  await assert.rejects(() => service.setActivePack(pack.id), /Incomplete BMP pixel data/)
+})
+
+test('pet pack service checks run-length encoded BMP termination', async () => {
+  const service = createService()
+  const root = createTempDir('rle-bitmap-sprite')
+  await createPetPackDirectory(root)
+  const sprite = path.join(root, 'sprites', 'idle.png')
+  const header = createSpriteBmp(32, 32).subarray(0, 54)
+  const pixelOffset = 62
+  const rows = Buffer.alloc(32 * 4)
+  for (let offset = 0; offset < rows.length; offset += 4) rows[offset] = 32
+  const bytes = Buffer.concat([header, Buffer.alloc(8), rows, Buffer.from([0, 1])])
+  bytes.writeUInt32LE(bytes.length, 2)
+  bytes.writeUInt32LE(pixelOffset, 10)
+  bytes.writeUInt16LE(8, 28)
+  bytes.writeUInt32LE(1, 30)
+  bytes.writeUInt32LE(2, 46)
+  fs.writeFileSync(sprite, bytes)
+  assert.equal((await service.inspectPackDirectory(root)).valid, true)
+  const truncated = bytes.subarray(0, -2)
+  truncated.writeUInt32LE(truncated.length, 2)
+  fs.writeFileSync(sprite, truncated)
+  assert.match((await service.inspectPackDirectory(root)).errors[0], /Incomplete BMP run-length data/)
 })
 
 test('pet pack service rejects oversized sprite metadata before pixel decode', async () => {

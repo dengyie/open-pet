@@ -215,7 +215,7 @@ const validatePackSprites = async (pack) => {
       }
     }
     try {
-      await sprite.decode()
+      await sprite.decode?.()
     } catch (error) {
       throw spriteDecodeError(actions[0], error)
     }
