@@ -92,6 +92,8 @@ const createVersionConflict = (manifest, installed = {}) => {
     installed: true,
     decision,
     requiresReview: true,
+    installedDisplayName: installed.displayName || '',
+    installedPackageHash: installed.packageHash || '',
     installedVersion: installed.version || '',
     incomingVersion: manifest.version
   }

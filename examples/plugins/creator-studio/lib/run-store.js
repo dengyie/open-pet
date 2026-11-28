@@ -22,6 +22,16 @@ const slugify = (value) => String(value || 'pet')
 
 const createPetId = () => `pet-${crypto.randomUUID()}`
 
+const getExpectedInstalledPackageHash = (run, pack) => {
+  if (!pack?.id || pack.id !== run.importedPackId) return ''
+  if (run.importedPackageHash) return run.importedPackageHash
+
+  const petName = String(run.input?.petName || '').trim()
+  return petName && petName === pack.displayName && petName === pack.conflict?.installedDisplayName
+    ? pack.conflict.installedPackageHash || ''
+    : ''
+}
+
 const ensureDirectory = (dirPath) => fs.mkdirSync(dirPath, { recursive: true })
 
 const getRunsDir = (dataDir) => path.join(dataDir, 'runs')
@@ -545,6 +555,7 @@ module.exports = {
   materializeBackendReferenceForRun,
   settleGeneratingRunAfterCommandTermination,
   GENERATION_COMMAND_TERMINATED_REASON,
+  getExpectedInstalledPackageHash,
   getRunDir,
   listRuns,
   readRunLogs,

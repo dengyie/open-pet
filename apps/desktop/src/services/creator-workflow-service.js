@@ -10,6 +10,7 @@ const { getQualityFirstQualityProfile } = require('../../../../examples/plugins/
 const { canResumeRunningMirrorPackaging } = require('../../../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints.js')
 const {
   createPetId,
+  getExpectedInstalledPackageHash,
   settleGeneratingRunAfterCommandTermination
 } = require('../../../../examples/plugins/creator-studio/lib/run-store.js')
 
@@ -3940,7 +3941,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           })
         }
 
-        const expectedInstalledPackageHash = petId === run.importedPackId ? normalizeText(run.importedPackageHash) : ''
+        const expectedInstalledPackageHash = getExpectedInstalledPackageHash(run, inspection.pack)
         if (inspection.pack?.conflict?.installed && !expectedInstalledPackageHash) {
           return createImportConflictResult(`已安装 ID 为 "${petId}" 的宠物包；未替换现有宠物包。`)
         }

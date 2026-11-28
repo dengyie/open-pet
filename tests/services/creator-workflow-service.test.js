@@ -3228,6 +3228,7 @@ test('creator workflow service imports available actions as partial pack when id
   let inspectedManifest = null
   let inspectedSourcePath = ''
   let conflict = true
+  let expectedInstalledPackageHash = ''
   const service = createCreatorWorkflowService({
     pluginService: {
       listPlugins: () => ([{ id: 'openpet.creator-studio', enabled: true, runnable: true, commands: [{ id: 'draft-task' }] }]),
@@ -3260,12 +3261,17 @@ test('creator workflow service imports available actions as partial pack when id
           selectionId: 'sel-partial',
           valid: true,
           errors: [],
-          pack: { id: manifest.id, displayName: manifest.displayName, conflict: { installed: conflict } }
+          pack: {
+            id: manifest.id,
+            displayName: manifest.displayName,
+            conflict: { installed: conflict, installedDisplayName: 'Partial Cat', installedPackageHash: 'old-pack-hash' }
+          }
         }
       },
-      importPack: (selectionId) => {
+      importPack: (selectionId, options) => {
         assert.equal(selectionId, 'sel-partial')
-        const pack = { id: 'partial-cat', displayName: 'Partial Cat', defaultAction: 'idle', clickAction: 'idle' }
+        expectedInstalledPackageHash = options.expectedInstalledPackageHash
+        const pack = { id: 'partial-cat', displayName: 'Partial Cat', defaultAction: 'idle', clickAction: 'idle', packageHash: 'new-pack-hash' }
         importedPacks.push(pack)
         return { pack }
       },
@@ -3320,6 +3326,15 @@ test('creator workflow service imports available actions as partial pack when id
   assert.equal(persistedRun.status, 'imported')
   assert.equal(persistedRun.importStatus, 'imported')
   assert.equal(persistedRun.importedPackId, 'partial-cat')
+
+  const { importedPackageHash, ...legacyRun } = persistedRun
+  assert.equal(importedPackageHash, 'new-pack-hash')
+  fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(legacyRun))
+  conflict = true
+  const repaired = await service.importAvailableActions({ runId, activate: true })
+  assert.equal(repaired.state, 'completed')
+  assert.equal(expectedInstalledPackageHash, 'old-pack-hash')
+  assert.equal(importedPacks.length, 2)
 
   fs.writeFileSync(path.join(runDir, 'run.json'), `${JSON.stringify({
     runId,
