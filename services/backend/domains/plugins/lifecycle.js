@@ -56,7 +56,7 @@ export function createPluginLifecycle({ registry, bridge, commandServer, process
 		onStatus?.(structuredClone(next))
 		return structuredClone(next)
 	}
-	const assertNativeApproval = (id, definition) => {
+	const assertNativeApproval = (id, definition = registry.definition(id)) => {
 		if (registry.requiresNative(definition) && !registry.isNativeApproved(id)) throw nativeApprovalError(id)
 	}
 	const disableAfterFailure = (id, message) => {
@@ -201,5 +201,5 @@ export function createPluginLifecycle({ registry, bridge, commandServer, process
 		})
 		return { ok: results.every((result) => result.status === "fulfilled"), results }
 	}
-	return { start, stop, status, command, runCreatorBackendCommand, stopAll, setEnabled, setNativeExecutionApproved }
+	return { start, stop, status, command, runCreatorBackendCommand, stopAll, setEnabled, setNativeExecutionApproved, assertNativeApproval }
 }

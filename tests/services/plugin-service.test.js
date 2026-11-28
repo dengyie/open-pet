@@ -6575,6 +6575,46 @@ test('Creator Studio native commands use live Backend approval instead of Shell 
   assert.equal(spawnCount, 1)
 })
 
+test('Creator Studio service starts with live Backend approval and rejects stale approval', async (t) => {
+  const pluginId = 'openpet.creator-studio'
+  const settingsService = createBareSettingsService({ plugins: { enabled: { [pluginId]: true } } })
+  const pluginDir = createDeclarationOnlyPluginDir({ pluginId, serviceId: 'studio' })
+  t.after(() => fs.rmSync(pluginDir, { recursive: true, force: true }))
+  let backendApproved = false
+  let spawnCount = 0
+  const child = createFakeServiceProcess()
+  const service = createPluginService({
+    settingsService,
+    petService: createBridgeAwarePetService(),
+    pluginDirs: [pluginDir],
+    readCreatorNativeApproval: async (id) => {
+      assert.equal(id, pluginId)
+      return backendApproved
+    },
+    spawnServiceProcess: () => {
+      spawnCount += 1
+      return child
+    }
+  })
+  t.after(() => service.stopAllServices())
+
+  await assert.rejects(service.startService(pluginId, 'studio'), /native execution is not approved/)
+  assert.equal(spawnCount, 0)
+
+  const approval = Promise.withResolvers()
+  backendApproved = approval.promise
+  const starting = service.startService(pluginId, 'studio')
+  service.revokeCreatorNativeExecution()
+  approval.resolve(true)
+  await assert.rejects(starting, { code: 'CREATOR_NATIVE_APPROVAL_REVOKED' })
+  assert.equal(spawnCount, 0)
+
+  backendApproved = true
+  assert.equal((await service.startService(pluginId, 'studio')).runtime.status, 'running')
+  assert.equal(spawnCount, 1)
+  assert.equal(settingsService.get().plugins.nativeExecutionApproved, undefined)
+})
+
 test('revoking Creator Studio approval stops the running process tree and blocks pending and new commands', async () => {
   const pluginId = 'openpet.creator-studio'
   const settingsService = createBareSettingsService({ plugins: { enabled: { [pluginId]: true } } })

@@ -219,6 +219,31 @@ test("plugin production operations unwrap correlated Shell responses", async () 
 	await assert.rejects(() => harness.service.clearStorage("production-demo"), (error) => error.code === "BACKEND_UNAVAILABLE" && error.status === 503)
 })
 
+test("Creator Studio service start reports missing Backend approval before dispatching to Shell", async (t) => {
+	const pluginId = "openpet.creator-studio"
+	const harness = createHarness({
+		id: pluginId, name: "Creator Studio", version: "1.0.0",
+		entries: { services: [{ id: "studio", command: "node studio.js" }] },
+	})
+	t.after(() => fs.rmSync(harness.root, { recursive: true, force: true }))
+	await harness.service.install(harness.source)
+	const requests = []
+	const result = { ok: true, runtime: { status: "running" } }
+	harness.bridge.request = async (body) => {
+		requests.push(body)
+		return {
+			id: "studio-start",
+			body: { type: "plugin.production.result", requestId: "studio-start", ok: true, result },
+		}
+	}
+
+	await assert.rejects(harness.service.serviceStart(pluginId, "studio"), { code: "PLUGIN_NATIVE_NOT_APPROVED", status: 403 })
+	assert.deepEqual(requests, [])
+	await harness.service.setNativeExecutionApproved(pluginId, true)
+	assert.deepEqual(await harness.service.serviceStart(pluginId, "studio"), result)
+	assert.deepEqual(requests, [{ type: "plugin.production.request", operation: "service.start", pluginId, serviceId: "studio" }])
+})
+
 test("plugin domain installs, configures, starts, rejects duplicate start, and stops", async () => {
 	const harness = createHarness({
 		id: "native-demo",
