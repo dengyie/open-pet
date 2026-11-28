@@ -334,7 +334,7 @@ test('pet pack service reports deterministic version conflict decisions during i
   const service = createService()
 
   const firstInspection = service.inspectPackDirectory(firstSource)
-  service.importPack(firstInspection.selectionId)
+  const first = service.importPack(firstInspection.selectionId)
   const nextInspection = service.inspectPackDirectory(nextSource)
 
   assert.equal(nextInspection.pack.conflict.installed, true)
@@ -342,6 +342,12 @@ test('pet pack service reports deterministic version conflict decisions during i
   assert.equal(nextInspection.pack.conflict.incomingVersion, '1.1.0')
   assert.equal(nextInspection.pack.conflict.decision, 'downgrade')
   assert.equal(nextInspection.pack.conflict.requiresReview, true)
+  assert.throws(() => service.importPack(nextInspection.selectionId, { expectedInstalledPackageHash: '' }), {
+    code: 'pet_pack_import_conflict'
+  })
+  assert.equal(service.getPackManifest('versioned-cat').version, '1.2.0')
+  const updated = service.importPack(nextInspection.selectionId, { expectedInstalledPackageHash: first.pack.packageHash })
+  assert.equal(updated.pack.version, '1.1.0')
 })
 
 test('pet pack service imports read-only source folders as writable installed packs', {

@@ -20,6 +20,8 @@ const slugify = (value) => String(value || 'pet')
   .replace(/^-|-$/g, '')
   || 'pet'
 
+const createPetId = () => `pet-${crypto.randomUUID()}`
+
 const ensureDirectory = (dirPath) => fs.mkdirSync(dirPath, { recursive: true })
 
 const getRunsDir = (dataDir) => path.join(dataDir, 'runs')
@@ -170,7 +172,7 @@ const createRun = ({ dataDir, input = {}, now = () => new Date().toISOString() }
   if (!dataDir) throw new Error('Creator Studio dataDir is required')
   const timestamp = now()
   const petName = String(input.petName || 'Creator Studio Pet').trim() || 'Creator Studio Pet'
-  const petId = slugify(input.petId || petName)
+  const petId = input.petId ? slugify(input.petId) : createPetId()
   const originalPrompt = input.originalPrompt == null ? '' : String(input.originalPrompt).trim()
   const generationTask = input.generationTask ? normalizeGenerationTask(input.generationTask) : null
   const backend = normalizeCreatorBackend(input.backend, FIXTURE_BACKEND)
@@ -538,6 +540,7 @@ module.exports = {
   appendRunLog,
   createGenerationLease,
   createGenerationLeaseHeartbeat,
+  createPetId,
   createRun,
   materializeBackendReferenceForRun,
   settleGeneratingRunAfterCommandTermination,

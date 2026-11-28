@@ -971,7 +971,7 @@ test('creator studio task workflow rejects invalid question answers and unresolv
 })
 
 test('creator studio run store keeps same-name same-day runs separate', () => {
-  const { createRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+  const { createRun, readRun } = require('../../examples/plugins/creator-studio/lib/run-store')
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-studio-collisions-'))
 
   const first = createRun({
@@ -994,6 +994,9 @@ test('creator studio run store keeps same-name same-day runs separate', () => {
   })
 
   assert.notEqual(first.runId, second.runId)
+  assert.notEqual(first.petId, second.petId)
+  assert.equal(readRun({ dataDir, runId: first.runId }).petId, first.petId)
+  assert.equal(readRun({ dataDir, runId: second.runId }).petId, second.petId)
   assert.equal(fs.readFileSync(path.join(dataDir, 'runs', first.runId, 'inputs', 'prompt.md'), 'utf-8'), 'First concept\n')
   assert.equal(fs.readFileSync(path.join(dataDir, 'runs', second.runId, 'inputs', 'prompt.md'), 'utf-8'), 'Second concept\n')
 })
@@ -2136,11 +2139,21 @@ test('creator studio import-approved-pet imports approved full-pet output when q
     },
     now: () => '2026-06-26T02:11:00.000Z'
   })
+  let conflict = true
   const { server, requests } = createBridgeServer({
     routes: [
       {
         path: '/creator/pet-pack/inspect-output',
-        handler: () => ({ body: { ok: true, inspection: { valid: true, selectionId: 'selection-qa-pass' } } })
+        handler: () => ({
+          body: {
+            ok: true,
+            inspection: {
+              valid: true,
+              selectionId: 'selection-qa-pass',
+              pack: { id: run.petId, conflict: { installed: conflict } }
+            }
+          }
+        })
       },
       {
         path: '/creator/pet-pack/import-output',
@@ -2152,6 +2165,20 @@ test('creator studio import-approved-pet imports approved full-pet output when q
   const port = server.address().port
 
   try {
+    const rejected = await runCreatorCommandAsync({
+      command: 'import-approved-pet',
+      dataDir,
+      payload: { runId: run.runId, activate: true },
+      env: {
+        OPENPET_BRIDGE_URL: `http://127.0.0.1:${port}`,
+        OPENPET_BRIDGE_TOKEN: 'bridge-token'
+      }
+    })
+    assert.equal(rejected.status, 1)
+    assert.equal(rejected.json.code, 'pet_pack_import_conflict')
+    assert.equal(readRun({ dataDir, runId: run.runId }).status, 'approved')
+    assert.deepEqual(requests.splice(0).map((entry) => entry.url), ['/creator/pet-pack/inspect-output'])
+    conflict = false
     const imported = await runCreatorCommandAsync({
       command: 'import-approved-pet',
       dataDir,

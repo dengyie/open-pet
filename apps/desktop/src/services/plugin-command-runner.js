@@ -213,7 +213,9 @@ const runPluginCommandEntryProcess = async ({
             ? sanitizePluginCommandText(parsedResult.error)
             : ''
           const message = parsedError || (signal ? `Plugin command exited with signal ${signal}` : `Plugin command exited with code ${exitCode ?? 'unknown'}`)
-          reject(new Error(message))
+          const error = new Error(message)
+          if (parsedError && /^[a-z0-9][a-z0-9_]{0,79}$/.test(parsedResult.code || '')) error.code = parsedResult.code
+          reject(error)
           return
         }
         const parsedResult = transformParsedResult(readCommandResult(stdoutText))

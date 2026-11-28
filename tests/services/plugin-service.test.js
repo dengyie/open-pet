@@ -1653,7 +1653,7 @@ test('declaration-only pet pack bridge rejects missing import permission', async
   assert.match(response.body.error, /pet-pack:import/)
 })
 
-test('creator studio example imports approved fixture pet through host bridge', async () => {
+test('creator studio imports two Chinese-named pets independently through the host bridge', async () => {
   const settingsService = createSettingsService({
     plugins: { enabled: { 'openpet.creator-studio': true } },
     petPacks: { activePackId: 'legacy-cat', installed: {} }
@@ -1674,23 +1674,31 @@ test('creator studio example imports approved fixture pet through host bridge', 
     pluginDirs: [path.resolve(__dirname, '../../examples/plugins')]
   })
 
-  const createResult = await service.runCommand('openpet.creator-studio', 'create-run', {
-    petName: 'Sprout Cat',
-    prompt: 'A small mint helper cat'
-  })
-  const runId = createResult.result.run.runId
-  await service.runCommand('openpet.creator-studio', 'run-step', { runId })
-  await service.runCommand('openpet.creator-studio', 'approve-run', {
-    runId,
-    humanApproval: { approved: true, source: 'control-center', approvedAt: '2026-06-19T00:00:00.000Z', evidenceVersion: 1 }
-  })
-  const importResult = await service.runCommand('openpet.creator-studio', 'import-approved-pet', { runId, activate: true })
+  const importedIds = []
+  for (const petName of ['小橘', '团子']) {
+    const createResult = await service.runCommand('openpet.creator-studio', 'create-run', {
+      petName,
+      prompt: 'A small helper cat'
+    })
+    const { runId, petId } = createResult.result.run
+    await service.runCommand('openpet.creator-studio', 'run-step', { runId })
+    await service.runCommand('openpet.creator-studio', 'approve-run', {
+      runId,
+      humanApproval: { approved: true, source: 'control-center', approvedAt: '2026-06-19T00:00:00.000Z', evidenceVersion: 1 }
+    })
+    const importResult = await service.runCommand('openpet.creator-studio', 'import-approved-pet', { runId, activate: true })
 
-  assert.equal(importResult.ok, true)
-  assert.equal(importResult.result.ok, true)
-  assert.equal(importResult.result.run.importStatus, 'imported')
-  assert.equal(settingsService.get().petPacks.activePackId, 'sprout-cat')
-  assert.equal(fs.existsSync(path.join(userPacksDir, 'sprout-cat', 'pet.json')), true)
+    assert.equal(importResult.ok, true)
+    assert.equal(importResult.result.ok, true)
+    assert.equal(importResult.result.run.importStatus, 'imported')
+    assert.equal(importResult.result.run.importedPackId, petId)
+    assert.equal(settingsService.get().petPacks.activePackId, petId)
+    assert.equal(fs.existsSync(path.join(userPacksDir, petId, 'pet.json')), true)
+    importedIds.push(petId)
+  }
+  assert.notEqual(importedIds[0], importedIds[1])
+  const installed = settingsService.get().petPacks.installed
+  assert.deepEqual(importedIds.map((petId) => installed[petId].displayName), ['小橘', '团子'])
 })
 
 test('creator studio example rejects importing a preview-only host pet', async () => {

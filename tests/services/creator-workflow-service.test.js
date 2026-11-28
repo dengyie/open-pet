@@ -1331,6 +1331,7 @@ test('creator workflow service returns preview-ready for new-character output wi
   const bindCalls = []
   const copyCalls = []
   const commandCalls = []
+  const draftPayloads = []
   const pluginDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-creator-full-pet-'))
   const writeAtlasQa = () => {
     const qaDir = path.join(pluginDataDir, 'runs', 'run-002', 'qa')
@@ -1360,9 +1361,10 @@ test('creator workflow service returns preview-ready for new-character output wi
     pluginService: {
       listPlugins: () => [createPluginView({ serviceStatus: 'stopped' })],
       getPluginCreatorDataDir: () => pluginDataDir,
-      runCommand: async (_pluginId, commandId) => {
+      runCommand: async (_pluginId, commandId, payload) => {
         commandCalls.push(commandId)
         if (commandId === 'draft-task') {
+          draftPayloads.push(payload)
           return {
             commandId,
             result: {
@@ -1451,7 +1453,7 @@ test('creator workflow service returns preview-ready for new-character output wi
   })
 
   const result = await service.generateNewCharacter({
-    characterName: 'Mango Cat',
+    characterName: '小橘',
     stylePrompt: 'bright orange helper',
     referenceImageToken: 'token-reference'
   })
@@ -1469,17 +1471,25 @@ test('creator workflow service returns preview-ready for new-character output wi
   assert.deepEqual(result.basicActions.missingRequiredActionIds, ['idle'])
   assert.equal(result.basicActions.rows.find((row) => row.actionId === 'idle').quality, 'base-preview')
   assert.deepEqual(commandCalls, ['draft-task', 'confirm-task', 'run-step'])
+  const firstPetId = draftPayloads[0].petId
+  assert.equal(draftPayloads[0].petName, '小橘')
+  assert.match(firstPetId, /^pet-[a-f0-9-]{36}$/)
   assert.deepEqual(bindCalls, [{
     targetType: 'pet-pack',
-    targetId: 'mango-cat',
+    targetId: firstPetId,
     referenceToken: 'token-reference'
   }])
   assert.deepEqual(copyCalls, [{
     targetType: 'pet-pack',
-    targetId: 'mango-cat',
+    targetId: firstPetId,
     pluginDataDir,
     runId: 'run-002'
   }])
+  await service.generateNewCharacter({ characterName: '团子', referenceImageToken: 'token-other-reference' })
+  assert.equal(draftPayloads[1].petName, '团子')
+  assert.notEqual(draftPayloads[1].petId, firstPetId)
+  assert.equal(bindCalls[1].targetId, draftPayloads[1].petId)
+  assert.equal(copyCalls[1].targetId, draftPayloads[1].petId)
 })
 
 test('creator workflow service forwards official row coverage without leaking absolute row paths', async () => {
@@ -3217,6 +3227,7 @@ test('creator workflow service imports available actions as partial pack when id
   const importedPacks = []
   let inspectedManifest = null
   let inspectedSourcePath = ''
+  let conflict = true
   const service = createCreatorWorkflowService({
     pluginService: {
       listPlugins: () => ([{ id: 'openpet.creator-studio', enabled: true, runnable: true, commands: [{ id: 'draft-task' }] }]),
@@ -3249,7 +3260,7 @@ test('creator workflow service imports available actions as partial pack when id
           selectionId: 'sel-partial',
           valid: true,
           errors: [],
-          pack: { id: manifest.id, displayName: manifest.displayName }
+          pack: { id: manifest.id, displayName: manifest.displayName, conflict: { installed: conflict } }
         }
       },
       importPack: (selectionId) => {
@@ -3262,6 +3273,14 @@ test('creator workflow service imports available actions as partial pack when id
     }
   })
 
+  const rejected = await service.importAvailableActions({ runId, activate: true })
+  assert.equal(rejected.state, 'import-failed')
+  assert.equal(rejected.code, 'pet_pack_import_conflict')
+  assert.match(rejected.message, /partial-cat/)
+  assert.equal(importedPacks.length, 0)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf-8')).importStatus, 'not-imported')
+
+  conflict = false
   const result = await service.importAvailableActions({ runId, activate: true })
   assert.equal(result.state, 'completed')
   assert.equal(result.code, 'partial_actions_imported')

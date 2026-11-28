@@ -541,7 +541,7 @@ const createPetPackService = ({
     return { ok: true }
   }
 
-  const importPack = (selectionId, { packageHash = '', sourcePackageHash = '' } = {}) => {
+  const importPack = (selectionId, { packageHash = '', sourcePackageHash = '', expectedInstalledPackageHash } = {}) => {
     const selection = getPendingSelection(selectionId)
     assertNoSymlinks(selection.sourceDir)
     const pack = loadPetPackFromDirectory(selection.sourceDir)
@@ -577,6 +577,17 @@ const createPetPackService = ({
 
       const current = getSettings()
       const previousMetadata = current.installed[packId] || {}
+      const installedDirectory = fs.lstatSync(targetDir, { throwIfNoEntry: false })
+      if (expectedInstalledPackageHash !== undefined && (installedDirectory || previousMetadata.id) && (
+        !expectedInstalledPackageHash ||
+        previousMetadata.packageHash !== expectedInstalledPackageHash ||
+        !installedDirectory?.isDirectory() ||
+        getDirectoryPackageHash(targetDir) !== expectedInstalledPackageHash
+      )) {
+        throw Object.assign(new Error(`Pet pack "${packId}" is already installed; no pack was replaced`), {
+          code: 'pet_pack_import_conflict'
+        })
+      }
       const timestamp = now().toISOString()
       const provenance = {
         ...(stagedPack.manifest.provenance || {}),
@@ -590,7 +601,7 @@ const createPetPackService = ({
         source: { type: 'user-installed', path: installPath },
         metadata: { packageHash: contentPackageHash, sourcePackageHash: downloadedPackageHash, provenance }
       })
-      if (fs.lstatSync(targetDir, { throwIfNoEntry: false })) {
+      if (installedDirectory) {
         fs.renameSync(targetDir, backupDir)
         backedUp = true
       }

@@ -9,6 +9,7 @@ const { normalizeSingleActionContract } = require('../../../../examples/plugins/
 const { getQualityFirstQualityProfile } = require('../../../../examples/plugins/creator-studio/lib/pet-generation-quality-profile.js')
 const { canResumeRunningMirrorPackaging } = require('../../../../examples/plugins/creator-studio/lib/full-pet-action-checkpoints.js')
 const {
+  createPetId,
   settleGeneratingRunAfterCommandTermination
 } = require('../../../../examples/plugins/creator-studio/lib/run-store.js')
 
@@ -3054,7 +3055,6 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         message: '请先选择参考图片'
       })
     }
-    const petId = slugify(normalizedCharacterName)
     return runExclusively({
       mode: 'full-pet',
       message: `正在生成角色 ${normalizedCharacterName}`
@@ -3071,6 +3071,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           message: error?.message || '参考图片不可用'
         })
       }
+      const petId = createPetId()
       return runWorkflow({
         mode: 'full-pet',
         task: createFullPetTask({ characterName: normalizedCharacterName, stylePrompt }),
@@ -3590,10 +3591,32 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
 
       let defaultActionNote = ''
       let importedPackId = ''
+      let importedPackageHash = ''
       let activatedPackId = ''
       let activePet = null
       let importMessage = ''
       let usedPartialComposer = false
+
+      const createImportConflictResult = (message) => createWorkflowResult({
+        state: 'import-failed',
+        code: 'pet_pack_import_conflict',
+        message,
+        run: createRunView({
+          state: 'import-failed',
+          mode: 'full-pet',
+          runId: normalizedRunId,
+          commandId: 'import-available-actions',
+          message,
+          diagnostics
+        }),
+        diagnostics,
+        actionAssets: assetBundle.actionAssets,
+        processAssets: assetBundle.processAssets || [],
+        availableActionIds,
+        failedActionIds,
+        omittedActionIds,
+        importNotes: message
+      })
 
       const collectFramePathsForAction = (actionId) => {
         const paths = []
@@ -3642,10 +3665,12 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           })
           const importedRun = getCreatorStudioRun(imported)
           importedPackId = normalizeText(importedRun?.importedPackId || imported?.result?.imported?.pack?.id)
+          importedPackageHash = normalizeText(importedRun?.importedPackageHash || imported?.result?.imported?.pack?.packageHash)
           activatedPackId = normalizeText(importedRun?.activatedPackId || imported?.result?.activated?.activePackId)
           activePet = imported?.result?.imported?.pack || null
           importMessage = getCommandMessage(imported, `已导入可用动作：${availableActionIds.join(', ')}`)
-        } catch (_) {
+        } catch (error) {
+          if (error?.code === 'pet_pack_import_conflict') return createImportConflictResult(error.message)
           // Fall through to partial directory import.
         }
       }
@@ -3819,7 +3844,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
 
         availableActionIds = createUniqueTextList(actions.map((action) => action.id))
 
-        const petId = normalizeText(run?.petId) || slugify(run?.input?.petName || normalizedRunId)
+        const petId = normalizeText(run?.petId) || normalizedRunId
         const displayName = normalizeText(run?.input?.petName) || petId
         const clickAction = actions.some((action) => action.id === 'waving') ? 'waving' : 'idle'
         const actionAvailability = Object.fromEntries(OFFICIAL_PROGRESS_ACTION_IDS.map((actionId) => {
@@ -3915,8 +3940,19 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           })
         }
 
-        const imported = petPackService.importPack(inspection.selectionId)
+        const expectedInstalledPackageHash = petId === run.importedPackId ? normalizeText(run.importedPackageHash) : ''
+        if (inspection.pack?.conflict?.installed && !expectedInstalledPackageHash) {
+          return createImportConflictResult(`已安装 ID 为 "${petId}" 的宠物包；未替换现有宠物包。`)
+        }
+        let imported
+        try {
+          imported = petPackService.importPack(inspection.selectionId, { expectedInstalledPackageHash })
+        } catch (error) {
+          if (error?.code === 'pet_pack_import_conflict') return createImportConflictResult(error.message)
+          throw error
+        }
         importedPackId = normalizeText(imported?.pack?.id || imported?.manifest?.id)
+        importedPackageHash = normalizeText(imported?.pack?.packageHash)
         activePet = imported?.pack || null
         if (activate !== false && importedPackId && petPackService.setActivePack) {
           const activated = petPackService.setActivePack(importedPackId)
@@ -3935,6 +3971,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           importStatus: 'imported',
           currentStep: 'imported',
           importedPackId,
+          importedPackageHash,
           activatedPackId,
           importCompleteness: failedActionIds.length ? 'partial' : 'full',
           availableActionIds,
