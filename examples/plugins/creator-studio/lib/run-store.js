@@ -20,6 +20,18 @@ const slugify = (value) => String(value || 'pet')
   .replace(/^-|-$/g, '')
   || 'pet'
 
+const createPetId = () => `pet-${crypto.randomUUID()}`
+
+const getExpectedInstalledPackageHash = (run, pack) => {
+  if (!pack?.id || pack.id !== run.importedPackId) return ''
+  if (run.importedPackageHash) return run.importedPackageHash
+
+  const petName = String(run.input?.petName || '').trim()
+  return petName && petName === pack.displayName && petName === pack.conflict?.installedDisplayName
+    ? pack.conflict.installedPackageHash || ''
+    : ''
+}
+
 const ensureDirectory = (dirPath) => fs.mkdirSync(dirPath, { recursive: true })
 
 const getRunsDir = (dataDir) => path.join(dataDir, 'runs')
@@ -170,7 +182,7 @@ const createRun = ({ dataDir, input = {}, now = () => new Date().toISOString() }
   if (!dataDir) throw new Error('Creator Studio dataDir is required')
   const timestamp = now()
   const petName = String(input.petName || 'Creator Studio Pet').trim() || 'Creator Studio Pet'
-  const petId = slugify(input.petId || petName)
+  const petId = input.petId ? slugify(input.petId) : createPetId()
   const originalPrompt = input.originalPrompt == null ? '' : String(input.originalPrompt).trim()
   const generationTask = input.generationTask ? normalizeGenerationTask(input.generationTask) : null
   const backend = normalizeCreatorBackend(input.backend, FIXTURE_BACKEND)
@@ -538,10 +550,12 @@ module.exports = {
   appendRunLog,
   createGenerationLease,
   createGenerationLeaseHeartbeat,
+  createPetId,
   createRun,
   materializeBackendReferenceForRun,
   settleGeneratingRunAfterCommandTermination,
   GENERATION_COMMAND_TERMINATED_REASON,
+  getExpectedInstalledPackageHash,
   getRunDir,
   listRuns,
   readRunLogs,

@@ -933,7 +933,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       if (!petPackService?.importPack) throw new Error('Creator pet pack import is not available')
       const selectionId = String(payload.selectionId || '')
       appendLog({ pluginId: plugin.manifest.id, commandId, level: 'info', message: 'Bridge creator.pet-pack import-output invoked' })
-      const imported = petPackService.importPack(selectionId)
+      const expectedInstalledPackageHash = String(payload.expectedInstalledPackageHash || '')
+      const imported = petPackService.importPack(selectionId, { expectedInstalledPackageHash })
       const activated = payload.activate && imported?.pack?.id && petPackService?.setActivePack
         ? petPackService.setActivePack(imported.pack.id)
         : null

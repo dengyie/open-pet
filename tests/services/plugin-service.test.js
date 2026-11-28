@@ -1653,7 +1653,7 @@ test('declaration-only pet pack bridge rejects missing import permission', async
   assert.match(response.body.error, /pet-pack:import/)
 })
 
-test('creator studio example imports approved fixture pet through host bridge', async () => {
+test('creator studio imports distinct pets and can repair an installed legacy pet through the host bridge', async () => {
   const settingsService = createSettingsService({
     plugins: { enabled: { 'openpet.creator-studio': true } },
     petPacks: { activePackId: 'legacy-cat', installed: {} }
@@ -1674,23 +1674,68 @@ test('creator studio example imports approved fixture pet through host bridge', 
     pluginDirs: [path.resolve(__dirname, '../../examples/plugins')]
   })
 
-  const createResult = await service.runCommand('openpet.creator-studio', 'create-run', {
-    petName: 'Sprout Cat',
-    prompt: 'A small mint helper cat'
-  })
-  const runId = createResult.result.run.runId
-  await service.runCommand('openpet.creator-studio', 'run-step', { runId })
-  await service.runCommand('openpet.creator-studio', 'approve-run', {
+  const importedIds = []
+  for (const petName of ['小橘', '团子']) {
+    const createResult = await service.runCommand('openpet.creator-studio', 'create-run', {
+      petName,
+      prompt: 'A small helper cat'
+    })
+    const { runId, petId } = createResult.result.run
+    await service.runCommand('openpet.creator-studio', 'run-step', { runId })
+    await service.runCommand('openpet.creator-studio', 'approve-run', {
+      runId,
+      humanApproval: { approved: true, source: 'control-center', approvedAt: '2026-06-19T00:00:00.000Z', evidenceVersion: 1 }
+    })
+    const importResult = await service.runCommand('openpet.creator-studio', 'import-approved-pet', { runId, activate: true })
+
+    assert.equal(importResult.ok, true)
+    assert.equal(importResult.result.ok, true)
+    assert.equal(importResult.result.run.importStatus, 'imported')
+    assert.equal(importResult.result.run.importedPackId, petId)
+    assert.equal(settingsService.get().petPacks.activePackId, petId)
+    assert.equal(fs.existsSync(path.join(userPacksDir, petId, 'pet.json')), true)
+    importedIds.push(petId)
+  }
+  assert.notEqual(importedIds[0], importedIds[1])
+  const installed = settingsService.get().petPacks.installed
+  assert.deepEqual(importedIds.map((petId) => installed[petId].displayName), ['小橘', '团子'])
+
+  const pluginId = 'openpet.creator-studio'
+  const legacy = await service.runCommand(pluginId, 'create-run', { petName: '小橘', petId: 'pet' })
+  const { runId } = legacy.result.run
+  await service.runCommand(pluginId, 'run-step', { runId })
+  await service.runCommand(pluginId, 'approve-run', {
     runId,
     humanApproval: { approved: true, source: 'control-center', approvedAt: '2026-06-19T00:00:00.000Z', evidenceVersion: 1 }
   })
-  const importResult = await service.runCommand('openpet.creator-studio', 'import-approved-pet', { runId, activate: true })
+  const { readRun, writeRun } = require('../../examples/plugins/creator-studio/lib/run-store')
+  const dataDir = service.getPluginCreatorDataDir(pluginId)
+  const run = readRun({ dataDir, runId })
+  const outputDir = run.artifacts.outputDir
+  const original = await petPackService.inspectPackSource(outputDir)
+  const firstImport = petPackService.importPack(original.selectionId)
+  writeRun({ dataDir, run: { ...run, importedPackId: firstImport.pack.id } })
 
-  assert.equal(importResult.ok, true)
-  assert.equal(importResult.result.ok, true)
-  assert.equal(importResult.result.run.importStatus, 'imported')
-  assert.equal(settingsService.get().petPacks.activePackId, 'sprout-cat')
-  assert.equal(fs.existsSync(path.join(userPacksDir, 'sprout-cat', 'pet.json')), true)
+  const manifestPath = path.join(outputDir, 'pet.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+  const repairedManifest = JSON.stringify({ ...manifest, description: 'Repaired legacy pet' })
+  fs.writeFileSync(manifestPath, repairedManifest)
+  const repaired = await service.runCommand(pluginId, 'import-approved-pet', { runId, activate: true })
+  assert.equal(repaired.result.run.importedPackId, 'pet')
+  assert.notEqual(repaired.result.run.importedPackageHash, firstImport.pack.packageHash)
+  assert.equal(fs.readFileSync(path.join(userPacksDir, 'pet', 'pet.json'), 'utf-8'), repairedManifest)
+
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, displayName: '团子' }))
+  const replacement = await petPackService.inspectPackSource(outputDir)
+  const differentPet = petPackService.importPack(replacement.selectionId)
+  fs.writeFileSync(manifestPath, repairedManifest)
+  writeRun({ dataDir, run: { ...run, importedPackId: 'pet' } })
+
+  await assert.rejects(service.runCommand(pluginId, 'import-approved-pet', { runId, activate: true }), {
+    code: 'pet_pack_import_conflict'
+  })
+  assert.equal(petPackService.getPackManifest('pet').displayName, '团子')
+  assert.equal(settingsService.get().petPacks.installed.pet.packageHash, differentPet.pack.packageHash)
 })
 
 test('creator studio example rejects importing a preview-only host pet', async () => {

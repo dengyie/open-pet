@@ -2,7 +2,7 @@ const path = require('path')
 const { runCommand } = require('../lib/command-io')
 const { callBridge } = require('../lib/bridge-client')
 const { assertRunFullPetQaPassed } = require('../lib/full-pet-qa')
-const { readRun, resolveRunId, updateRunStatus } = require('../lib/run-store')
+const { getExpectedInstalledPackageHash, readRun, resolveRunId, updateRunStatus } = require('../lib/run-store')
 
 const inspectOutput = async ({ outputDir }) => {
   const dataRelativePath = path.relative(process.env.OPENPET_DATA_DIR, outputDir).replace(/\\/g, '/')
@@ -26,10 +26,17 @@ runCommand(async (context) => {
     run: current,
     operation: 'import'
   })
-  const inspection = await inspectOutput({ outputDir })
-  if (!inspection.inspection?.valid) throw new Error((inspection.inspection?.errors || []).join('; ') || 'Pet pack inspection failed')
+  const { inspection } = await inspectOutput({ outputDir })
+  if (!inspection?.valid) throw new Error((inspection?.errors || []).join('; ') || 'Pet pack inspection failed')
+  const expectedInstalledPackageHash = getExpectedInstalledPackageHash(current, inspection.pack)
+  if (inspection.pack?.conflict?.installed && !expectedInstalledPackageHash) {
+    throw Object.assign(new Error(`Pet pack "${inspection.pack.id}" is already installed; no pack was replaced`), {
+      code: 'pet_pack_import_conflict'
+    })
+  }
   const imported = await callBridge('/creator/pet-pack/import-output', {
-    selectionId: inspection.inspection.selectionId,
+    selectionId: inspection.selectionId,
+    expectedInstalledPackageHash,
     activate: context.payload?.activate === true
   })
   const run = updateRunStatus({
@@ -39,6 +46,7 @@ runCommand(async (context) => {
     patch: {
       importStatus: 'imported',
       importedPackId: imported.imported?.pack?.id || '',
+      importedPackageHash: imported.imported?.pack?.packageHash || '',
       activatedPackId: imported.activated?.activePackId || '',
       currentStep: 'imported'
     }
