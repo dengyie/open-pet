@@ -1266,16 +1266,21 @@ test('creator workflow state polling reuses the preflight health result while ge
     nowMs: () => now
   })
 
-  const pending = service.generateExistingAction({ actionName: 'spin', motionPrompt: 'spin' })
+  const pending = service.generateExistingAction({ actionName: 'spin', motionPrompt: 'spin', jobId: 'sprite.generate:health-poll' })
   await runStepGate
   assert.equal(healthCalls, 1)
+  const { run: activeRun } = await service.getLastRun()
+  assert.equal(activeRun.jobId, 'sprite.generate:health-poll')
+  assert.equal(activeRun.runId, 'run-health-poll')
+  assert.equal(activeRun.updatedAt, 0)
   now = 31000
-  await service.getState()
+  assert.equal((await service.getState()).lastRun.updatedAt, activeRun.updatedAt)
   await service.getState()
   assert.equal(healthCalls, 1)
 
   releaseGenerate()
   await pending
+  assert.equal((await service.getLastRun()).run.updatedAt, 31000)
   now = 62000
   await service.getState()
   assert.equal(healthCalls, 2)

@@ -63,3 +63,15 @@ test("Creator Job resolution rejects restart failures and accepts workflow/expor
 		kind: "failed", message: "Creator Job returned an invalid result."
 	})
 })
+
+test("Creator progress follows the submitted job and locks onto its run instead of the latest run", async () => {
+	const { creatorProgressRun } = await import("../../apps/control-center/src/features/creator/api.ts")
+	const webRun = { runId: "web-failed", state: "recovery-required", message: "Unrelated Web failure" }
+	const staleDesktopRun = { runId: "old-desktop", jobId: "previous-job", state: "preview-ready" }
+	const desktopRun = { runId: "desktop-active", jobId: "submitted-job", state: "generating" }
+	assert.equal(creatorProgressRun({ lastRun: webRun, desktopLastRun: staleDesktopRun }, "submitted-job"), null)
+	assert.equal(creatorProgressRun({ lastRun: webRun, desktopLastRun: desktopRun }, "submitted-job"), desktopRun)
+	assert.equal(creatorProgressRun({ lastRun: desktopRun }, "submitted-job", "different-run"), null)
+	assert.equal(creatorProgressRun({ lastRun: desktopRun }, "submitted-job", desktopRun.runId), desktopRun)
+	assert.equal(creatorProgressRun({ lastRun: webRun }, "repair-job", webRun.runId), webRun)
+})

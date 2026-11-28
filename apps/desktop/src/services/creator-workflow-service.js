@@ -2504,13 +2504,15 @@ const createCreatorWorkflowService = ({
   )
 
   const setLastRun = (run) => {
-    lastRun = run ? { ...run } : null
+    const jobId = activeWorkflow?.jobId
+    lastRun = run ? { ...run, updatedAt: nowMs(), ...(jobId ? { jobId } : {}) } : null
     return lastRun
   }
 
-  const beginWorkflow = ({ mode, message = '' }) => {
+  const beginWorkflow = ({ mode, message = '', jobId }) => {
     activeWorkflow = {
       mode: normalizeText(mode),
+      jobId,
       runId: '',
       commandId: '',
       message: normalizeText(message) || '生成任务进行中',
@@ -2596,12 +2598,12 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     return creatorReferenceService.inspectReference({ targetType, targetId })
   }
 
-  const runExclusively = async ({ mode, message, signal }, execute) => {
+  const runExclusively = async ({ mode, message, jobId, signal }, execute) => {
     signal?.throwIfAborted()
     if (activeWorkflow) {
       return createWorkflowInProgressResult()
     }
-    beginWorkflow({ mode, message })
+    beginWorkflow({ mode, message, jobId })
     try {
       const result = await execute()
       signal?.throwIfAborted()
@@ -3073,7 +3075,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     }
   }
 
-  const generateNewCharacter = async ({ characterName, stylePrompt = '', referenceImageToken, signal }) => {
+  const generateNewCharacter = async ({ characterName, stylePrompt = '', referenceImageToken, jobId, signal }) => {
     const normalizedCharacterName = normalizeText(characterName)
     const normalizedReferenceImageToken = normalizeText(referenceImageToken)
     if (!normalizedCharacterName) {
@@ -3092,6 +3094,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     }
     return runExclusively({
       mode: 'full-pet',
+      jobId,
       message: `正在生成角色 ${normalizedCharacterName}`,
       signal
     }, async () => {
@@ -3132,7 +3135,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     })
   }
 
-  const generateExistingAction = async ({ actionName, motionPrompt, actionContract, referenceImageToken = '', signal }) => {
+  const generateExistingAction = async ({ actionName, motionPrompt, actionContract, referenceImageToken = '', jobId, signal }) => {
     const normalizedActionName = normalizeText(actionName)
     const normalizedMotionPrompt = normalizeText(motionPrompt)
     const normalizedReferenceImageToken = normalizeText(referenceImageToken)
@@ -3163,6 +3166,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
 
     return runExclusively({
       mode: 'single-action',
+      jobId,
       message: `正在生成动作 ${normalizedActionName}`,
       signal
     }, async () => {

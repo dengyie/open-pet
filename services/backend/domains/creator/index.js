@@ -160,6 +160,16 @@ function publicRun(row) {
 	}
 }
 
+function runTimestamp(run) {
+	for (const value of [run?.updatedAt, run?.state?.updatedAt, run?.createdAt, run?.state?.createdAt]) {
+		const timestamp = typeof value === "string" && value.trim()
+			? (/^\d+$/.test(value) ? Number(value) : Date.parse(value))
+			: value
+		if (Number.isFinite(timestamp)) return timestamp
+	}
+	return -Infinity
+}
+
 function publicArtifact(row) {
 	return {
 		id: row.id,
@@ -417,34 +427,28 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 	const getJobInput = (jobId, fallback) => privateInputs.get(jobId) || fallback || null
 	const forgetJobInput = (jobId) => privateInputs.delete(jobId)
 
-	const getState = async () => {
-		if (typeof shell?.request === "function") {
-			const desktopState = syncResult(await authority("get-state"))
-			const backendRun = latestBackendRun()
-			if (backendRun) return {
-				...desktopState,
-				lastRun: creatorPublicRun(backendRun),
-				backendLastRun: creatorPublicRun(backendRun),
-				backend: true,
-				diagnostics: runDiagnostics(backendRun.id),
-			}
-			return desktopState
+	const latestRunView = async (operation, runKey, offlineView) => {
+		if (typeof shell?.request !== "function") {
+			const run = creatorPublicRun(latestRun())
+			return { ...offlineView, [runKey]: run, backendLastRun: creatorPublicRun(latestBackendRun()), diagnostics: run?.diagnostics ?? null }
 		}
-		const run = latestRun()
-		const backendRun = latestBackendRun()
-		return { ok: true, backend: true, lastRun: creatorPublicRun(run), backendLastRun: creatorPublicRun(backendRun), diagnostics: backendRun ? runDiagnostics(backendRun.id) : run ? runDiagnostics(run.id) : null, dashboard: { available: false, reason: "desktop-shell-offline" } }
-	}
-	const getLastRun = async () => {
-		if (typeof shell?.request === "function") {
-			const desktopLastRun = syncResult(await authority("get-last-run"))
-			const backendRun = latestBackendRun()
-			if (backendRun) return { ...desktopLastRun, run: creatorPublicRun(backendRun), backendLastRun: creatorPublicRun(backendRun), diagnostics: runDiagnostics(backendRun.id) }
-			return desktopLastRun
+		const desktopView = redact(await authority(operation))
+		const backendLastRun = creatorPublicRun(latestBackendRun())
+		if (!backendLastRun) return desktopView
+		const desktopRun = desktopView[runKey]
+		const backendWins = !desktopRun || runTimestamp(backendLastRun) > runTimestamp(desktopRun)
+		const run = backendWins ? backendLastRun : desktopRun
+		return {
+			...desktopView,
+			[runKey]: run,
+			backendLastRun,
+			...(backendWins && desktopRun && runKey === "lastRun" ? { desktopLastRun: desktopRun } : {}),
+			...(runKey === "lastRun" ? { backend: true } : {}),
+			diagnostics: run.diagnostics ?? null,
 		}
-		const run = latestRun()
-		const backendRun = latestBackendRun()
-		return { ok: true, run: creatorPublicRun(run), backendLastRun: creatorPublicRun(backendRun), diagnostics: backendRun ? runDiagnostics(backendRun.id) : run ? runDiagnostics(run.id) : null }
 	}
+	const getState = () => latestRunView("get-state", "lastRun", { ok: true, backend: true, dashboard: { available: false, reason: "desktop-shell-offline" } })
+	const getLastRun = () => latestRunView("get-last-run", "run", { ok: true })
 	const getAssetPreview = async (input = {}) => {
 		object(input)
 		if (typeof shell?.request !== "function" && String(input.relativePath || "").startsWith("creator-web/")) {
@@ -645,12 +649,12 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 			return runBackendImageCharacter(input, ctx)
 		}
 		ctx.report?.({ phase: "preparing", percent: 5 })
-		const result = await authority("generate-character", input, ctx.signal)
+		const result = await authority("generate-character", ctx.jobId ? { ...input, jobId: ctx.jobId } : input, ctx.signal)
 		return finishShellWorkflow(result, input.flowId, ctx, { phase: "generating", percent: 65 })
 	}
 	const runAction = async (input, ctx = {}) => {
 		ctx.report?.({ phase: "preparing", percent: 5 })
-		const result = await authority("generate-action", input, ctx.signal)
+		const result = await authority("generate-action", ctx.jobId ? { ...input, jobId: ctx.jobId } : input, ctx.signal)
 		return finishShellWorkflow(result, input.flowId, ctx, { phase: "generating", percent: 65 })
 	}
 	const runWorkflow = async (input, ctx = {}) => {

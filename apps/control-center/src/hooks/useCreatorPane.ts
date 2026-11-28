@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { controlCenterAPI as api } from '../api/control-center-api'
-import { creatorApi, resolveCreatorJob, type CreatorJobResolution } from '../features/creator/api.ts'
+import { creatorApi, creatorProgressRun, resolveCreatorJob, type CreatorJobResolution } from '../features/creator/api.ts'
 import { pluginServiceApi } from '../features/plugins/api.ts'
 import { cloneCreatorState, defaultCreatorState } from '../lib/defaults'
 import { ensureCreatorStudioServiceReady } from '../lib/creator-studio-dashboard'
@@ -106,7 +106,7 @@ export function useCreatorPane(active: boolean) {
   const [previewing, setPreviewing] = useState(false)
   const [openingDashboard, setOpeningDashboard] = useState(false)
   const [result, setResult] = useState<CreatorWorkflowResult | null>(null)
-  const [creatorJobRequest, setCreatorJobRequest] = useState<{ jobId: string; kind: 'workflow' | 'export' } | null>(null)
+  const [creatorJobRequest, setCreatorJobRequest] = useState<{ jobId: string; kind: 'workflow' | 'export'; runId: string } | null>(null)
   const { job: creatorJob } = useJob(creatorJobRequest?.jobId || null)
   const [copiedPromptKey, setCopiedPromptKey] = useState('')
   const previewCacheRef = useRef(new Map<string, string>())
@@ -134,14 +134,21 @@ export function useCreatorPane(active: boolean) {
   }, [active])
 
   useEffect(() => {
-    if (!active || !running) return undefined
+    if (!active || !running || creatorJobRequest?.kind !== 'workflow') return undefined
+    const { jobId } = creatorJobRequest
+    let runId = creatorJobRequest.runId
     let canceled = false
+    let polling = false
     const tick = async () => {
+      if (polling) return
+      polling = true
       try {
-        const nextState = await refreshCreatorState()
+        const nextState = await creatorApi.getState()
         if (canceled) return
-        const lastRun = nextState.lastRun
+        const lastRun = creatorProgressRun(nextState, jobId, runId)
         if (!lastRun) return
+        runId = lastRun.runId || runId
+        setCreatorState(cloneCreatorState({ ...nextState, lastRun }))
         if (lastRun.message) setStatus(lastRun.message)
         setResult((current) => {
           if (!current || current.state !== 'generating') return current
@@ -156,8 +163,10 @@ export function useCreatorPane(active: boolean) {
             diagnostics: lastRun.diagnostics || current.diagnostics || null
           }
         })
-      } catch (error) {
-        if (!canceled) setStatus(messageFromError(error, '生成进度刷新失败'))
+      } catch {
+        // The submitted Job still reports progress and completion.
+      } finally {
+        polling = false
       }
     }
     void tick()
@@ -166,7 +175,7 @@ export function useCreatorPane(active: boolean) {
       canceled = true
       window.clearInterval(timer)
     }
-  }, [active, running])
+  }, [active, running, creatorJobRequest])
 
   const syncAfterWorkflow = async (nextResult: CreatorWorkflowResult) => {
     setResult((current) => {
@@ -254,10 +263,11 @@ export function useCreatorPane(active: boolean) {
 
   const submitCreatorJob = async (
     start: { jobId: string } | { result: CreatorWorkflowResult | CreatorExportRecoveryBundleResult },
-    kind: 'workflow' | 'export'
+    kind: 'workflow' | 'export',
+    runId = ''
   ) => {
     if ('jobId' in start) {
-      setCreatorJobRequest({ jobId: start.jobId, kind })
+      setCreatorJobRequest({ jobId: start.jobId, kind, runId })
       setStatus(kind === 'export' ? '资产恢复包任务已提交' : 'Creator 生成任务已提交')
       return
     }
@@ -411,7 +421,7 @@ export function useCreatorPane(active: boolean) {
     setStatus('')
     try {
       const nextResult = await creatorApi.retryAction({ runId, actionId })
-      await submitCreatorJob(nextResult, 'workflow')
+      await submitCreatorJob(nextResult, 'workflow', runId)
     } catch (error) {
       setStatus(messageFromError(error, `动作 ${actionId} 修复失败`))
       setRunning(false)
@@ -425,7 +435,7 @@ export function useCreatorPane(active: boolean) {
     setStatus('')
     try {
       const nextResult = await creatorApi.retryIdentity({ runId })
-      await submitCreatorJob(nextResult, 'workflow')
+      await submitCreatorJob(nextResult, 'workflow', runId)
     } catch (error) {
       setStatus(messageFromError(error, 'Canonical identity 修复失败'))
       setRunning(false)
@@ -443,7 +453,7 @@ export function useCreatorPane(active: boolean) {
     setStatus(`正在接受身份候选 ${candidateId}，随后会先生成并检查 idle…`)
     try {
       const nextResult = await creatorApi.acceptIdentity({ runId, candidateId, sha256, ...options })
-      await submitCreatorJob(nextResult, 'workflow')
+      await submitCreatorJob(nextResult, 'workflow', runId)
     } catch (error) {
       setStatus(messageFromError(error, `身份候选 ${candidateId} 接受失败`))
       setRunning(false)
@@ -462,7 +472,7 @@ export function useCreatorPane(active: boolean) {
     setStatus(`正在复用 ${actionId} 的已有候选 ${candidateId}；不会产生新的图片请求…`)
     try {
       const nextResult = await creatorApi.acceptActionCandidate({ runId, actionId, candidateId, sha256, ...options })
-      await submitCreatorJob(nextResult, 'workflow')
+      await submitCreatorJob(nextResult, 'workflow', runId)
     } catch (error) {
       setStatus(messageFromError(error, `动作候选 ${candidateId} 采用失败`))
       setRunning(false)
@@ -488,7 +498,7 @@ export function useCreatorPane(active: boolean) {
     setStatus('正在导入可用动作…')
     try {
       const nextResult = await creatorApi.importAvailableActions({ runId, activate: true })
-      await submitCreatorJob(nextResult, 'workflow')
+      await submitCreatorJob(nextResult, 'workflow', runId)
     } catch (error) {
       setStatus(messageFromError(error, '可用动作导入失败'))
       setRunning(false)
