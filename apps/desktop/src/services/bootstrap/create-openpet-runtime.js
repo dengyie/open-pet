@@ -219,7 +219,7 @@ const createOpenPetRuntime = ({
           throw Object.assign(new Error('Creator workflow operation is unavailable'), { code: 'BACKEND_UNAVAILABLE' })
         }
         case 'evaluate-sprite': {
-          if (typeof pluginService?.runCreatorSpriteEvaluation === 'function') return pluginService.runCreatorSpriteEvaluation(payload)
+          if (typeof pluginService?.runCreatorSpriteEvaluation === 'function') return pluginService.runCreatorSpriteEvaluation(payload, { signal })
           throw Object.assign(new Error('Creator sprite evaluation is unavailable'), { code: 'BACKEND_UNAVAILABLE' })
         }
         default: throw Object.assign(new Error('Unsupported Creator operation'), { code: 'VALIDATION_FAILED' })

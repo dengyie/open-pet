@@ -717,6 +717,7 @@ const createHatchPetAgentService = ({
   }
 
   const evaluateSprite = async ({ runId, scope, board, qa = {}, profile, budgetLedger = null, signal = null } = {}) => {
+    signal?.throwIfAborted()
     const config = getStoredConfig()
     if (!config.enabled) throw new Error('Hatch-pet agent is disabled')
     const completionConfig = getEffectiveCompletionConfig()
@@ -743,6 +744,7 @@ const createHatchPetAgentService = ({
       let request
       try {
         request = await createSpriteEvaluatorRequest({ scope, board: { ...board, path: realBoardPath }, qa, profile: effectiveProfile, repairReason })
+        signal?.throwIfAborted()
         // 每次记账前重读磁盘账本：上一次 await 期间可能有 Provider 预约/结算落盘，
         // 沿用循环外的内存快照会把这些增量写没。
         ledger = reserveEvaluatorCall(resolveBudgetLedger({ runId, supplied: ledger, limits: config.budgets, preferPersisted: true }))
@@ -760,6 +762,7 @@ const createHatchPetAgentService = ({
           configOverride: completionConfig,
           signal
         })
+        signal?.throwIfAborted()
         const validationOptions = { regions: board?.regions || [], requireScoreEvidence: true }
         const evaluation = String(scope || '').trim() === CANONICAL_COMPARISON_SCOPE
           ? validateCanonicalComparisonEvaluation(completion.arguments, validationOptions)

@@ -203,7 +203,8 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 				{
 					expectedType: "creator.result",
 					expectedOperation: operation,
-					...(LONG_CREATOR_OPERATIONS.has(operation) ? { timeoutMs: CREATOR_GENERATION_TIMEOUT_MS, signal } : {}),
+					...(LONG_CREATOR_OPERATIONS.has(operation) ? { timeoutMs: CREATOR_GENERATION_TIMEOUT_MS } : {}),
+					...(LONG_CREATOR_OPERATIONS.has(operation) || operation === "evaluate-sprite" ? { signal } : {}),
 				},
 			)
 		} catch (cause) {

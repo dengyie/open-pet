@@ -2737,7 +2737,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     effectiveHatchPetAgentService = service || null
   }
 
-  const runCreatorSpriteEvaluation = async (payload = {}) => {
+  const runCreatorSpriteEvaluation = async (payload = {}, { signal } = {}) => {
+    signal?.throwIfAborted()
     if (!effectiveHatchPetAgentService?.evaluateSprite) throw new Error('Creator hatch-pet evaluation is not available')
     const plugin = getPluginDefinition(CREATOR_STUDIO_PLUGIN_ID)
     if (!plugin) throw new Error('Creator Studio plugin is not available')
@@ -2755,7 +2756,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
           sha256: String(board.sha256 || ''),
           regions: Array.isArray(board.regions) ? board.regions : []
         },
-        qa: payload.qa && typeof payload.qa === 'object' ? payload.qa : {}
+        qa: payload.qa && typeof payload.qa === 'object' ? payload.qa : {},
+        signal
       })
     }
   }
