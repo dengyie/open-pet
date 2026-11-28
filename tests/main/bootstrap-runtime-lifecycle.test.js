@@ -347,14 +347,20 @@ test('pet window lifecycle runs packaged smoke hooks after did-finish-load', () 
   const petBubbleChatWindowService = { id: 'pet-bubble-chat-window-service' }
   const pluginInstallService = { id: 'plugin-install-service' }
   const pluginService = { id: 'plugin-service' }
+  const recreatedWindow = { webContents: petWindow.webContents }
+  const createdWindowOptions = []
+  let activeWindow = petWindow
 
   registerPetWindowLifecycle({
     app,
-    BrowserWindow: { getAllWindows: () => [petWindow] },
+    BrowserWindow: { getAllWindows: () => activeWindow ? [activeWindow] : [] },
     petWindow,
-    getPetWindow: () => petWindow,
-    setPetWindow: () => {},
-    createWindow: () => petWindow,
+    getPetWindow: () => activeWindow,
+    setPetWindow: (window) => { activeWindow = window },
+    createWindow: (options) => {
+      createdWindowOptions.push(options)
+      return recreatedWindow
+    },
     loadPetWindow: (targetWindow) => loadPetWindowCalls.push(targetWindow),
     createSettingsWindow: (targetWindow) => ({ targetWindow }),
     petService,
@@ -387,4 +393,12 @@ test('pet window lifecycle runs packaged smoke hooks after did-finish-load', () 
   assert.equal(creatorUiCalls[0].app, app)
   assert.equal(creatorUiCalls[0].pluginService, pluginService)
   assert.deepEqual(creatorUiCalls[0].openControlCenter(), { targetWindow: petWindow })
+
+  activeWindow = null
+  appHandlers.get('activate')()
+  assert.deepEqual(createdWindowOptions, [{ load: false }])
+  assert.equal(activeWindow, recreatedWindow)
+  assert.deepEqual(loadPetWindowCalls, [petWindow, recreatedWindow])
+  webContentsHandlers.get('did-finish-load')()
+  assert.deepEqual(applyWindowScaleCalls.at(-1), [recreatedWindow, 1.5])
 })

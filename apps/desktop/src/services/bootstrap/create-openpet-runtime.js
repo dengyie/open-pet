@@ -37,6 +37,7 @@ const createOpenPetRuntime = ({
   createSettingsWindow,
   createWindow,
   loadPetWindow,
+  restorePetPlacement,
   registerAppLifecycleLogs,
   safeRecordAppLog,
   registerIpcHandlers,
@@ -99,6 +100,16 @@ const createOpenPetRuntime = ({
   const sidecarLogger = createSidecarLogger({ appLogService, safeRecordAppLog })
   let settingsSidecarBridge = null
   let settingsHydration = null
+  let hasHydratedSettings = false
+  const getSavedHomeAnchor = (settings) => {
+    const { home } = petMovementPolicy.normalizePetBehaviorSettings(settings.petBehavior)
+    return home.enabled ? home.anchor : null
+  }
+  const initialHomeAnchor = getSavedHomeAnchor(petService.getSettings())
+  const createPetWindow = (options) => createWindow({
+    ...options,
+    homeAnchor: getSavedHomeAnchor(petService.getSettings())
+  })
   let catalogSidecarBridge = null
   let actionsSidecarBridge = null
   // Startup repairs can finish before the sidecar has completed its handshake.
@@ -243,8 +254,16 @@ const createOpenPetRuntime = ({
         })
       })
       settingsHydration = hydration
-      await hydration
+      const hydratedSettings = await hydration
       if (settingsHydration === hydration) settingsHydration = null
+      if (hydratedSettings && !hasHydratedSettings) {
+        hasHydratedSettings = true
+        const homeAnchor = getSavedHomeAnchor(hydratedSettings)
+        if (homeAnchor?.displayId !== initialHomeAnchor?.displayId
+          || homeAnchor?.x !== initialHomeAnchor?.x || homeAnchor?.y !== initialHomeAnchor?.y) {
+          restorePetPlacement(getPetWindow(), homeAnchor)
+        }
+      }
       await flushDeferredSettingsPersistence()
       await aiSidecar.hydrate()
     },
@@ -580,7 +599,7 @@ const createOpenPetRuntime = ({
     sidecarRuntimeCoordinator
   }) || ipcRuntimeHelpers
 
-  let petWindow = createWindow({ load: false })
+  const petWindow = createPetWindow({ load: false })
   setPetWindow(petWindow)
 
   registerDisplayLifecycle({
@@ -600,7 +619,7 @@ const createOpenPetRuntime = ({
     petWindow,
     getPetWindow,
     setPetWindow,
-    createWindow,
+    createWindow: createPetWindow,
     loadPetWindow,
     createSettingsWindow,
     petService,

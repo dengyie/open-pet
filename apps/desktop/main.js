@@ -13,7 +13,7 @@ const path = require('path')
 const projectRoot = path.resolve(__dirname, '../..')
 const { IPC } = require('./src/shared/ipc-channels')
 const { clampToWorkArea, getMovementState } = require('./src/windows/screen')
-const { applyPetViewport, applyWindowScale, createWindow, createSettingsWindow, loadPetWindow } = require('./src/windows/window')
+const { applyPetViewport, applyWindowScale, createWindow, createSettingsWindow, loadPetWindow, restorePetPlacement } = require('./src/windows/window')
 const { createPetChatWindowManager } = require('./src/windows/pet-chat-window')
 const { createPetBubbleChatWindowManager } = require('./src/windows/pet-bubble-chat-window')
 const { createPetRendererSettings, normalizeLocalHttpConfig, reloadAndSendAnimations, registerIpcHandlers } = require('./src/ipc')
@@ -86,6 +86,7 @@ const bootstrapOpenPet = () => {
     createSettingsWindow,
     createWindow,
     loadPetWindow,
+    restorePetPlacement,
     registerAppLifecycleLogs,
     safeRecordAppLog,
     registerIpcHandlers,
