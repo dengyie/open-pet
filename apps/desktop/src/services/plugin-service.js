@@ -1768,6 +1768,15 @@ const createPluginService = ({ settingsService, petService, actionService, actio
   }
 
   let creatorApprovalEpoch = 0
+  const captureCreatorApprovalGuard = (pluginId) => {
+    if (pluginId !== CREATOR_STUDIO_PLUGIN_ID) return undefined
+    const approvalEpoch = creatorApprovalEpoch
+    return () => {
+      if (approvalEpoch !== creatorApprovalEpoch) {
+        throw Object.assign(new Error(CREATOR_NATIVE_APPROVAL_REVOKED.reason), { code: CREATOR_NATIVE_APPROVAL_REVOKED.code })
+      }
+    }
+  }
   const revokeCreatorNativeExecution = () => {
     creatorApprovalEpoch += 1
     stopPluginCommands(CREATOR_STUDIO_PLUGIN_ID, CREATOR_NATIVE_APPROVAL_REVOKED)
@@ -2108,12 +2117,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
         })
       } else if (plugin.manifest.entries?.commands?.length) {
         const isCreator = pluginId === CREATOR_STUDIO_PLUGIN_ID
-        const approvalEpoch = creatorApprovalEpoch
-        const assertCreatorApprovalCurrent = isCreator ? () => {
-          if (approvalEpoch !== creatorApprovalEpoch) {
-            throw Object.assign(new Error(CREATOR_NATIVE_APPROVAL_REVOKED.reason), { code: CREATOR_NATIVE_APPROVAL_REVOKED.code })
-          }
-        } : undefined
+        const assertCreatorApprovalCurrent = captureCreatorApprovalGuard(pluginId)
         const approved = isCreator && readCreatorNativeApproval
           ? (await readCreatorNativeApproval(pluginId)) === true
           : undefined
@@ -2313,6 +2317,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
   const startService = (pluginId, serviceId) => {
     const commandId = `service:${serviceId || ''}`
     const serviceStartKey = createPluginServiceKey(pluginId, serviceId)
+    const readLiveApproval = pluginId === CREATOR_STUDIO_PLUGIN_ID && readCreatorNativeApproval
+    const assertCreatorApprovalCurrent = captureCreatorApprovalGuard(pluginId)
     let plugin
     let serviceEntry
     let declaration
@@ -2323,7 +2329,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     let existingRuntime
     try {
       plugin = findPluginForService(pluginId)
-      assertNativeExecutionAllowed(plugin.manifest)
+      if (!readLiveApproval) assertNativeExecutionAllowed(plugin.manifest)
       serviceEntry = getServiceEntry(plugin, serviceId)
       existingRuntime = getPluginServiceRuntime(pluginId, serviceId)
       if (ACTIVE_SERVICE_STATUSES.has(existingRuntime?.status)) throw new Error('Plugin service is already running')
@@ -2340,9 +2346,13 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     return (async () => {
       let bridgeRuntimeKey = ''
       try {
+        const approved = readLiveApproval ? (await readLiveApproval(pluginId)) === true : undefined
+        assertCreatorApprovalCurrent?.()
+        if (readLiveApproval) assertNativeExecutionAllowed(plugin.manifest, approved)
         await serviceBridgeServer.ensureStarted()
+        assertCreatorApprovalCurrent?.()
         assertPluginAllowed(plugin.manifest)
-        assertNativeExecutionAllowed(plugin.manifest)
+        assertNativeExecutionAllowed(plugin.manifest, approved)
         if (!getEnabledMap()[pluginId]) throw new Error('Plugin is disabled')
         if (ACTIVE_SERVICE_STATUSES.has(getPluginServiceRuntime(pluginId, serviceId)?.status)) {
           throw new Error('Plugin service is already running')

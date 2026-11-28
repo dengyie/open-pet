@@ -275,7 +275,10 @@ export function createPluginService({ db, jobs, logs, bridge, commandServer, dia
 		runtimeDirs,
 		clearStorage,
 		runSetup: (pluginId, setupId) => productionRequest("setup", { pluginId, setupId }),
-		serviceStart: (pluginId, serviceId) => productionRequest("service.start", { pluginId, serviceId }),
+		serviceStart: async (pluginId, serviceId) => {
+			if (pluginId === "openpet.creator-studio") lifecycle.assertNativeApproval(pluginId)
+			return productionRequest("service.start", { pluginId, serviceId })
+		},
 		serviceStop: (pluginId, serviceId) => productionRequest("service.stop", { pluginId, serviceId }),
 		serviceHealth: (pluginId, serviceId) => productionRequest("service.health", { pluginId, serviceId }),
 		saveServiceHealthPolicy: (pluginId, serviceId, policy) => productionRequest("service.health-policy", { pluginId, serviceId, policy }),
