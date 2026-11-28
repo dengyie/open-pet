@@ -449,6 +449,44 @@ test('action import service preserves host trigger metadata during final import'
   assert.equal(persisted.triggerRules[0].actionId, 'wave')
 })
 
+test('Legacy action import keeps an existing large strip and its trigger rule', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-legacy-large-strip-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const framesRoot = path.join(root, 'frames')
+  const spritesDir = path.join(root, 'sprites')
+  const configPath = path.join(root, 'animations.json')
+  const idleDir = path.join(framesRoot, 'idle')
+  fs.mkdirSync(idleDir, { recursive: true })
+  fs.mkdirSync(spritesDir)
+  await createActionFolder(root, 'source-wave')
+
+  const frameWidth = 4096
+  const frameHeight = 8193
+  const frameCount = 2
+  const background = { r: 0, g: 100, b: 255, alpha: 0.9 }
+  const firstFrame = path.join(idleDir, '01.png')
+  await sharp({ create: { width: frameWidth, height: frameHeight, channels: 4, background } }).png().toFile(firstFrame)
+  fs.copyFileSync(firstFrame, path.join(idleDir, '02.png'))
+  const sprite = path.join(spritesDir, 'idle.png')
+  await sharp({ create: { width: frameWidth * frameCount, height: frameHeight, channels: 4, background } }).png().toFile(sprite)
+  const idle = {
+    id: 'idle', label: 'Idle', sprite: 'cat_anime/sprites/idle.png', loop: true,
+    frameWidth, frameHeight, frameCount, frameMs: 95
+  }
+  const rule = { id: 'rule:state:idle:test', actionId: 'idle', type: 'state', status: 'active' }
+  fs.writeFileSync(configPath, JSON.stringify({
+    defaultAction: 'idle', clickAction: 'idle', actions: [idle], triggerRules: [rule]
+  }))
+
+  const service = createActionImportService({ framesRoot, spritesDir, configPath })
+  const result = await service.importActionFrames({ sourceDir: path.join(root, 'source-wave'), actionId: 'wave' })
+  assert.equal(result.importedAction.id, 'wave')
+  const persisted = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+  assert.deepEqual(persisted.actions.find((action) => action.id === 'idle'), idle)
+  assert.deepEqual(persisted.triggerRules, [rule])
+  assert.equal(persisted.defaultAction, 'idle')
+})
+
 test('action import service deletes an action and regenerates config', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-action-delete-'))
   const framesRoot = path.join(root, 'cat_anime', 'flames')

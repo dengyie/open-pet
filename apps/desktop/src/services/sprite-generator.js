@@ -1,7 +1,6 @@
 const fs = require('fs')
 const path = require('path')
 const sharp = require('sharp')
-const { assertSpriteSize } = require('../pet/pet-pack/sprite-image')
 
 const actionLabels = {
   idle: '待机',
@@ -58,13 +57,6 @@ const inspectFrameFolder = async (folderPath) => {
   const maxHeight = frames.reduce((max, frame) => Math.max(max, frame.height), 0)
 
   if (!frameFiles.length) errors.push('No image files found')
-  if (frameFiles.length && errors.length === 0) {
-    try {
-      assertSpriteSize(maxWidth * frameFiles.length, maxHeight)
-    } catch (error) {
-      errors.push(error.message)
-    }
-  }
 
   return {
     valid: frameFiles.length > 0 && errors.length === 0,
@@ -105,7 +97,12 @@ const processActionFolder = async ({ folderEntry, framesRoot, spritesDir, labels
     return null
   }
 
-  const { maxWidth: cellW, maxHeight: cellH } = inspection
+  let cellW = 0
+  let cellH = 0
+  for (const frame of inspection.frames) {
+    if (frame.width > cellW) cellW = frame.width
+    if (frame.height > cellH) cellH = frame.height
+  }
 
   const composites = []
   for (let i = 0; i < frameFiles.length; i++) {

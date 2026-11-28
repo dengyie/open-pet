@@ -437,7 +437,7 @@ test('pet pack service rejects oversized sprite metadata before pixel decode', a
   const service = createService()
   const root = createTempDir('oversized-sprite')
   const actions = [{
-    id: 'idle', sprite: 'sprites/idle.png', frameCount: 1, frameMs: 100, frameWidth: 16384, frameHeight: 8192
+    id: 'idle', sprite: 'sprites/idle.png', frameCount: 1, frameMs: 100, frameWidth: 32768, frameHeight: 8192
   }]
   await createPetPackDirectory(root)
   const manifestPath = path.join(root, 'pet.json')
@@ -445,7 +445,7 @@ test('pet pack service rejects oversized sprite metadata before pixel decode', a
   fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, clickAction: 'idle', actions }))
   const sprite = path.join(root, 'sprites', 'idle.png')
   const bytes = fs.readFileSync(sprite)
-  bytes.writeUInt32BE(16384, 16)
+  bytes.writeUInt32BE(32768, 16)
   bytes.writeUInt32BE(8192, 20)
   bytes.writeUInt32BE(crc32(bytes.subarray(12, 29)), 29)
   fs.writeFileSync(sprite, bytes)

@@ -2,13 +2,13 @@ const { crc32 } = require('zlib')
 const sharp = require('sharp')
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-const MAX_SPRITE_PIXELS = 64 * 1024 * 1024
+const SHARP_DEFAULT_PIXEL_LIMIT = 0x3FFF ** 2
 
 const assertSpriteSize = (width, height) => {
   if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
     throw new Error('Invalid sprite dimensions')
   }
-  if (width * height > MAX_SPRITE_PIXELS) throw new Error(`Sprite exceeds the ${MAX_SPRITE_PIXELS}-pixel limit`)
+  if (width * height > SHARP_DEFAULT_PIXEL_LIMIT) throw new Error(`Sprite exceeds the ${SHARP_DEFAULT_PIXEL_LIMIT}-pixel limit`)
 }
 
 const assertCompletePng = (bytes) => {
@@ -91,7 +91,7 @@ const assertCompleteSprite = (bytes) => {
 const inspectSprite = async (bytes) => {
   if (isBmp(bytes)) return inspectBmp(bytes)
   assertCompleteSprite(bytes)
-  const image = sharp(bytes, { failOn: 'warning', limitInputPixels: MAX_SPRITE_PIXELS })
+  const image = sharp(bytes, { failOn: 'warning' })
   const { width, height } = await image.metadata()
   assertSpriteSize(width, height)
   return {
@@ -101,4 +101,4 @@ const inspectSprite = async (bytes) => {
   }
 }
 
-module.exports = { assertCompleteSprite, assertSpriteSize, inspectSprite }
+module.exports = { assertCompleteSprite, inspectSprite }
