@@ -8,7 +8,7 @@ const zipArchiveUtils = require('./zip-archive-utils')
 const { writeJsonAtomic } = require('./json-file-utils')
 const { getLegacyPetAnimations, loadLegacyPetPack, loadPetPackFromDirectory } = require('../pet/pet-pack/loader')
 const { normalizePetPackManifest } = require('../pet/pet-pack/schema')
-const { assertCompleteSprite, decodeSpriteSize } = require('../pet/pet-pack/sprite-image')
+const { assertCompleteSprite, inspectSprite } = require('../pet/pet-pack/sprite-image')
 
 const BUILT_IN_PACK_ID = 'legacy-cat'
 const DEFAULT_BUNDLED_PACKS_DIR = path.join(__dirname, '..', '..', '..', '..', 'assets', 'pet-packs')
@@ -188,25 +188,36 @@ const validatePackFiles = (pack, { checkCompleteness = false } = {}) => {
 }
 
 const validatePackSprites = async (pack) => {
-  const spriteSizes = new Map()
+  const spriteActions = new Map()
   for (const action of pack.manifest.actions) {
     const spritePath = resolveSpritePath(pack, action)
-    if (!spriteSizes.has(spritePath)) {
-      try {
-        spriteSizes.set(spritePath, await decodeSpriteSize(await fs.promises.readFile(spritePath)))
-      } catch (error) {
-        throw spriteDecodeError(action, error)
+    if (!spriteActions.has(spritePath)) spriteActions.set(spritePath, [])
+    spriteActions.get(spritePath).push(action)
+  }
+
+  for (const [spritePath, actions] of spriteActions) {
+    let sprite
+    try {
+      sprite = await inspectSprite(await fs.promises.readFile(spritePath))
+    } catch (error) {
+      throw spriteDecodeError(actions[0], error)
+    }
+    const { width, height } = sprite
+    for (const action of actions) {
+      const columns = action.atlas?.columns ?? action.frameCount
+      const rows = action.atlas?.rows ?? 1
+      const expectedWidth = columns * action.frameWidth
+      const expectedHeight = rows * action.frameHeight
+      if (width !== expectedWidth || height !== expectedHeight
+          || (action.atlas && (action.atlas.width !== width || action.atlas.height !== height))
+          || (action.frameColumn ?? 0) + action.frameCount > columns || (action.frameRow ?? 0) >= rows) {
+        throw invalidPack(`Pet pack action ${action.id} sprite dimensions do not match the manifest: ${action.sprite} (${width}x${height}, expected ${expectedWidth}x${expectedHeight})`)
       }
     }
-    const { width, height } = spriteSizes.get(spritePath)
-    const columns = action.atlas?.columns ?? action.frameCount
-    const rows = action.atlas?.rows ?? 1
-    const expectedWidth = columns * action.frameWidth
-    const expectedHeight = rows * action.frameHeight
-    if (width !== expectedWidth || height !== expectedHeight
-        || (action.atlas && (action.atlas.width !== width || action.atlas.height !== height))
-        || (action.frameColumn ?? 0) + action.frameCount > columns || (action.frameRow ?? 0) >= rows) {
-      throw invalidPack(`Pet pack action ${action.id} sprite dimensions do not match the manifest: ${action.sprite} (${width}x${height}, expected ${expectedWidth}x${expectedHeight})`)
+    try {
+      await sprite.decode()
+    } catch (error) {
+      throw spriteDecodeError(actions[0], error)
     }
   }
 }

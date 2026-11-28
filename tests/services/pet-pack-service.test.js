@@ -37,6 +37,14 @@ const sha256 = (filePath) => crypto.createHash('sha256').update(fs.readFileSync(
 const createSpritePng = (width = 32, height = 32, background = 'black') =>
   sharp({ create: { width, height, channels: 3, background } }).png().toBuffer()
 
+const corruptPngImageData = (bytes) => {
+  const type = bytes.indexOf('IDAT')
+  const end = type + 4 + bytes.readUInt32BE(type - 4)
+  bytes[type + 4] = 0
+  bytes.writeUInt32BE(crc32(bytes.subarray(type, end)), end)
+  return bytes
+}
+
 const FIXTURE_ATLAS_WEBP = Buffer.from(
   'UklGRkIUAABXRUJQVlA4IDYUAACwXwKdASoABlAHPm02mUmkIqKhIAgAgA2JaW7hd2EbQAoMdOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ychvAAP7+Wb/0l0t5H//9ZX//zK//+ZX+8mbIAApNAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
   'base64'
@@ -359,6 +367,27 @@ test('pet pack service checks actual and declared sprite dimensions', async () =
   const sprite = path.join(source, 'sprites', 'idle.png')
   fs.writeFileSync(sprite, await createSpritePng(64, 32))
   assert.match((await service.inspectPackDirectory(source)).errors[0], /dimensions.*64x32, expected 32x32/)
+  fs.writeFileSync(sprite, corruptPngImageData(fs.readFileSync(sprite)))
+  assert.match((await service.inspectPackDirectory(source)).errors[0], /dimensions.*64x32, expected 32x32/)
+})
+
+test('pet pack service rejects oversized sprite metadata before pixel decode', async () => {
+  const service = createService()
+  const root = createTempDir('oversized-sprite')
+  const actions = [{
+    id: 'idle', sprite: 'sprites/idle.png', frameCount: 1, frameMs: 100, frameWidth: 8192, frameHeight: 4096
+  }]
+  await createPetPackDirectory(root)
+  const manifestPath = path.join(root, 'pet.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath))
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, clickAction: 'idle', actions }))
+  const sprite = path.join(root, 'sprites', 'idle.png')
+  const bytes = fs.readFileSync(sprite)
+  bytes.writeUInt32BE(8192, 16)
+  bytes.writeUInt32BE(4096, 20)
+  bytes.writeUInt32BE(crc32(bytes.subarray(12, 29)), 29)
+  fs.writeFileSync(sprite, bytes)
+  assert.match((await service.inspectPackDirectory(root)).errors[0], /pixel limit/i)
 })
 
 test('pet pack service decodes PNG image data even when the chunks have valid checksums', async () => {
@@ -366,12 +395,7 @@ test('pet pack service decodes PNG image data even when the chunks have valid ch
   const root = createTempDir('invalid-sprite-pixels')
   await createPetPackDirectory(root)
   const sprite = path.join(root, 'sprites', 'idle.png')
-  const bytes = fs.readFileSync(sprite)
-  const type = bytes.indexOf('IDAT')
-  const end = type + 4 + bytes.readUInt32BE(type - 4)
-  bytes[type + 4] = 0
-  bytes.writeUInt32BE(crc32(bytes.subarray(type, end)), end)
-  fs.writeFileSync(sprite, bytes)
+  fs.writeFileSync(sprite, corruptPngImageData(fs.readFileSync(sprite)))
   assert.match((await service.inspectPackDirectory(root)).errors[0], /could not be decoded/)
 })
 

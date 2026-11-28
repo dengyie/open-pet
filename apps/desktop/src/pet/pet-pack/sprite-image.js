@@ -2,6 +2,7 @@ const { crc32 } = require('zlib')
 const sharp = require('sharp')
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+const MAX_SPRITE_PIXELS = 16 * 1024 * 1024
 
 const assertCompletePng = (bytes) => {
   for (let offset = PNG_SIGNATURE.length; offset + 12 <= bytes.length;) {
@@ -24,10 +25,14 @@ const assertCompleteSprite = (bytes) => {
   }
 }
 
-const decodeSpriteSize = async (bytes) => {
+const inspectSprite = async (bytes) => {
   assertCompleteSprite(bytes)
-  const { info: { width, height } } = await sharp(bytes, { failOn: 'warning' }).raw().toBuffer({ resolveWithObject: true })
-  return { width, height }
+  const image = sharp(bytes, { failOn: 'warning', limitInputPixels: MAX_SPRITE_PIXELS })
+  const { width, height } = await image.metadata()
+  if (!width || !height || width * height > MAX_SPRITE_PIXELS) {
+    throw new Error(`Sprite exceeds the ${MAX_SPRITE_PIXELS}-pixel limit`)
+  }
+  return { width, height, decode: () => image.raw().toBuffer() }
 }
 
-module.exports = { assertCompleteSprite, decodeSpriteSize }
+module.exports = { assertCompleteSprite, inspectSprite }
