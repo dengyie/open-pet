@@ -5,8 +5,11 @@ const os = require('node:os')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { execFileSync } = require('node:child_process')
+const { crc32 } = require('node:zlib')
+const sharp = require('sharp')
 
 const { createActionService } = require('../../apps/desktop/src/services/action-service')
+const { createActionImportService } = require('../../apps/desktop/src/services/action-import-service')
 const { BUILT_IN_PACK_ID, createPetPackService } = require('../../apps/desktop/src/services/pet-pack-service')
 const zipArchiveUtils = require('../../apps/desktop/src/services/zip-archive-utils')
 const { createMinimalWebp: createFixtureWebp } = require('../../examples/plugins/creator-studio/lib/fake-hatch-pet')
@@ -32,6 +35,32 @@ const createTempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `openpet-$
 
 const sha256 = (filePath) => crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 
+const createSpritePng = (width = 32, height = 32, background = 'black') =>
+  sharp({ create: { width, height, channels: 3, background } }).png().toBuffer()
+
+const createSpriteBmp = (width, height) => {
+  const pixelOffset = 54
+  const rowStride = Math.ceil(width * 3 / 4) * 4
+  const bytes = Buffer.alloc(pixelOffset + rowStride * height)
+  bytes.write('BM')
+  bytes.writeUInt32LE(bytes.length, 2)
+  bytes.writeUInt32LE(pixelOffset, 10)
+  bytes.writeUInt32LE(40, 14)
+  bytes.writeInt32LE(width, 18)
+  bytes.writeInt32LE(height, 22)
+  bytes.writeUInt16LE(1, 26)
+  bytes.writeUInt16LE(24, 28)
+  return bytes
+}
+
+const corruptPngImageData = (bytes) => {
+  const type = bytes.indexOf('IDAT')
+  const end = type + 4 + bytes.readUInt32BE(type - 4)
+  bytes[type + 4] = 0
+  bytes.writeUInt32BE(crc32(bytes.subarray(type, end)), end)
+  return bytes
+}
+
 const FIXTURE_ATLAS_WEBP = Buffer.from(
   'UklGRkIUAABXRUJQVlA4IDYUAACwXwKdASoABlAHPm02mUmkIqKhIAgAgA2JaW7hd2EbQAoMdOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ychvAAP7+Wb/0l0t5H//9ZX//zK//+ZX+8mbIAApNAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
   'base64'
@@ -44,14 +73,14 @@ const TRANSPARENT_FIXTURE_ATLAS_WEBP = Buffer.from([
   'vf//73v//973//+9///q8CAA=='
 ].join(''), 'base64')
 
-const createPetPackDirectory = (root, manifest = {}) => {
+const createPetPackDirectory = async (root, manifest = {}) => {
   fs.mkdirSync(path.join(root, 'sprites'), { recursive: true })
   const actions = manifest.actions || [
     { id: 'idle', label: 'Idle', kind: 'idle', sprite: 'sprites/idle.png', frameCount: 1, frameMs: 100, frameWidth: 32, frameHeight: 32 },
     { id: 'wave', label: 'Wave', kind: 'greeting', sprite: 'sprites/wave.png', frameCount: 1, frameMs: 100, frameWidth: 32, frameHeight: 32 }
   ]
   for (const action of actions) {
-    fs.writeFileSync(path.join(root, action.sprite), '')
+    fs.writeFileSync(path.join(root, action.sprite), await createSpritePng(action.frameWidth * action.frameCount, action.frameHeight))
   }
   fs.writeFileSync(path.join(root, 'pet.json'), JSON.stringify({
     schemaVersion: 1,
@@ -182,7 +211,7 @@ test('pet pack service lists bundled pet packs as built-in choices', () => {
   assert.match(packs.get('doro').previewSprite, /doro\/spritesheet\.webp$/)
 })
 
-test('pet pack service activates bundled pet packs without installing them', () => {
+test('pet pack service activates bundled pet packs without installing them', async () => {
   const bundledPacksDir = createTempDir('bundled-pet-pack-active')
   const doroDir = path.join(bundledPacksDir, 'doro')
   fs.mkdirSync(doroDir)
@@ -191,7 +220,7 @@ test('pet pack service activates bundled pet packs without installing them', () 
   const service = createServiceWithBundledPacks({ settingsService, bundledPacksDir })
   const actionService = createActionService({ petPackService: service })
 
-  const result = service.setActivePack('doro')
+  const result = await service.setActivePack('doro')
   actionService.reload()
 
   assert.equal(result.activePackId, 'doro')
@@ -256,7 +285,7 @@ test('pet pack service falls back to built-in when active installed Codex atlas 
   assert.equal(settingsService.get().petPacks.activePackId, BUILT_IN_PACK_ID)
 })
 
-test('pet pack service blocks bundled pet packs denied by content hash policy', () => {
+test('pet pack service blocks bundled pet packs denied by content hash policy', async () => {
   const bundledPacksDir = createTempDir('bundled-pet-pack-policy')
   const doroDir = path.join(bundledPacksDir, 'doro')
   fs.mkdirSync(doroDir)
@@ -268,7 +297,7 @@ test('pet pack service blocks bundled pet packs denied by content hash policy', 
       : { blocked: false, reasons: [] }
   })
 
-  assert.throws(() => service.setActivePack('doro'), /blocked/)
+  await assert.rejects(() => service.setActivePack('doro'), /blocked/)
 })
 
 test('pet pack service protects bundled pet packs from removal', () => {
@@ -281,14 +310,198 @@ test('pet pack service protects bundled pet packs from removal', () => {
   assert.throws(() => service.removePack('chispa'), /built-in/)
 })
 
-test('pet pack service inspects and imports a valid pack directory', () => {
+test('pet pack service reserves bundled and legacy IDs at inspection and import', async () => {
+  const service = createService()
+  const root = createTempDir('reserved-pack-id')
+  for (const id of ['chispa', BUILT_IN_PACK_ID]) {
+    await createPetPackDirectory(root, { id })
+    assert.match((await service.inspectPackDirectory(root)).errors[0], /reserved for a built-in pack/)
+    const zip = createZipFromDirectory(root)
+    assert.match((await service.inspectPackSource(zip)).errors[0], /reserved for a built-in pack/)
+  }
+  await createPetPackDirectory(root)
+  const inspection = await service.inspectPackDirectory(root)
+  assert.equal(inspection.valid, true)
+  await createPetPackDirectory(root, { id: 'chispa' })
+  await assert.rejects(() => service.importPack(inspection.selectionId), /reserved for a built-in pack/)
+})
+
+test('pet pack service can remove only the installed copy of an active bundled ID', async () => {
+  const userPacksDir = createTempDir('conflicting-user-pack')
+  const installedRoot = path.join(userPacksDir, 'chispa')
+  await createPetPackDirectory(installedRoot, { id: 'chispa', displayName: 'Custom Chispa' })
+  const settingsService = createSettingsService({
+    petPacks: { activePackId: 'chispa', installed: { chispa: { displayName: 'Custom Chispa' } } }
+  })
+  const service = createPetPackService({ settingsService, userPacksDir })
+  const [bundled, installed] = service.listPacks().packs.filter((pack) => pack.id === 'chispa')
+  assert.equal(bundled.source, 'built-in')
+  assert.equal(bundled.active, true)
+  assert.equal(installed.source, 'user-installed')
+  assert.equal(installed.active, false)
+  assert.equal(installed.valid, false)
+  assert.match(installed.error, /conflicts with the built-in/)
+  assert.equal((await service.setActivePack('chispa')).pack.source, 'built-in')
+  const manifestPath = path.join(bundled.rootPath, 'pet.json')
+  const bundledHash = sha256(manifestPath)
+  assert.equal(service.removePack('chispa').petPacks.activePackId, 'chispa')
+  assert.equal(fs.existsSync(installedRoot), false)
+  assert.equal(sha256(manifestPath), bundledHash)
+  assert.deepEqual(service.listPacks().packs.filter((pack) => pack.id === 'chispa'), [bundled])
+  assert.throws(() => service.removePack('chispa'), /built-in/)
+})
+
+test('pet pack service rejects truncated sprites during inspection, import and activation', async () => {
+  const service = createService()
+  const source = createTempDir('truncated-sprite')
+  await createPetPackDirectory(source)
+  const sprite = path.join(source, 'sprites', 'idle.png')
+  const complete = fs.readFileSync(sprite)
+  const truncated = complete.subarray(0, -12)
+  fs.writeFileSync(sprite, truncated)
+  assert.match((await service.inspectPackSource(source)).errors[0], /could not be decoded: sprites\/idle\.png/)
+  assert.match((await service.inspectPackSource(createZipFromDirectory(source))).errors[0], /could not be decoded/)
+  fs.writeFileSync(sprite, complete)
+  const inspection = await service.inspectPackDirectory(source)
+  assert.equal(inspection.valid, true)
+  fs.writeFileSync(sprite, truncated)
+  await assert.rejects(() => service.importPack(inspection.selectionId), /could not be decoded/)
+  fs.writeFileSync(sprite, complete)
+  const { pack } = await service.importPack(inspection.selectionId)
+  const installedSprite = path.join(pack.rootPath, 'sprites', 'idle.png')
+  await service.setActivePack(pack.id)
+  fs.writeFileSync(installedSprite, truncated)
+  await assert.rejects(() => service.setActivePack(pack.id), /could not be decoded/)
+  assert.equal(service.getActivePetPack().manifest.id, BUILT_IN_PACK_ID)
+  assert.equal(service.listPacks().packs.find(({ id }) => id === pack.id).valid, false)
+})
+
+test('pet pack service checks actual and declared sprite dimensions', async () => {
+  const service = createService()
+  const source = createTempDir('wrong-sprite-dimensions')
+  await createPetPackDirectory(source)
+  const sprite = path.join(source, 'sprites', 'idle.png')
+  fs.writeFileSync(sprite, await createSpritePng(64, 32))
+  assert.match((await service.inspectPackDirectory(source)).errors[0], /dimensions.*64x32, expected 32x32/)
+  fs.writeFileSync(sprite, corruptPngImageData(fs.readFileSync(sprite)))
+  assert.match((await service.inspectPackDirectory(source)).errors[0], /dimensions.*64x32, expected 32x32/)
+})
+
+test('pet pack service accepts BMP sprites and rejects wrong dimensions and truncated pixel data', async () => {
+  const service = createService()
+  const root = createTempDir('bitmap-sprite')
+  await createPetPackDirectory(root)
+  const manifestPath = path.join(root, 'pet.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath))
+  manifest.actions[0].sprite = 'sprites/idle.bmp'
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest))
+  const sprite = path.join(root, 'sprites', 'idle.bmp')
+  fs.writeFileSync(sprite, createSpriteBmp(31, 32))
+  assert.match((await service.inspectPackDirectory(root)).errors[0], /dimensions.*31x32, expected 32x32/)
+  const complete = createSpriteBmp(32, 32)
+  fs.writeFileSync(sprite, complete)
+  const inspection = await service.inspectPackDirectory(root)
+  assert.equal(inspection.valid, true)
+  const { pack } = await service.importPack(inspection.selectionId)
+  assert.equal((await service.setActivePack(pack.id)).activePackId, pack.id)
+  const truncated = complete.subarray(0, -1)
+  truncated.writeUInt32LE(truncated.length, 2)
+  fs.writeFileSync(path.join(pack.rootPath, 'sprites', 'idle.bmp'), truncated)
+  await assert.rejects(() => service.setActivePack(pack.id), /Incomplete BMP pixel data/)
+})
+
+test('pet pack service checks run-length encoded BMP termination', async () => {
+  const service = createService()
+  const root = createTempDir('rle-bitmap-sprite')
+  await createPetPackDirectory(root)
+  const sprite = path.join(root, 'sprites', 'idle.png')
+  const header = createSpriteBmp(32, 32).subarray(0, 54)
+  const pixelOffset = 62
+  const rows = Buffer.alloc(32 * 4)
+  for (let offset = 0; offset < rows.length; offset += 4) rows[offset] = 32
+  const bytes = Buffer.concat([header, Buffer.alloc(8), rows, Buffer.from([0, 1])])
+  bytes.writeUInt32LE(bytes.length, 2)
+  bytes.writeUInt32LE(pixelOffset, 10)
+  bytes.writeUInt16LE(8, 28)
+  bytes.writeUInt32LE(1, 30)
+  bytes.writeUInt32LE(2, 46)
+  fs.writeFileSync(sprite, bytes)
+  assert.equal((await service.inspectPackDirectory(root)).valid, true)
+  const truncated = bytes.subarray(0, -2)
+  truncated.writeUInt32LE(truncated.length, 2)
+  fs.writeFileSync(sprite, truncated)
+  assert.match((await service.inspectPackDirectory(root)).errors[0], /Incomplete BMP run-length data/)
+})
+
+test('pet pack service rejects oversized sprite metadata before pixel decode', async () => {
+  const service = createService()
+  const root = createTempDir('oversized-sprite')
+  const actions = [{
+    id: 'idle', sprite: 'sprites/idle.png', frameCount: 1, frameMs: 100, frameWidth: 32768, frameHeight: 8192
+  }]
+  await createPetPackDirectory(root)
+  const manifestPath = path.join(root, 'pet.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath))
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, clickAction: 'idle', actions }))
+  const sprite = path.join(root, 'sprites', 'idle.png')
+  const bytes = fs.readFileSync(sprite)
+  bytes.writeUInt32BE(32768, 16)
+  bytes.writeUInt32BE(8192, 20)
+  bytes.writeUInt32BE(crc32(bytes.subarray(12, 29)), 29)
+  fs.writeFileSync(sprite, bytes)
+  assert.match((await service.inspectPackDirectory(root)).errors[0], /pixel limit/i)
+})
+
+test('an installed pet pack can reactivate after importing a frame strip larger than 16 megapixels', async (t) => {
+  const root = createTempDir('large-frame-strip')
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const source = path.join(root, 'source-pack')
+  const sourceDir = path.join(root, 'frames')
+  await createPetPackDirectory(source)
+  fs.mkdirSync(sourceDir)
+  const frame = await sharp({
+    create: { width: 512, height: 2048, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 0.8 } }
+  }).png().toBuffer()
+  for (let index = 0; index < 17; index += 1) {
+    fs.writeFileSync(path.join(sourceDir, `frame-${index}.png`), frame)
+  }
+  const service = createPetPackService({
+    settingsService: createSettingsService(),
+    userPacksDir: path.join(root, 'packs')
+  })
+  const { selectionId } = await service.inspectPackDirectory(source)
+  const { pack } = await service.importPack(selectionId)
+  await service.setActivePack(pack.id)
+  const importer = createActionImportService({
+    framesRoot: path.join(pack.rootPath, 'frames'),
+    spritesDir: path.join(pack.rootPath, 'sprites'),
+    configPath: path.join(pack.rootPath, 'pet.json'),
+    configType: 'pet-pack',
+    spriteRelativeDir: 'sprites'
+  })
+  const { importedAction } = await importer.importActionFrames({ sourceDir, actionId: 'large-wave' })
+  assert.equal(importedAction.frameCount * importedAction.frameWidth * importedAction.frameHeight, 17_825_792)
+  await service.setActivePack(BUILT_IN_PACK_ID)
+  assert.equal((await service.setActivePack(pack.id)).activePackId, pack.id)
+})
+
+test('pet pack service decodes PNG image data even when the chunks have valid checksums', async () => {
+  const service = createService()
+  const root = createTempDir('invalid-sprite-pixels')
+  await createPetPackDirectory(root)
+  const sprite = path.join(root, 'sprites', 'idle.png')
+  fs.writeFileSync(sprite, corruptPngImageData(fs.readFileSync(sprite)))
+  assert.match((await service.inspectPackDirectory(root)).errors[0], /could not be decoded/)
+})
+
+test('pet pack service inspects and imports a valid pack directory', async () => {
   const sourceDir = createTempDir('pet-pack-source')
-  createPetPackDirectory(sourceDir)
+  await createPetPackDirectory(sourceDir)
   const settingsService = createSettingsService()
   const service = createService(settingsService)
 
-  const inspection = service.inspectPackDirectory(sourceDir)
-  const imported = service.importPack(inspection.selectionId)
+  const inspection = await service.inspectPackDirectory(sourceDir)
+  const imported = await service.importPack(inspection.selectionId)
   const listed = service.listPacks()
 
   assert.equal(inspection.valid, true)
@@ -298,9 +511,9 @@ test('pet pack service inspects and imports a valid pack directory', () => {
   assert.equal(listed.packs.some((pack) => pack.id === 'pack-cat'), true)
 })
 
-test('pet pack service stores provenance metadata when importing a pack', () => {
+test('pet pack service stores provenance metadata when importing a pack', async () => {
   const sourceDir = createTempDir('pet-pack-provenance')
-  createPetPackDirectory(sourceDir, {
+  await createPetPackDirectory(sourceDir, {
     id: 'provenance-cat',
     displayName: 'Provenance Cat',
     version: '1.2.0',
@@ -312,8 +525,8 @@ test('pet pack service stores provenance metadata when importing a pack', () => 
   const settingsService = createSettingsService()
   const service = createService(settingsService)
 
-  const inspection = service.inspectPackDirectory(sourceDir)
-  const imported = service.importPack(inspection.selectionId)
+  const inspection = await service.inspectPackDirectory(sourceDir)
+  const imported = await service.importPack(inspection.selectionId)
   const listedPack = service.listPacks().packs.find((pack) => pack.id === 'provenance-cat')
 
   assert.equal(imported.pack.provenance.sourceUrl, 'https://example.com/provenance-cat')
@@ -326,39 +539,39 @@ test('pet pack service stores provenance metadata when importing a pack', () => 
   assert.equal(listedPack.provenance.assetAuthor, 'OpenPet Test Assets')
 })
 
-test('pet pack service reports deterministic version conflict decisions during inspection', () => {
+test('pet pack service reports deterministic version conflict decisions during inspection', async () => {
   const firstSource = createTempDir('pet-pack-version-first')
   const nextSource = createTempDir('pet-pack-version-next')
-  createPetPackDirectory(firstSource, { id: 'versioned-cat', version: '1.2.0' })
-  createPetPackDirectory(nextSource, { id: 'versioned-cat', version: '1.1.0' })
+  await createPetPackDirectory(firstSource, { id: 'versioned-cat', version: '1.2.0' })
+  await createPetPackDirectory(nextSource, { id: 'versioned-cat', version: '1.1.0' })
   const service = createService()
 
-  const firstInspection = service.inspectPackDirectory(firstSource)
-  const first = service.importPack(firstInspection.selectionId)
-  const nextInspection = service.inspectPackDirectory(nextSource)
+  const firstInspection = await service.inspectPackDirectory(firstSource)
+  const first = await service.importPack(firstInspection.selectionId)
+  const nextInspection = await service.inspectPackDirectory(nextSource)
 
   assert.equal(nextInspection.pack.conflict.installed, true)
   assert.equal(nextInspection.pack.conflict.installedVersion, '1.2.0')
   assert.equal(nextInspection.pack.conflict.incomingVersion, '1.1.0')
   assert.equal(nextInspection.pack.conflict.decision, 'downgrade')
   assert.equal(nextInspection.pack.conflict.requiresReview, true)
-  assert.throws(() => service.importPack(nextInspection.selectionId, { expectedInstalledPackageHash: '' }), {
+  await assert.rejects(() => service.importPack(nextInspection.selectionId, { expectedInstalledPackageHash: '' }), {
     code: 'pet_pack_import_conflict'
   })
   assert.equal(service.getPackManifest('versioned-cat').version, '1.2.0')
-  const updated = service.importPack(nextInspection.selectionId, { expectedInstalledPackageHash: first.pack.packageHash })
+  const updated = await service.importPack(nextInspection.selectionId, { expectedInstalledPackageHash: first.pack.packageHash })
   assert.equal(updated.pack.version, '1.1.0')
 })
 
 test('pet pack service imports read-only source folders as writable installed packs', {
   skip: process.platform === 'win32' || process.getuid?.() === 0
-}, (t) => {
+}, async (t) => {
   const root = createTempDir('pet-pack-read-only')
   const sourceDir = path.join(root, 'source')
   const userPacksDir = path.join(root, 'installed')
   const directories = ['', 'sprites']
   const files = ['pet.json', 'sprites/idle.png', 'sprites/wave.png']
-  createPetPackDirectory(sourceDir)
+  await createPetPackDirectory(sourceDir)
   t.after(() => {
     for (const dir of directories) fs.chmodSync(path.join(sourceDir, dir), 0o755)
     fs.rmSync(root, { recursive: true, force: true })
@@ -366,60 +579,61 @@ test('pet pack service imports read-only source folders as writable installed pa
   for (const file of files) fs.chmodSync(path.join(sourceDir, file), 0o444)
   for (const dir of directories) fs.chmodSync(path.join(sourceDir, dir), 0o555)
   const service = createPetPackService({ settingsService: createSettingsService(), userPacksDir })
-  const inspection = service.inspectPackDirectory(sourceDir)
+  const inspection = await service.inspectPackDirectory(sourceDir)
 
   assert.equal(inspection.valid, true)
-  const { pack } = service.importPack(inspection.selectionId)
+  const { pack } = await service.importPack(inspection.selectionId)
   for (const entry of [...directories, ...files]) {
     assert.equal(fs.statSync(path.join(pack.rootPath, entry)).mode & 0o200, 0o200, entry)
     assert.equal(fs.statSync(path.join(sourceDir, entry)).mode & 0o200, 0, entry)
   }
 })
 
-test('pet pack service leaves an active pack untouched if staging its upgrade fails', (t) => {
+test('pet pack service leaves an active pack untouched if staging its upgrade fails', async (t) => {
   const firstSource = createTempDir('pet-pack-rollback-first')
   const nextSource = createTempDir('pet-pack-rollback-next')
-  createPetPackDirectory(firstSource)
-  createPetPackDirectory(nextSource, { version: '2.0.0' })
-  fs.writeFileSync(path.join(firstSource, 'sprites', 'idle.png'), 'original sprite')
+  await createPetPackDirectory(firstSource)
+  await createPetPackDirectory(nextSource, { version: '2.0.0' })
+  const originalSprite = await createSpritePng(32, 32, 'red')
+  fs.writeFileSync(path.join(firstSource, 'sprites', 'idle.png'), originalSprite)
   const settingsService = createSettingsService()
   const service = createService(settingsService)
-  const first = service.importPack(service.inspectPackDirectory(firstSource).selectionId)
-  service.setActivePack('pack-cat')
+  const first = await service.importPack((await service.inspectPackDirectory(firstSource)).selectionId)
+  await service.setActivePack('pack-cat')
   const previousSettings = structuredClone(settingsService.get())
-  const selectionId = service.inspectPackDirectory(nextSource).selectionId
+  const selectionId = (await service.inspectPackDirectory(nextSource)).selectionId
   const copy = t.mock.method(fs, 'cpSync', (source, target) => {
     fs.mkdirSync(target, { recursive: true })
     fs.writeFileSync(path.join(target, 'partial'), 'incomplete copy')
     throw new Error('injected copy failure')
   })
 
-  assert.throws(() => service.importPack(selectionId), /injected copy failure/)
+  await assert.rejects(() => service.importPack(selectionId), /injected copy failure/)
   copy.mock.restore()
 
   assert.equal(service.getActivePetPack().manifest.version, '1.0.0')
-  assert.equal(fs.readFileSync(path.join(first.pack.rootPath, 'sprites', 'idle.png'), 'utf8'), 'original sprite')
+  assert.deepEqual(fs.readFileSync(path.join(first.pack.rootPath, 'sprites', 'idle.png')), originalSprite)
   assert.deepEqual(settingsService.get(), previousSettings)
   assert.deepEqual(fs.readdirSync(path.dirname(first.pack.rootPath)), ['pack-cat'])
 
-  const upgraded = service.importPack(selectionId)
+  const upgraded = await service.importPack(selectionId)
   assert.equal(upgraded.pack.rootPath, first.pack.rootPath)
   assert.equal(upgraded.petPacks.activePackId, 'pack-cat')
   assert.equal(service.getActivePetPack().manifest.version, '2.0.0')
   assert.deepEqual(fs.readdirSync(path.dirname(first.pack.rootPath)), ['pack-cat'])
 })
 
-test('pet pack service restores the previous pack and settings if saving upgrade metadata fails', (t) => {
+test('pet pack service restores the previous pack and settings if saving upgrade metadata fails', async (t) => {
   const firstSource = createTempDir('pet-pack-rollback-settings-first')
   const nextSource = createTempDir('pet-pack-rollback-settings-next')
-  createPetPackDirectory(firstSource)
-  createPetPackDirectory(nextSource, { version: '2.0.0' })
+  await createPetPackDirectory(firstSource)
+  await createPetPackDirectory(nextSource, { version: '2.0.0' })
   const settingsService = createSettingsService()
   const service = createService(settingsService)
-  const first = service.importPack(service.inspectPackDirectory(firstSource).selectionId)
-  service.setActivePack('pack-cat')
+  const first = await service.importPack((await service.inspectPackDirectory(firstSource)).selectionId)
+  await service.setActivePack('pack-cat')
   const previousSettings = structuredClone(settingsService.get())
-  const selectionId = service.inspectPackDirectory(nextSource).selectionId
+  const selectionId = (await service.inspectPackDirectory(nextSource)).selectionId
   const saveSettings = settingsService.save
   t.mock.method(settingsService, 'save', (settings) => {
     saveSettings(settings)
@@ -428,7 +642,7 @@ test('pet pack service restores the previous pack and settings if saving upgrade
     }
   })
 
-  assert.throws(() => service.importPack(selectionId), /injected settings failure/)
+  await assert.rejects(() => service.importPack(selectionId), /injected settings failure/)
 
   assert.equal(service.getActivePetPack().manifest.version, '1.0.0')
   assert.deepEqual(settingsService.get(), previousSettings)
@@ -437,7 +651,7 @@ test('pet pack service restores the previous pack and settings if saving upgrade
 
 test('pet pack service exports installed user packs as re-importable zip packages', async () => {
   const sourceDir = createTempDir('pet-pack-export-source')
-  createPetPackDirectory(sourceDir, {
+  await createPetPackDirectory(sourceDir, {
     id: 'exportable-cat',
     displayName: 'Exportable Cat',
     sourceUrl: 'https://example.com/exportable-cat',
@@ -449,8 +663,8 @@ test('pet pack service exports installed user packs as re-importable zip package
   const settingsService = createSettingsService()
   const service = createService(settingsService)
 
-  const inspection = service.inspectPackDirectory(sourceDir)
-  service.importPack(inspection.selectionId)
+  const inspection = await service.inspectPackDirectory(sourceDir)
+  await service.importPack(inspection.selectionId)
   const exported = await service.exportPack('exportable-cat', outputDir)
 
   assert.equal(exported.packId, 'exportable-cat')
@@ -460,7 +674,7 @@ test('pet pack service exports installed user packs as re-importable zip package
 
   service.removePack('exportable-cat')
   const reinspection = await service.inspectPackSource(exported.outputPath)
-  const reimported = service.importPack(reinspection.selectionId)
+  const reimported = await service.importPack(reinspection.selectionId)
   const exportedRoot = await zipArchiveUtils.extractZipToTemp(exported.outputPath, {
     tempPrefix: 'openpet-pet-pack-export-check-'
   })
@@ -483,14 +697,14 @@ test('pet pack service refuses to export built-in packs', async () => {
   await assert.rejects(() => service.exportPack(BUILT_IN_PACK_ID, createTempDir('pet-pack-export-built-in')), /built-in/)
 })
 
-test('pet pack service inspects and imports a Codex-compatible pet directory', () => {
+test('pet pack service inspects and imports a Codex-compatible pet directory', async () => {
   const sourceDir = createTempDir('codex-pet-source')
   createCodexPetDirectory(sourceDir)
   const settingsService = createSettingsService()
   const service = createService(settingsService)
 
-  const inspection = service.inspectPackDirectory(sourceDir)
-  const imported = service.importPack(inspection.selectionId)
+  const inspection = await service.inspectPackDirectory(sourceDir)
+  const imported = await service.importPack(inspection.selectionId)
   const listed = service.listPacks()
 
   assert.equal(inspection.valid, true)
@@ -519,7 +733,7 @@ test('pet pack service inspects and imports a Codex-compatible pet zip package',
 
   const inspection = await service.inspectPackSource(zipPath)
   const extractedRoot = inspection.rootPath
-  const imported = service.importPack(inspection.selectionId)
+  const imported = await service.importPack(inspection.selectionId)
 
   assert.equal(inspection.valid, true)
   assert.equal(inspection.folderName, path.basename(zipPath))
@@ -565,7 +779,7 @@ test('pet pack service removes expired extracted zip selections', async () => {
   const extractedRoot = inspection.rootPath
   nowMs += 11 * 60 * 1000
 
-  assert.throws(() => service.importPack(inspection.selectionId), /expired/)
+  await assert.rejects(() => service.importPack(inspection.selectionId), /expired/)
   assert.equal(fs.existsSync(extractedRoot), false)
 })
 
@@ -615,16 +829,16 @@ test('pet pack service blocks zip packages denied by source package hash', async
   assert.match(inspection.errors[0], /blocked/)
 })
 
-test('action service loads the active installed pet pack and uses its root for previews', () => {
+test('action service loads the active installed pet pack and uses its root for previews', async () => {
   const sourceDir = createTempDir('pet-pack-action-source')
-  createPetPackDirectory(sourceDir, { id: 'active-cat', displayName: 'Active Cat' })
+  await createPetPackDirectory(sourceDir, { id: 'active-cat', displayName: 'Active Cat' })
   const settingsService = createSettingsService()
   const petPackService = createService(settingsService)
   const actionService = createActionService({ petPackService })
 
-  const inspection = petPackService.inspectPackDirectory(sourceDir)
-  petPackService.importPack(inspection.selectionId)
-  petPackService.setActivePack('active-cat')
+  const inspection = await petPackService.inspectPackDirectory(sourceDir)
+  await petPackService.importPack(inspection.selectionId)
+  await petPackService.setActivePack('active-cat')
   actionService.reload()
 
   assert.equal(actionService.getPetPack().manifest.id, 'active-cat')
@@ -632,15 +846,15 @@ test('action service loads the active installed pet pack and uses its root for p
   assert.match(actionService.getPreviewConfig().actions[0].previewSprite, /file:\/\/.*active-cat\/sprites\/idle\.png$/)
 })
 
-test('pet pack service updates the active installed pack manifest action fields', () => {
+test('pet pack service updates the active installed pack manifest action fields', async () => {
   const sourceDir = createTempDir('pet-pack-update-active')
-  createPetPackDirectory(sourceDir, { id: 'editable-cat', displayName: 'Editable Cat' })
+  await createPetPackDirectory(sourceDir, { id: 'editable-cat', displayName: 'Editable Cat' })
   const settingsService = createSettingsService()
   const petPackService = createService(settingsService)
 
-  const inspection = petPackService.inspectPackDirectory(sourceDir)
-  petPackService.importPack(inspection.selectionId)
-  petPackService.setActivePack('editable-cat')
+  const inspection = await petPackService.inspectPackDirectory(sourceDir)
+  await petPackService.importPack(inspection.selectionId)
+  await petPackService.setActivePack('editable-cat')
 
   const updated = petPackService.updateActivePetPackManifest({
     defaultAction: 'wave',
@@ -663,9 +877,9 @@ test('pet pack service updates the active installed pack manifest action fields'
   assert.equal(persisted.triggerRules[0].actionId, 'wave')
 })
 
-test('pet pack service reads validates and applies creator pack manifest metadata for the active installed pack', () => {
+test('pet pack service reads validates and applies creator pack manifest metadata for the active installed pack', async () => {
   const sourceDir = createTempDir('pet-pack-creator-view')
-  createPetPackDirectory(sourceDir, {
+  await createPetPackDirectory(sourceDir, {
     id: 'creator-cat',
     displayName: 'Creator Cat',
     version: '1.2.3',
@@ -677,9 +891,9 @@ test('pet pack service reads validates and applies creator pack manifest metadat
   const settingsService = createSettingsService()
   const petPackService = createService(settingsService)
 
-  const inspection = petPackService.inspectPackDirectory(sourceDir)
-  petPackService.importPack(inspection.selectionId)
-  petPackService.setActivePack('creator-cat')
+  const inspection = await petPackService.inspectPackDirectory(sourceDir)
+  await petPackService.importPack(inspection.selectionId)
+  await petPackService.setActivePack('creator-cat')
 
   const view = petPackService.getActiveCreatorPackManifest()
   const validation = petPackService.validateActiveCreatorPackManifestMutation({
@@ -731,15 +945,15 @@ test('pet pack service rejects creator manifest mutation for built-in packs', ()
   )
 })
 
-test('pet pack service rejects unsupported creator manifest keys', () => {
+test('pet pack service rejects unsupported creator manifest keys', async () => {
   const sourceDir = createTempDir('pet-pack-creator-immutable')
-  createPetPackDirectory(sourceDir, { id: 'creator-immutable-cat' })
+  await createPetPackDirectory(sourceDir, { id: 'creator-immutable-cat' })
   const settingsService = createSettingsService()
   const petPackService = createService(settingsService)
 
-  const inspection = petPackService.inspectPackDirectory(sourceDir)
-  petPackService.importPack(inspection.selectionId)
-  petPackService.setActivePack('creator-immutable-cat')
+  const inspection = await petPackService.inspectPackDirectory(sourceDir)
+  await petPackService.importPack(inspection.selectionId)
+  await petPackService.setActivePack('creator-immutable-cat')
 
   const validation = petPackService.validateActiveCreatorPackManifestMutation({
     id: 'other-cat',
@@ -759,15 +973,15 @@ test('pet pack service rejects unsupported creator manifest keys', () => {
   assert.match(validation.errors.join('\n'), /Unsupported creator pack manifest provenance field: originalFormat/)
 })
 
-test('pet pack service rejects non-object creator manifest mutations', () => {
+test('pet pack service rejects non-object creator manifest mutations', async () => {
   const sourceDir = createTempDir('pet-pack-creator-invalid-payload')
-  createPetPackDirectory(sourceDir, { id: 'creator-invalid-payload-cat' })
+  await createPetPackDirectory(sourceDir, { id: 'creator-invalid-payload-cat' })
   const settingsService = createSettingsService()
   const petPackService = createService(settingsService)
 
-  const inspection = petPackService.inspectPackDirectory(sourceDir)
-  petPackService.importPack(inspection.selectionId)
-  petPackService.setActivePack('creator-invalid-payload-cat')
+  const inspection = await petPackService.inspectPackDirectory(sourceDir)
+  await petPackService.importPack(inspection.selectionId)
+  await petPackService.setActivePack('creator-invalid-payload-cat')
 
   for (const payload of [null, [], 'display name']) {
     const validation = petPackService.validateActiveCreatorPackManifestMutation(payload)
@@ -781,15 +995,15 @@ test('pet pack service rejects non-object creator manifest mutations', () => {
   }
 })
 
-test('pet pack service preserves host-owned and action fields during creator manifest apply', () => {
+test('pet pack service preserves host-owned and action fields during creator manifest apply', async () => {
   const sourceDir = createTempDir('pet-pack-creator-apply')
-  createPetPackDirectory(sourceDir, { id: 'creator-apply-cat', displayName: 'Creator Apply Cat' })
+  await createPetPackDirectory(sourceDir, { id: 'creator-apply-cat', displayName: 'Creator Apply Cat' })
   const settingsService = createSettingsService()
   const petPackService = createService(settingsService)
 
-  const inspection = petPackService.inspectPackDirectory(sourceDir)
-  petPackService.importPack(inspection.selectionId)
-  petPackService.setActivePack('creator-apply-cat')
+  const inspection = await petPackService.inspectPackDirectory(sourceDir)
+  await petPackService.importPack(inspection.selectionId)
+  await petPackService.setActivePack('creator-apply-cat')
 
   const installedManifestPath = path.join(
     petPackService.listPacks().packs.find((pack) => pack.id === 'creator-apply-cat').rootPath,
@@ -821,7 +1035,7 @@ test('pet pack service preserves host-owned and action fields during creator man
   assert.equal(persisted.provenance.sourceUrl, 'https://example.com/creator-apply-cat')
 })
 
-test('pet pack service rejects invalid packs before import', () => {
+test('pet pack service rejects invalid packs before import', async () => {
   const sourceDir = createTempDir('pet-pack-invalid')
   fs.mkdirSync(path.join(sourceDir, 'sprites'), { recursive: true })
   fs.writeFileSync(path.join(sourceDir, 'pet.json'), JSON.stringify({
@@ -833,56 +1047,56 @@ test('pet pack service rejects invalid packs before import', () => {
   }))
   const service = createService()
 
-  const inspection = service.inspectPackDirectory(sourceDir)
+  const inspection = await service.inspectPackDirectory(sourceDir)
 
   assert.equal(inspection.valid, false)
   assert.match(inspection.errors[0], /sprite does not exist/)
 })
 
-test('pet pack service rejects source folders containing symlinks', () => {
+test('pet pack service rejects source folders containing symlinks', async () => {
   const sourceDir = createTempDir('pet-pack-symlink')
-  createPetPackDirectory(sourceDir, { id: 'symlink-cat' })
+  await createPetPackDirectory(sourceDir, { id: 'symlink-cat' })
   const targetPath = path.join(sourceDir, 'sprites', 'idle.png')
   const linkPath = path.join(sourceDir, 'sprites', 'idle-link.png')
   fs.symlinkSync(targetPath, linkPath)
   const service = createService()
 
-  const inspection = service.inspectPackDirectory(sourceDir)
+  const inspection = await service.inspectPackDirectory(sourceDir)
 
   assert.equal(inspection.valid, false)
   assert.match(inspection.errors[0], /symlinks/)
 })
 
-test('pet pack service rejects a source folder that is itself a symlink', () => {
+test('pet pack service rejects a source folder that is itself a symlink', async () => {
   const sourceDir = createTempDir('pet-pack-root-target')
-  createPetPackDirectory(sourceDir, { id: 'root-symlink-cat' })
+  await createPetPackDirectory(sourceDir, { id: 'root-symlink-cat' })
   const linkParent = createTempDir('pet-pack-root-link')
   const linkDir = path.join(linkParent, 'pack-link')
   fs.symlinkSync(sourceDir, linkDir, 'dir')
   const service = createService()
 
-  const inspection = service.inspectPackDirectory(linkDir)
+  const inspection = await service.inspectPackDirectory(linkDir)
 
   assert.equal(inspection.valid, false)
   assert.match(inspection.errors[0], /symlinks/)
 })
 
-test('pet pack service protects built-in and active packs from removal', () => {
+test('pet pack service protects built-in and active packs from removal', async () => {
   const sourceDir = createTempDir('pet-pack-remove')
-  createPetPackDirectory(sourceDir, { id: 'remove-cat' })
+  await createPetPackDirectory(sourceDir, { id: 'remove-cat' })
   const service = createService()
 
-  const inspection = service.inspectPackDirectory(sourceDir)
-  service.importPack(inspection.selectionId)
+  const inspection = await service.inspectPackDirectory(sourceDir)
+  await service.importPack(inspection.selectionId)
 
   assert.throws(() => service.removePack(BUILT_IN_PACK_ID), /built-in/)
-  service.setActivePack('remove-cat')
+  await service.setActivePack('remove-cat')
   assert.throws(() => service.removePack('remove-cat'), /active/)
 })
 
-test('pet pack service blocks importing and activating packs denied by ecosystem policy', () => {
+test('pet pack service blocks importing and activating packs denied by ecosystem policy', async () => {
   const sourceDir = createTempDir('pet-pack-blocked')
-  createPetPackDirectory(sourceDir, { id: 'blocked-cat' })
+  await createPetPackDirectory(sourceDir, { id: 'blocked-cat' })
   const settingsService = createSettingsService({
     petPacks: {
       activePackId: BUILT_IN_PACK_ID,
@@ -901,21 +1115,21 @@ test('pet pack service blocks importing and activating packs denied by ecosystem
       : { blocked: false, reasons: [] }
   })
 
-  const inspection = service.inspectPackDirectory(sourceDir)
+  const inspection = await service.inspectPackDirectory(sourceDir)
 
   assert.equal(inspection.valid, false)
   assert.match(inspection.errors[0], /blocked/)
-  assert.throws(() => service.setActivePack('blocked-cat'), /blocked/)
+  await assert.rejects(() => service.setActivePack('blocked-cat'), /blocked/)
 })
 
-test('pet pack service removes non-active installed packs', () => {
+test('pet pack service removes non-active installed packs', async () => {
   const sourceDir = createTempDir('pet-pack-removable')
-  createPetPackDirectory(sourceDir, { id: 'removable-cat' })
+  await createPetPackDirectory(sourceDir, { id: 'removable-cat' })
   const settingsService = createSettingsService()
   const service = createService(settingsService)
 
-  const inspection = service.inspectPackDirectory(sourceDir)
-  service.importPack(inspection.selectionId)
+  const inspection = await service.inspectPackDirectory(sourceDir)
+  await service.importPack(inspection.selectionId)
   const result = service.removePack('removable-cat')
 
   assert.equal(result.petPacks.installed['removable-cat'], undefined)

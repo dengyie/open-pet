@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
-const { createPetRendererElements } = require('./fixtures/pet-renderer-elements')
+const { createPetRendererElements, createSpriteImage } = require('./fixtures/pet-renderer-elements')
 
 const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'apps', 'desktop', 'renderer.js'), 'utf-8')
 
@@ -75,6 +75,7 @@ const createRendererHarness = async ({ insideFrame = true, insideCursorRegion, i
       createElement: () => createElement()
     },
     window: {
+      Image: createSpriteImage(),
       innerWidth: 300,
       innerHeight: 300,
       OpenPetCursorStyle: require('../apps/desktop/src/shared/cursor-style'),

@@ -27,6 +27,13 @@ const PET_BASE_SCALE = 0.5                       // UI 100% 对应旧版视觉�
 const BUBBLE_TOP_INSET = 64                      // 给头顶聊天气泡预留窗口空间，避免被宠物裁剪或覆盖。
 const MIN_INLINE_BUBBLE_DURATION = 4000          // 兼容旧配置，避免 1 秒级气泡闪退到不可读。
 const SINGLE_CLICK_ACTION_DELAY_MS = 220         // 延迟执行单击动作，给原生 dblclick 留出取消窗口。
+const FALLBACK_ANIMATION = {
+  sprite: '../../cat_anime/sprites/bai_no_bg.png',
+  frameWidth: 191,
+  frameHeight: 453,
+  frameCount: 16,
+  frameMs: 95
+}
 const cursorStyle = {
   resolvePetCursorStyle: () => '',
   resolvePetCursorOverlayState: () => ({ visible: false, assetUrl: '', nativeCursor: '' }),
@@ -52,6 +59,10 @@ const state = {
   defaultAction: '',     // 待机动作 id（循环播放）
   clickAction: '',       // 点击触发的一次性动作 id
   animations: {},        // 动作查找表 { id → { sprite, frameCount, frameMs, … } }
+  currentAnimation: null,
+  spriteRequest: 0,
+  spritePending: false,
+  loadedSprites: new Set(),
   frameIndex: 0,         // 当前帧序号
   frameTimer: 0,         // setInterval id，用于播放帧
   scale: PET_BASE_SCALE,
@@ -284,7 +295,7 @@ const applySpriteGeometry = (animation, dims) => {
 const tickFrame = () => {
   state.frameIndex += 1
   if (state.frameIndex >= frameCount) {
-    const a = state.animations[state.action]
+    const a = state.currentAnimation
     if (a?.loop) { state.frameIndex = 0 } else { setAction(state.defaultAction); return }
   }
   renderCurrentFrame()
@@ -303,7 +314,7 @@ const renderCurrentFrame = () => {
 }
 
 const applyCurrentActionScale = () => {
-  const currentAction = state.animations[state.action]
+  const currentAction = state.currentAnimation
   if (!currentAction) return
   const dims = getDisplayDimensions(currentAction)
   applyActionLayout(currentAction, dims)
@@ -313,7 +324,7 @@ const applyCurrentActionScale = () => {
 }
 
 const freezeActionForScalePreview = () => {
-  if (state.action !== state.defaultAction) {
+  if (state.spritePending || state.action !== state.defaultAction) {
     stopWalk()
     setAction(state.defaultAction, { scheduleFrame: false })
     return
@@ -324,7 +335,7 @@ const freezeActionForScalePreview = () => {
 }
 
 const scheduleFrameTick = () => {
-  const a = state.animations[state.action]
+  const a = state.currentAnimation
   window.clearTimeout(state.frameTimer)
   state.frameTimer = window.setTimeout(tickFrame, getFrameDuration(a, state.frameIndex))
 }
@@ -341,7 +352,7 @@ const setMousePassthrough = (passthrough) => {
 
 const isPointInsideCurrentFrame = (clientX, clientY) => {
   if (state.drag || state.walking) return true
-  const animation = state.animations[state.action]
+  const animation = state.currentAnimation
   const layout = state.currentLayout
   if (!animation || !layout) return true
 
@@ -537,8 +548,43 @@ const setAction = (action, options = {}) => {
     return
   }
 
+  const request = ++state.spriteRequest
+  state.spritePending = true
+  window.clearTimeout(state.frameTimer)
+  const preload = (animation, onLoad, onError) => {
+    if (state.loadedSprites.has(animation.sprite)) {
+      onLoad()
+      return
+    }
+    const image = new window.Image()
+    image.onload = () => {
+      if (request !== state.spriteRequest) return
+      state.loadedSprites.add(animation.sprite)
+      onLoad()
+    }
+    image.onerror = () => {
+      if (request === state.spriteRequest) onError?.()
+    }
+    image.src = animation.sprite
+  }
+  preload(a, () => applyLoadedAction(action, a, options), () => {
+    logPetEvent('pet.action.ignored', {
+      requestedAction: action,
+      reason: 'sprite-load-failed'
+    }, { level: 'warn', message: 'Pet sprite failed to load' })
+    const fallback = { ...FALLBACK_ANIMATION, loop: a.loop || action === state.defaultAction }
+    preload(fallback, () => applyLoadedAction(action, fallback, { ...options, announce: false }), () => {
+      state.spritePending = false
+      if (state.currentAnimation && !state.scalePreview) scheduleFrameTick()
+    })
+  })
+}
+
+const applyLoadedAction = (action, a, options) => {
   const previousAction = state.action
   state.action = action
+  state.currentAnimation = a
+  state.spritePending = false
   state.frameIndex = 0
 
   const dims = getDisplayDimensions(a)
@@ -552,7 +598,7 @@ const setAction = (action, options = {}) => {
   setMousePassthrough(false)
   refreshMouseStateFromLastPoint()
 
-  if (options.scheduleFrame === false) window.clearTimeout(state.frameTimer)
+  if (options.scheduleFrame === false || state.scalePreview) window.clearTimeout(state.frameTimer)
   else scheduleFrameTick()
 
   // 用户本地点击/菜单触发的非待机动作才提示动作名，避免 AI 回复被动作 label 覆盖。
@@ -766,6 +812,9 @@ const onPointerUp = (event) => {
 // ═══════════════════════════════════════════
 
 const applyAnimationsConfig = ({ actions, defaultAction, clickAction }) => {
+  state.spriteRequest += 1
+  state.spritePending = false
+  state.loadedSprites.clear()
   state.defaultAction = defaultAction
   state.clickAction = clickAction
   state.animations = Object.fromEntries(actions.map((a) => [a.id, a]))
@@ -814,7 +863,7 @@ const applyScaleSettings = ({ scale, scalePreview }) => {
     state.scale = nextScale
     applyCurrentActionScale()
   }
-  if (wasPreview && state.animations[state.action]) scheduleFrameTick()
+  if (wasPreview && !state.spritePending && state.currentAnimation) scheduleFrameTick()
 }
 
 window.petAPI.onSettingsChanged((s) => {

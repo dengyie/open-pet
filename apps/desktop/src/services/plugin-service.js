@@ -934,9 +934,9 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       const selectionId = String(payload.selectionId || '')
       appendLog({ pluginId: plugin.manifest.id, commandId, level: 'info', message: 'Bridge creator.pet-pack import-output invoked' })
       const expectedInstalledPackageHash = String(payload.expectedInstalledPackageHash || '')
-      const imported = petPackService.importPack(selectionId, { expectedInstalledPackageHash })
+      const imported = await petPackService.importPack(selectionId, { expectedInstalledPackageHash })
       const activated = payload.activate && imported?.pack?.id && petPackService?.setActivePack
-        ? petPackService.setActivePack(imported.pack.id)
+        ? await petPackService.setActivePack(imported.pack.id)
         : null
       if (activated) {
         onPetPackActivated({

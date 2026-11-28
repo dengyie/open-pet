@@ -104,7 +104,7 @@ const collectPackEvidence = async ({ petWindow, petService, petPackService }) =>
   const results = []
   for (const packId of BUILT_IN_PACKS) {
     try {
-      petPackService.setActivePack(packId)
+      await petPackService.setActivePack(packId)
       const animations = sendAnimations(petWindow, petService)
       const renderer = await waitForSprite(petWindow)
       results.push({
@@ -189,7 +189,7 @@ const runPackagedRuntimeSmoke = async ({ app, petWindow, petService, petPackServ
     evidence.screenshotPath = await writeScreenshot(petWindow, screenshotPath)
     evidence.state.packs = await collectPackEvidence({ petWindow, petService, petPackService })
     try {
-      petPackService.setActivePack('legacy-cat')
+      await petPackService.setActivePack('legacy-cat')
       sendAnimations(petWindow, petService)
       evidence.state.finalState = { ok: true, activePackId: 'legacy-cat' }
     } catch (error) {

@@ -502,7 +502,7 @@ export function useActionsPane() {
   }
 
   const onRemovePetPack = async (packId: string) => {
-    if (!window.confirm(`删除 Pet pack ${packId}？`)) return
+    if (!window.confirm(`删除已安装的 Pet pack ${packId}？`)) return
     setWorking(true)
     setStatus('')
     try {

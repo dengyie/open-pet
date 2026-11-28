@@ -217,7 +217,10 @@ const createCatalogService = ({
   const listCatalog = () => {
     const catalog = getCatalog()
     const installedPlugins = new Map(pluginService.listPlugins().map((plugin) => [plugin.id, plugin]))
-    const installedPacks = new Map(petPackService.listPacks().packs.map((pack) => [pack.id, pack]))
+    const installedPacks = new Map()
+    for (const pack of petPackService.listPacks().packs) {
+      if (!installedPacks.has(pack.id)) installedPacks.set(pack.id, pack)
+    }
     return {
       schemaVersion: catalog.schemaVersion,
       updatedAt: catalog.updatedAt,
@@ -350,7 +353,7 @@ const createCatalogService = ({
     return selection
   }
 
-  const installSelection = (selectionId) => {
+  const installSelection = async (selectionId) => {
     const selection = getPendingSelection(selectionId)
     let result
     if (selection.kind === 'plugin') {
@@ -359,7 +362,7 @@ const createCatalogService = ({
         : pluginInstallService.installPlugin(selection.pluginSelectionId, { sourcePackageHash: selection.sourcePackageHash })
       result = { ...result, plugins: pluginService.listPlugins() }
     } else {
-      result = petPackService.importPack(selection.petPackSelectionId, { sourcePackageHash: selection.sourcePackageHash })
+      result = await petPackService.importPack(selection.petPackSelectionId, { sourcePackageHash: selection.sourcePackageHash })
       result = { ...result, petPacks: petPackService.listPacks() }
     }
     pendingSelections.delete(selectionId)
