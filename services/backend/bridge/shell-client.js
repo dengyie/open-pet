@@ -135,6 +135,7 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 
 		const envelope = parsed.envelope
 		const awaiting = takePending(envelope.id)
+		if (!awaiting && envelope.body.type === "creator.result") return
 		if (awaiting !== undefined && envelope.body.type === "bridge.error") {
 			awaiting.reject(new ApiError(envelope.body.code, envelope.body.message || "Remote Shell bridge unavailable"))
 			return
@@ -233,7 +234,19 @@ export function createShellClient({ send, exit = (code) => process.exit(code), l
 
 		return new Promise((resolve, reject) => {
 			const rejectPending = (error) => takePending(envelope.id)?.reject(error)
-			const onAbort = () => rejectPending(signal.reason)
+			const onAbort = () => {
+				rejectPending(signal.reason)
+				if (body.type !== "creator.request") return
+				const logCancelError = (error) => {
+					if (error) logger?.warn?.("Creator Shell cancellation could not be sent", { envelopeId: envelope.id })
+				}
+				try {
+					const cancel = dispatch({ type: "creator.cancel" }, false, { id: envelope.id, deferSend: true })
+					if (cancel) send(cancel, logCancelError)
+				} catch (error) {
+					logCancelError(error)
+				}
+			}
 			const timer = setTimeout(() => {
 				// ⚠️ 03 篇定的是 504,而 504 对应的码叫 PROVIDER_TIMEOUT。Shell 弹窗不是
 				// provider,语义别扭;但错误码表是冻结契约,新增 SHELL_TIMEOUT 要走 §10

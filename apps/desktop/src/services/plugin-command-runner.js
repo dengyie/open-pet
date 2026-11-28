@@ -47,6 +47,7 @@ const runPluginCommandEntryProcess = async ({
   cloneJsonValue,
   resolveCommandCwd,
   beforeSpawn,
+  signal,
   spawnCommandProcess,
   stopRuntimeProcessWithFallback,
   resolveStopWaiter,
@@ -58,6 +59,10 @@ const runPluginCommandEntryProcess = async ({
   const { file, args, runAsNode } = resolvePluginProcessLaunch(commandEntry.command)
   const cwd = resolveCommandCwd(plugin.manifest, commandEntry.cwd)
   await commandBridgeServer.ensureStarted()
+  if (signal?.aborted) {
+    commandBridgeServer.unrefWhenIdle()
+    signal.throwIfAborted()
+  }
   const bridgeRunId = createPluginBridgeRunId()
   const bridgeToken = createPluginBridgeToken()
   const bridgeRuntimeKey = createPluginBridgeKey(pluginId, commandId, bridgeRunId)
@@ -131,6 +136,7 @@ const runPluginCommandEntryProcess = async ({
     const settle = (callback) => {
       if (settled) return
       settled = true
+      signal?.removeEventListener('abort', onAbort)
       if (timeoutId) clearTimeout(timeoutId)
       commandRuntimes.delete(runtimeKey)
       commandBridgeRuntimes.delete(bridgeRuntimeKey)
@@ -151,6 +157,9 @@ const runPluginCommandEntryProcess = async ({
       bridgeAbort.abort(stopError)
       stopRuntimeProcessWithFallback(runtime, signal)
       return true
+    }
+    const onAbort = () => {
+      if (!stopError) runtime.stop({ reason: 'Creator job canceled' })
     }
     const rejectStopped = () => {
       if (!stopError) return false
@@ -230,6 +239,11 @@ const runPluginCommandEntryProcess = async ({
       })
     })
 
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
     try {
       child.stdin?.end?.(`${JSON.stringify(commandContext)}\n`)
     } catch (error) {

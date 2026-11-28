@@ -211,6 +211,7 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 			if (cause instanceof ApiError) throw cause
 			throw new ApiError("BACKEND_UNAVAILABLE", "Creator Shell authority unavailable", { cause })
 		}
+		signal?.throwIfAborted()
 		const body = reply?.body
 		if (body?.type !== "creator.result" || body.operation !== operation || typeof body.ok !== "boolean") {
 			throw new ApiError("INTERNAL", "Shell Creator response is invalid")
@@ -302,6 +303,7 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 		return redact(result)
 	}
 	const finishShellWorkflow = (result, flowId, ctx, progress) => {
+		ctx.signal?.throwIfAborted()
 		const sync = () => syncResult(result, flowId || null)
 		if (result?.state === "cancelled" && result.code === "native_execution_revoked") {
 			const cancellation = sync()

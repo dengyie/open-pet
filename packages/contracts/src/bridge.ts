@@ -674,6 +674,7 @@ export const backendToShellSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("catalog.request"), request: catalogRequestSchema }).strict(),
   petPackBackendRequestSchema,
   z.object({ type: z.literal("creator.request"), operation: z.enum(CREATOR_BRIDGE_OPERATIONS), payload: z.record(z.string(), z.unknown()) }).strict(),
+  z.object({ type: z.literal("creator.cancel") }).strict(),
   z.object({ type: z.literal("ai.state"), snapshot: z.record(z.string(), z.unknown()) }).strict(),
   z.object({
     type: z.literal("ai.host.request"),

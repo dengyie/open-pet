@@ -147,6 +147,25 @@ test('plugin command runner rejects child process errors and cleans waiters', as
   assert.equal(harness.commandBridgeRuntimes.size, 0)
 })
 
+test('canceling a Creator command stops its child and aborts its provider bridge', async () => {
+  const harness = createHarness()
+  const controller = new AbortController()
+  const result = runPluginCommandEntryProcess({ ...harness.options, signal: controller.signal })
+  await flushAsyncSetup()
+  const { signal } = harness.commandBridgeRuntimes.get('weather-declaration:announce:run-1')
+  const provider = new Promise((_, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+  })
+  controller.abort()
+  await assert.rejects(provider, /Creator job canceled/)
+  assert.deepEqual(harness.child.killedWith, ['SIGTERM'])
+  harness.child.stdout.write('{"state":"preview-ready"}\n')
+  harness.child.emit('exit', 0, null)
+  await assert.rejects(result, /Creator job canceled/)
+  assert.equal(harness.commandRuntimes.size, 0)
+  assert.equal(harness.commandBridgeRuntimes.size, 0)
+})
+
 test('plugin command runner prefers per-command timeout overrides', async () => {
   const harness = createHarness({ commandProcessTimeoutMs: 25 })
   harness.options.commandEntry.timeoutMs = 1
