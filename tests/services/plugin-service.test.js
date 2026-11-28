@@ -1713,7 +1713,7 @@ test('creator studio imports distinct pets and can repair an installed legacy pe
   const run = readRun({ dataDir, runId })
   const outputDir = run.artifacts.outputDir
   const original = await petPackService.inspectPackSource(outputDir)
-  const firstImport = petPackService.importPack(original.selectionId)
+  const firstImport = await petPackService.importPack(original.selectionId)
   writeRun({ dataDir, run: { ...run, importedPackId: firstImport.pack.id } })
 
   const manifestPath = path.join(outputDir, 'pet.json')
@@ -1727,7 +1727,7 @@ test('creator studio imports distinct pets and can repair an installed legacy pe
 
   fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, displayName: '团子' }))
   const replacement = await petPackService.inspectPackSource(outputDir)
-  const differentPet = petPackService.importPack(replacement.selectionId)
+  const differentPet = await petPackService.importPack(replacement.selectionId)
   fs.writeFileSync(manifestPath, repairedManifest)
   writeRun({ dataDir, run: { ...run, importedPackId: 'pet' } })
 
