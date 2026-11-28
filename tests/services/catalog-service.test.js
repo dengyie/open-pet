@@ -5,6 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { execFileSync } = require('node:child_process')
+const { createCanvas } = require('@napi-rs/canvas')
 
 const { createCatalogService } = require('../../apps/desktop/src/services/catalog-service')
 const { createPluginInstallService } = require('../../apps/desktop/src/services/plugin-install-service')
@@ -66,7 +67,7 @@ const createPluginPackage = ({ id = 'focus-timer', version = '1.0.0' } = {}) => 
 const createPetPackDirectory = ({ id = 'pixel-cat', version = '1.0.0' } = {}) => {
   const root = createTempDir('catalog-pet-pack')
   fs.mkdirSync(path.join(root, 'sprites'), { recursive: true })
-  fs.writeFileSync(path.join(root, 'sprites', 'idle.png'), '')
+  fs.writeFileSync(path.join(root, 'sprites', 'idle.png'), createCanvas(32, 32).toBuffer('image/png'))
   fs.writeFileSync(path.join(root, 'pet.json'), JSON.stringify({
     schemaVersion: 1,
     id,

@@ -217,7 +217,10 @@ const createCatalogService = ({
   const listCatalog = () => {
     const catalog = getCatalog()
     const installedPlugins = new Map(pluginService.listPlugins().map((plugin) => [plugin.id, plugin]))
-    const installedPacks = new Map(petPackService.listPacks().packs.map((pack) => [pack.id, pack]))
+    const installedPacks = new Map()
+    for (const pack of petPackService.listPacks().packs) {
+      if (!installedPacks.has(pack.id)) installedPacks.set(pack.id, pack)
+    }
     return {
       schemaVersion: catalog.schemaVersion,
       updatedAt: catalog.updatedAt,

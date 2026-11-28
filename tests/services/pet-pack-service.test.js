@@ -5,6 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { execFileSync } = require('node:child_process')
+const { createCanvas } = require('@napi-rs/canvas')
 
 const { createActionService } = require('../../apps/desktop/src/services/action-service')
 const { BUILT_IN_PACK_ID, createPetPackService } = require('../../apps/desktop/src/services/pet-pack-service')
@@ -32,6 +33,14 @@ const createTempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `openpet-$
 
 const sha256 = (filePath) => crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 
+const createSpritePng = (width = 32, height = 32, color = 'black') => {
+  const canvas = createCanvas(width, height)
+  const context = canvas.getContext('2d')
+  context.fillStyle = color
+  context.fillRect(0, 0, width, height)
+  return canvas.toBuffer('image/png')
+}
+
 const FIXTURE_ATLAS_WEBP = Buffer.from(
   'UklGRkIUAABXRUJQVlA4IDYUAACwXwKdASoABlAHPm02mUmkIqKhIAgAgA2JaW7hd2EbQAoMdOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ych77ZOQ99snIe+2TkPfbJyHvtk5D32ychvAAP7+Wb/0l0t5H//9ZX//zK//+ZX+8mbIAApNAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
   'base64'
@@ -51,7 +60,7 @@ const createPetPackDirectory = (root, manifest = {}) => {
     { id: 'wave', label: 'Wave', kind: 'greeting', sprite: 'sprites/wave.png', frameCount: 1, frameMs: 100, frameWidth: 32, frameHeight: 32 }
   ]
   for (const action of actions) {
-    fs.writeFileSync(path.join(root, action.sprite), '')
+    fs.writeFileSync(path.join(root, action.sprite), createSpritePng(action.frameWidth * action.frameCount, action.frameHeight))
   }
   fs.writeFileSync(path.join(root, 'pet.json'), JSON.stringify({
     schemaVersion: 1,
@@ -281,6 +290,81 @@ test('pet pack service protects bundled pet packs from removal', () => {
   assert.throws(() => service.removePack('chispa'), /built-in/)
 })
 
+test('pet pack service reserves bundled and legacy IDs at inspection and import', async () => {
+  const service = createService()
+  const root = createTempDir('reserved-pack-id')
+  for (const id of ['chispa', BUILT_IN_PACK_ID]) {
+    createPetPackDirectory(root, { id })
+    assert.match(service.inspectPackDirectory(root).errors[0], /reserved for a built-in pack/)
+    const zip = createZipFromDirectory(root)
+    assert.match((await service.inspectPackSource(zip)).errors[0], /reserved for a built-in pack/)
+  }
+  createPetPackDirectory(root)
+  const inspection = service.inspectPackDirectory(root)
+  assert.equal(inspection.valid, true)
+  createPetPackDirectory(root, { id: 'chispa' })
+  assert.throws(() => service.importPack(inspection.selectionId), /reserved for a built-in pack/)
+})
+
+test('pet pack service can remove only the installed copy of an active bundled ID', () => {
+  const userPacksDir = createTempDir('conflicting-user-pack')
+  const installedRoot = path.join(userPacksDir, 'chispa')
+  createPetPackDirectory(installedRoot, { id: 'chispa', displayName: 'Custom Chispa' })
+  const settingsService = createSettingsService({
+    petPacks: { activePackId: 'chispa', installed: { chispa: { displayName: 'Custom Chispa' } } }
+  })
+  const service = createPetPackService({ settingsService, userPacksDir })
+  const [bundled, installed] = service.listPacks().packs.filter((pack) => pack.id === 'chispa')
+  assert.equal(bundled.source, 'built-in')
+  assert.equal(bundled.active, true)
+  assert.equal(installed.source, 'user-installed')
+  assert.equal(installed.active, false)
+  assert.equal(installed.valid, false)
+  assert.match(installed.error, /conflicts with the built-in/)
+  assert.equal(service.setActivePack('chispa').pack.source, 'built-in')
+  const manifestPath = path.join(bundled.rootPath, 'pet.json')
+  const bundledHash = sha256(manifestPath)
+  assert.equal(service.removePack('chispa').petPacks.activePackId, 'chispa')
+  assert.equal(fs.existsSync(installedRoot), false)
+  assert.equal(sha256(manifestPath), bundledHash)
+  assert.deepEqual(service.listPacks().packs.filter((pack) => pack.id === 'chispa'), [bundled])
+  assert.throws(() => service.removePack('chispa'), /built-in/)
+})
+
+test('pet pack service rejects truncated sprites during inspection, import and activation', async () => {
+  const service = createService()
+  const source = createTempDir('truncated-sprite')
+  createPetPackDirectory(source)
+  const sprite = path.join(source, 'sprites', 'idle.png')
+  const complete = fs.readFileSync(sprite)
+  const truncated = complete.subarray(0, -12)
+  fs.writeFileSync(sprite, truncated)
+  assert.match((await service.inspectPackSource(source)).errors[0], /could not be decoded: sprites\/idle\.png/)
+  assert.match((await service.inspectPackSource(createZipFromDirectory(source))).errors[0], /could not be decoded/)
+  fs.writeFileSync(sprite, complete)
+  const inspection = service.inspectPackDirectory(source)
+  assert.equal(inspection.valid, true)
+  fs.writeFileSync(sprite, truncated)
+  assert.throws(() => service.importPack(inspection.selectionId), /could not be decoded/)
+  fs.writeFileSync(sprite, complete)
+  const { pack } = service.importPack(inspection.selectionId)
+  const installedSprite = path.join(pack.rootPath, 'sprites', 'idle.png')
+  service.setActivePack(pack.id)
+  fs.writeFileSync(installedSprite, truncated)
+  assert.throws(() => service.setActivePack(pack.id), /could not be decoded/)
+  assert.equal(service.getActivePetPack().manifest.id, BUILT_IN_PACK_ID)
+  assert.equal(service.listPacks().packs.find(({ id }) => id === pack.id).valid, false)
+})
+
+test('pet pack service checks actual and declared sprite dimensions', () => {
+  const service = createService()
+  const source = createTempDir('wrong-sprite-dimensions')
+  createPetPackDirectory(source)
+  const sprite = path.join(source, 'sprites', 'idle.png')
+  fs.writeFileSync(sprite, createSpritePng(64, 32))
+  assert.match(service.inspectPackDirectory(source).errors[0], /dimensions.*64x32, expected 32x32/)
+})
+
 test('pet pack service inspects and imports a valid pack directory', () => {
   const sourceDir = createTempDir('pet-pack-source')
   createPetPackDirectory(sourceDir)
@@ -381,7 +465,8 @@ test('pet pack service leaves an active pack untouched if staging its upgrade fa
   const nextSource = createTempDir('pet-pack-rollback-next')
   createPetPackDirectory(firstSource)
   createPetPackDirectory(nextSource, { version: '2.0.0' })
-  fs.writeFileSync(path.join(firstSource, 'sprites', 'idle.png'), 'original sprite')
+  const originalSprite = createSpritePng(32, 32, 'red')
+  fs.writeFileSync(path.join(firstSource, 'sprites', 'idle.png'), originalSprite)
   const settingsService = createSettingsService()
   const service = createService(settingsService)
   const first = service.importPack(service.inspectPackDirectory(firstSource).selectionId)
@@ -398,7 +483,7 @@ test('pet pack service leaves an active pack untouched if staging its upgrade fa
   copy.mock.restore()
 
   assert.equal(service.getActivePetPack().manifest.version, '1.0.0')
-  assert.equal(fs.readFileSync(path.join(first.pack.rootPath, 'sprites', 'idle.png'), 'utf8'), 'original sprite')
+  assert.deepEqual(fs.readFileSync(path.join(first.pack.rootPath, 'sprites', 'idle.png')), originalSprite)
   assert.deepEqual(settingsService.get(), previousSettings)
   assert.deepEqual(fs.readdirSync(path.dirname(first.pack.rootPath)), ['pack-cat'])
 

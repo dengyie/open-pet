@@ -1198,7 +1198,7 @@ export function ActionsPane({
           {petPacks.packs.length === 0 ? (
             <div className="empty-chat">暂无 Pet pack</div>
           ) : petPacks.packs.map((pack) => (
-            <div className={pack.active ? 'pet-pack-row active' : 'pet-pack-row'} key={pack.id}>
+            <div className={pack.active ? 'pet-pack-row active' : 'pet-pack-row'} key={`${pack.source}:${pack.id}`}>
               <div className="pet-pack-identity">
                 <SpriteFrame sprite={pack.previewSprite} action={pack.previewAction} />
                 <div>
