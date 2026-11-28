@@ -1361,6 +1361,7 @@ const createImageGenerationModelService = ({
         url: `${baseUrl}/models`,
         timeoutMs,
         timeoutMessage: `Image Provider health check timed out after ${timeoutMs}ms`,
+        signal: options.signal,
         options: {
           method: 'GET',
           headers: {
@@ -1433,6 +1434,7 @@ const createImageGenerationModelService = ({
         { status, modelsProbe: 'ok', discoveredModelCount: availableModels.length }
       )
     } catch (error) {
+      options.signal?.throwIfAborted()
       const errorMessage = sanitizeLogText(error?.message || error, { maxChars: 240 })
       const isTimeout = /health check timed out/i.test(errorMessage)
       return completeHealth(

@@ -141,6 +141,7 @@ const BACKEND_TO_SHELL_TYPES = Object.freeze([
 	"catalog.request",
 	"pet-packs.request",
 	"creator.request",
+	"creator.cancel",
 	"ai.state",
 	"ai.host.request",
 	"ai.talk.request",
@@ -451,6 +452,9 @@ function parseEnvelope(raw) {
 		case "actions.request":
 			if (typeof body.operation !== "string" || body.payload === null || typeof body.payload !== "object" || Array.isArray(body.payload)) return fail("bad-body", "actions.request")
 			break
+		case "creator.cancel":
+			if (!exactKeys(body, ["type"])) return fail("bad-body", "creator.cancel")
+			break
 		case "creator.request":
 			if (!CREATOR_OPERATIONS.has(body.operation) || body.payload === null || typeof body.payload !== "object" || Array.isArray(body.payload)) return fail("bad-body", "creator.request")
 			break
@@ -556,6 +560,7 @@ function parseEnvelope(raw) {
 
 function createMessageHandler({ dialog, petService, secretService, logger, send, onNotify, onBadge, onDashboard, onSettingsChanged, onCreatorNativeApprovalRevoked, onSettingsApplyRequest, onSettingsCommandRequest, onCatalogRequest, onPetPackRequest, onActionsRequest, onCreatorRequest, onAiTalkRequest, onAiState, onAiHostRequest, productionService } = {}) {
 	if (typeof send !== "function") throw new TypeError("createMessageHandler 需要 send")
+	const creatorRequests = new Map()
 
 	async function handle(raw) {
 		const parsed = parseEnvelope(raw)
@@ -655,19 +660,28 @@ function createMessageHandler({ dialog, petService, secretService, logger, send,
 					send({ v: BRIDGE_PROTOCOL_VERSION, id: raw.id, at: Date.now(), body: { type: "ai.talk.result", operation: body.operation, ...response } })
 					return true
 				}
+				case "creator.cancel":
+					creatorRequests.get(raw.id)?.abort()
+					return true
 				case "creator.request": {
+					if (creatorRequests.has(raw.id)) return false
+					const controller = new AbortController()
+					creatorRequests.set(raw.id, controller)
 					let responseBody
 					try {
 						if (typeof onCreatorRequest !== "function") throw Object.assign(new Error("Shell Creator authority unavailable"), { code: "BACKEND_UNAVAILABLE" })
-						const result = await onCreatorRequest({ operation: body.operation, payload: structuredClone(body.payload) })
+						const result = await onCreatorRequest({ operation: body.operation, payload: structuredClone(body.payload) }, { signal: controller.signal })
 						responseBody = { type: "creator.result", operation: body.operation, ok: true, result }
 					} catch (error) {
+						if (controller.signal.aborted) return true
 						responseBody = { type: "creator.result", operation: body.operation, ok: false, error: {
 							code: await normalizePetPackErrorCode(error?.code),
 							message: sanitizeLogText(error?.message || String(error)),
 						} }
+					} finally {
+						creatorRequests.delete(raw.id)
 					}
-					send({ v: BRIDGE_PROTOCOL_VERSION, id: raw.id, at: Date.now(), body: responseBody })
+					if (!controller.signal.aborted) send({ v: BRIDGE_PROTOCOL_VERSION, id: raw.id, at: Date.now(), body: responseBody })
 					return true
 				}
 				case "pet.command.request": {

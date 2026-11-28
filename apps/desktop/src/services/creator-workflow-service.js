@@ -2304,7 +2304,8 @@ const createCreatorWorkflowService = ({
     imageGenerationModelService.getHealthCacheRevision?.()
   )
 
-  const getProviderHealth = async ({ retryConfigChange = true } = {}) => {
+  const getProviderHealth = async ({ retryConfigChange = true, signal } = {}) => {
+    signal?.throwIfAborted()
     const configKey = getProviderHealthKey()
     if (
       providerHealthCache?.key === configKey &&
@@ -2313,18 +2314,37 @@ const createCreatorWorkflowService = ({
       return providerHealthCache.result
     }
     if (providerHealthInFlight?.key === configKey) {
-      return providerHealthInFlight.promise
+      const inFlight = providerHealthInFlight
+      if (signal && signal !== inFlight.signal) {
+        let onAbort
+        try {
+          const aborted = new Promise((_, reject) => {
+            onAbort = () => reject(signal.reason)
+            signal.addEventListener('abort', onAbort, { once: true })
+          })
+          return await Promise.race([inFlight.promise, aborted])
+        } finally {
+          signal.removeEventListener('abort', onAbort)
+        }
+      }
+      try {
+        return await inFlight.promise
+      } catch (error) {
+        if (!signal && inFlight.signal?.aborted) return getProviderHealth({ retryConfigChange })
+        throw error
+      }
     }
 
     const promise = (async () => {
       let result
       try {
         result = await withTimeout(
-          imageGenerationModelService.checkHealth({ timeoutMs: providerHealthTimeoutMs }),
+          imageGenerationModelService.checkHealth({ timeoutMs: providerHealthTimeoutMs, ...(signal ? { signal } : {}) }),
           providerHealthTimeoutMs,
           `Image Provider health check timed out after ${providerHealthTimeoutMs}ms`
         )
       } catch (error) {
+        signal?.throwIfAborted()
         const message = normalizeText(error?.message || 'Provider health check failed')
         const isTimeout = /timed out/i.test(message)
         result = {
@@ -2335,7 +2355,7 @@ const createCreatorWorkflowService = ({
       }
       const currentConfigKey = getProviderHealthKey()
       if (currentConfigKey !== configKey) {
-        if (retryConfigChange) return getProviderHealth({ retryConfigChange: false })
+        if (retryConfigChange) return getProviderHealth({ retryConfigChange: false, signal })
         return {
           ok: false,
           code: 'provider_config_changed',
@@ -2351,7 +2371,7 @@ const createCreatorWorkflowService = ({
       }
       return result
     })()
-    const inFlight = { key: configKey, promise }
+    const inFlight = { key: configKey, promise, signal }
     providerHealthInFlight = inFlight
     try {
       return await promise
@@ -2387,7 +2407,7 @@ const createCreatorWorkflowService = ({
     return getProviderHealth()
   }
 
-  const checkHatchPetGenerationCapability = async () => {
+  const checkHatchPetGenerationCapability = async (signal) => {
     const staticReadiness = getHatchPetStaticReadiness()
     if (!staticReadiness || staticReadiness.ok !== true) return staticReadiness
     if (typeof hatchPetAgentService.checkGenerationCapability !== 'function') {
@@ -2399,8 +2419,9 @@ const createCreatorWorkflowService = ({
       }
     }
     try {
-      return await hatchPetAgentService.checkGenerationCapability()
+      return await hatchPetAgentService.checkGenerationCapability(signal ? { signal } : undefined)
     } catch (error) {
+      signal?.throwIfAborted()
       return {
         ...staticReadiness,
         ok: false,
@@ -2573,21 +2594,24 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     return creatorReferenceService.inspectReference({ targetType, targetId })
   }
 
-  const runExclusively = async ({ mode, message }, execute) => {
+  const runExclusively = async ({ mode, message, signal }, execute) => {
+    signal?.throwIfAborted()
     if (activeWorkflow) {
       return createWorkflowInProgressResult()
     }
     beginWorkflow({ mode, message })
     try {
       const result = await execute()
+      signal?.throwIfAborted()
       if (result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'run') && result.state !== 'generating') {
         setLastRun(result.run)
       }
       return result
     } catch (error) {
-      if (error?.code !== 'CREATOR_NATIVE_APPROVAL_REVOKED') throw error
+      const canceled = signal?.aborted
+      if (!canceled && error?.code !== 'CREATOR_NATIVE_APPROVAL_REVOKED') throw error
       const { runId, commandId } = activeWorkflow
-      const reason = CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE
+      const reason = canceled ? 'Creator job canceled' : CREATOR_NATIVE_APPROVAL_REVOKED_MESSAGE
       let diagnostics = null
       if (runId) {
         const pluginDataDir = pluginService.getPluginCreatorDataDir(CREATOR_STUDIO_PLUGIN_ID)
@@ -2601,7 +2625,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       }
       const result = createWorkflowResult({
         state: 'cancelled',
-        code: 'native_execution_revoked',
+        code: canceled ? 'job_canceled' : 'native_execution_revoked',
         message: reason,
         run: runId ? createRunView({ state: 'cancelled', mode, runId, commandId, message: reason, diagnostics }) : null,
         diagnostics
@@ -2619,8 +2643,11 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     payload,
     referenceTarget,
     prepareReference = null,
-    isFullPet = false
+    isFullPet = false,
+    signal
   }) => {
+    signal?.throwIfAborted()
+    const commandOptions = signal ? { signal } : undefined
     const requestId = idFactory()
     const startedAt = Date.now()
     const plugin = assertPluginReady()
@@ -2661,7 +2688,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       return result
     }
 
-    const health = await getProviderHealth()
+    const health = await getProviderHealth({ signal })
+    signal?.throwIfAborted()
     const providerReadiness = createCreatorProviderReadiness({
       config: imageGenerationModelService.getConfig(),
       health
@@ -2687,7 +2715,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       return result
     }
 
-    const hatchPetCapability = isFullPet ? await checkHatchPetGenerationCapability() : null
+    const hatchPetCapability = isFullPet ? await checkHatchPetGenerationCapability(signal) : null
+    signal?.throwIfAborted()
     if (isFullPet && hatchPetCapability?.ok !== true) {
       recordLog({
         level: 'error',
@@ -2776,11 +2805,12 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         ...payload,
         generationTask: task,
         backend: 'provider'
-      })
+      }, commandOptions)
       lastCommandResult = drafted
       const draftRun = getCreatorStudioRun(drafted)
       runId = getCreatorStudioRunId(draftRun)
       if (!runId) throw new Error('Creator Studio did not return a run id')
+      signal?.throwIfAborted()
       void Promise.resolve()
         .then(() => hatchPetAgentService?.createShadowDecision?.({
           runId,
@@ -2788,6 +2818,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           userIntent: normalizeText(payload.originalPrompt || payload.prompt || task?.characterBrief || task?.actions?.[0]?.description),
           stage: 'planning',
           scope: {},
+          ...(signal ? { signal } : {}),
           workflowEvidence: {
             provider: createProviderView({
               config: imageGenerationModelService.getConfig(),
@@ -2837,7 +2868,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       let run = draftRun
       if (normalizeText(run?.taskStatus) !== 'confirmed') {
         activeCommandId = CREATOR_STUDIO_CONFIRM_COMMAND_ID
-        const confirmed = await pluginService.runCommand(CREATOR_STUDIO_PLUGIN_ID, CREATOR_STUDIO_CONFIRM_COMMAND_ID, { runId })
+        const confirmed = await pluginService.runCommand(CREATOR_STUDIO_PLUGIN_ID, CREATOR_STUDIO_CONFIRM_COMMAND_ID, { runId }, commandOptions)
+        signal?.throwIfAborted()
         lastCommandResult = confirmed
         run = getCreatorStudioRun(confirmed)
         recordStage({ stage: 'confirm', result: confirmed, run })
@@ -2849,7 +2881,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       }
 
       activeCommandId = CREATOR_STUDIO_GENERATE_COMMAND_ID
-      const generated = await pluginService.runCommand(CREATOR_STUDIO_PLUGIN_ID, CREATOR_STUDIO_GENERATE_COMMAND_ID, { runId })
+      const generated = await pluginService.runCommand(CREATOR_STUDIO_PLUGIN_ID, CREATOR_STUDIO_GENERATE_COMMAND_ID, { runId }, commandOptions)
+      signal?.throwIfAborted()
       lastCommandResult = generated
       run = getCreatorStudioRun(generated)
       recordStage({ stage: 'generate', result: generated, run })
@@ -2995,6 +3028,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           elapsedMs: Date.now() - startedAt
         }
       })
+      signal?.throwIfAborted()
       const contractFailureCodes = new Set([
         'reference_image_required',
         'reference_image_count_invalid',
@@ -3037,7 +3071,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     }
   }
 
-  const generateNewCharacter = async ({ characterName, stylePrompt = '', referenceImageToken }) => {
+  const generateNewCharacter = async ({ characterName, stylePrompt = '', referenceImageToken, signal }) => {
     const normalizedCharacterName = normalizeText(characterName)
     const normalizedReferenceImageToken = normalizeText(referenceImageToken)
     if (!normalizedCharacterName) {
@@ -3057,7 +3091,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     const petId = slugify(normalizedCharacterName)
     return runExclusively({
       mode: 'full-pet',
-      message: `正在生成角色 ${normalizedCharacterName}`
+      message: `正在生成角色 ${normalizedCharacterName}`,
+      signal
     }, async () => {
       try {
         const inspection = await inspectApprovedReferenceForDefaultPath(normalizedReferenceImageToken)
@@ -3089,12 +3124,13 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           targetId: petId,
           referenceToken: normalizedReferenceImageToken
         }),
-        isFullPet: true
+        isFullPet: true,
+        signal
       })
     })
   }
 
-  const generateExistingAction = async ({ actionName, motionPrompt, actionContract, referenceImageToken = '' }) => {
+  const generateExistingAction = async ({ actionName, motionPrompt, actionContract, referenceImageToken = '', signal }) => {
     const normalizedActionName = normalizeText(actionName)
     const normalizedMotionPrompt = normalizeText(motionPrompt)
     const normalizedReferenceImageToken = normalizeText(referenceImageToken)
@@ -3125,7 +3161,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
 
     return runExclusively({
       mode: 'single-action',
-      message: `正在生成动作 ${normalizedActionName}`
+      message: `正在生成动作 ${normalizedActionName}`,
+      signal
     }, async () => {
       let reference = null
       if (normalizedReferenceImageToken) {
@@ -3184,12 +3221,13 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           targetType: EDITABLE_TARGET_TYPE,
           targetId: EDITABLE_TARGET_ID
         },
-        isFullPet: false
+        isFullPet: false,
+        signal
       })
     })
   }
 
-  const runRepairWorkflow = async ({ runId, actionId = '', commandId, label }) => {
+  const runRepairWorkflow = async ({ runId, actionId = '', commandId, label, signal }) => {
     const normalizedRunId = normalizeText(runId)
     const normalizedActionId = normalizeText(actionId)
     if (!normalizedRunId) {
@@ -3222,7 +3260,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     }
     return runExclusively({
       mode: 'full-pet',
-      message: label
+      message: label,
+      signal
     }, async () => {
       assertPluginReady()
       const pluginDataDir = pluginService.getPluginCreatorDataDir(CREATOR_STUDIO_PLUGIN_ID)
@@ -3232,7 +3271,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
       const commandResult = await pluginService.runCommand(CREATOR_STUDIO_PLUGIN_ID, commandId, {
         runId: normalizedRunId,
         ...(normalizedActionId ? { actionId: normalizedActionId } : {})
-      })
+      }, signal ? { signal } : undefined)
       const run = getCreatorStudioRun(commandResult)
       if (!run?.runId) throw new Error('Creator Studio repair did not return a run')
       const coverage = readBasicActionCoverage({ pluginDataDir, runId: run.runId })
@@ -3278,20 +3317,22 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     })
   }
 
-  const retryFullPetAction = ({ runId, actionId }) => runRepairWorkflow({
+  const retryFullPetAction = ({ runId, actionId, signal }) => runRepairWorkflow({
     runId,
     actionId,
+    signal,
     commandId: CREATOR_STUDIO_RETRY_ACTION_COMMAND_ID,
     label: `正在修复动作 ${normalizeText(actionId)}`
   })
 
-  const retryFullPetIdentity = ({ runId }) => runRepairWorkflow({
+  const retryFullPetIdentity = ({ runId, signal }) => runRepairWorkflow({
     runId,
+    signal,
     commandId: CREATOR_STUDIO_RETRY_IDENTITY_COMMAND_ID,
     label: '正在重新生成 canonical identity'
   })
 
-  const acceptCreatorIdentity = async ({ runId, candidateId, sha256, qualityOverride = false, acknowledgedWarningCodes = [] } = {}) => {
+  const acceptCreatorIdentity = async ({ runId, candidateId, sha256, qualityOverride = false, acknowledgedWarningCodes = [], signal } = {}) => {
     const normalizedRunId = normalizeText(runId)
     const normalizedCandidateId = normalizeText(candidateId)
     const normalizedSha256 = normalizeText(sha256).toLowerCase()
@@ -3314,7 +3355,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
     }
     return runExclusively({
       mode: 'full-pet',
-      message: `正在接受身份候选 ${normalizedCandidateId} 并生成动作`
+      message: `正在接受身份候选 ${normalizedCandidateId} 并生成动作`,
+      signal
     }, async () => {
       assertPluginReady()
       const pluginDataDir = pluginService.getPluginCreatorDataDir(CREATOR_STUDIO_PLUGIN_ID)
@@ -3332,7 +3374,8 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
           candidateId: normalizedCandidateId,
           sha256: normalizedSha256,
           ...(qualityOverride === true ? { qualityOverride: true, acknowledgedWarningCodes: normalizedWarningCodes } : {})
-        }
+        },
+        signal ? { signal } : undefined
       )
       const run = getCreatorStudioRun(commandResult)
       if (!run?.runId) throw new Error('Creator Studio identity acceptance did not return a run')

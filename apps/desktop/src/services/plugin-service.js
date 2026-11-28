@@ -2035,7 +2035,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     }
   }
 
-  const runCommandEntryProcess = async ({ plugin, commandEntry, commandId, payload, config, beforeSpawn }) => {
+  const runCommandEntryProcess = async ({ plugin, commandEntry, commandId, payload, config, beforeSpawn, signal }) => {
     const pluginId = plugin.manifest.id
     const runtimeKey = createPluginServiceKey(pluginId, commandId)
     commandRuntimeRegistry.assertNotActive(pluginId, commandId)
@@ -2063,6 +2063,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
         beforeSpawn?.()
         commandRuntimeRegistry.assertNotActive(pluginId, commandId)
       },
+      signal,
       spawnCommandProcess,
       stopRuntimeProcessWithFallback,
       resolveStopWaiter,
@@ -2077,8 +2078,9 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     })
   }
 
-  const runCommand = async (pluginId, commandId, payload = {}) => {
+  const runCommand = async (pluginId, commandId, payload = {}, { signal } = {}) => {
     try {
+      signal?.throwIfAborted()
       const plugin = getPlugins().find((candidate) => candidate.manifest.id === pluginId)
       if (!plugin) throw new Error(`Plugin not found: ${pluginId}`)
       assertPluginAllowed(plugin.manifest)
@@ -2123,7 +2125,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
           commandId,
           payload,
           config: getPluginConfig(plugin.manifest.id, plugin.configSchema),
-          beforeSpawn: assertCreatorApprovalCurrent
+          beforeSpawn: assertCreatorApprovalCurrent,
+          signal
         })
       } else {
         throw new Error('Plugin is not runnable')
@@ -2132,7 +2135,7 @@ const createPluginService = ({ settingsService, petService, actionService, actio
       appendLog({ pluginId, commandId, level: 'info', message: 'Command completed' })
       return result
     } catch (error) {
-      if (error?.openpetLogged) throw error
+      if (signal?.aborted || error?.openpetLogged) throw error
       const sanitizedMessage = sanitizePluginCommandText(error?.message || 'Command failed')
       if (error && typeof error === 'object') error.message = sanitizedMessage
       appendLog({
@@ -2734,7 +2737,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
     effectiveHatchPetAgentService = service || null
   }
 
-  const runCreatorSpriteEvaluation = async (payload = {}) => {
+  const runCreatorSpriteEvaluation = async (payload = {}, { signal } = {}) => {
+    signal?.throwIfAborted()
     if (!effectiveHatchPetAgentService?.evaluateSprite) throw new Error('Creator hatch-pet evaluation is not available')
     const plugin = getPluginDefinition(CREATOR_STUDIO_PLUGIN_ID)
     if (!plugin) throw new Error('Creator Studio plugin is not available')
@@ -2752,7 +2756,8 @@ const createPluginService = ({ settingsService, petService, actionService, actio
           sha256: String(board.sha256 || ''),
           regions: Array.isArray(board.regions) ? board.regions : []
         },
-        qa: payload.qa && typeof payload.qa === 'object' ? payload.qa : {}
+        qa: payload.qa && typeof payload.qa === 'object' ? payload.qa : {},
+        signal
       })
     }
   }

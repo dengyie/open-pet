@@ -499,12 +499,13 @@ const createHatchPetAgentService = ({
     }
   }
 
-  const checkCapability = async () => {
+  const checkCapability = async ({ signal } = {}) => {
     const completionConfig = getEffectiveCompletionConfig()
     const startedAt = Date.now()
     const request = {
       configOverride: completionConfig,
       timeoutMs: HATCH_PET_CAPABILITY_TIMEOUT_MS,
+      ...(signal ? { signal } : {}),
       messages: [
         {
           role: 'system',
@@ -515,6 +516,7 @@ const createHatchPetAgentService = ({
       tool: createCapabilityTool()
     }
     for (let attempt = 1; attempt <= HATCH_PET_CAPABILITY_ATTEMPT_LIMIT; attempt += 1) {
+      signal?.throwIfAborted()
       try {
         const result = await aiService.completeStructuredTool(request)
         const supported = result.arguments?.supported === true && result.arguments?.schemaVersion === 1
@@ -529,6 +531,7 @@ const createHatchPetAgentService = ({
           elapsedMs: Date.now() - startedAt
         }
       } catch (error) {
+        signal?.throwIfAborted()
         if (attempt < HATCH_PET_CAPABILITY_ATTEMPT_LIMIT && isTransientStructuredProviderError(getCompletionCause(error))) {
           recordLog({
             level: 'warn',
@@ -559,10 +562,10 @@ const createHatchPetAgentService = ({
     throw new Error('Hatch-pet capability check exhausted its attempts')
   }
 
-  const checkGenerationCapability = async () => {
+  const checkGenerationCapability = async ({ signal } = {}) => {
     const readiness = getGenerationReadiness()
     if (!readiness.ok) return readiness
-    const capability = await checkCapability()
+    const capability = await checkCapability({ signal })
     return {
       ...readiness,
       ...capability,
@@ -714,6 +717,7 @@ const createHatchPetAgentService = ({
   }
 
   const evaluateSprite = async ({ runId, scope, board, qa = {}, profile, budgetLedger = null, signal = null } = {}) => {
+    signal?.throwIfAborted()
     const config = getStoredConfig()
     if (!config.enabled) throw new Error('Hatch-pet agent is disabled')
     const completionConfig = getEffectiveCompletionConfig()
@@ -740,6 +744,7 @@ const createHatchPetAgentService = ({
       let request
       try {
         request = await createSpriteEvaluatorRequest({ scope, board: { ...board, path: realBoardPath }, qa, profile: effectiveProfile, repairReason })
+        signal?.throwIfAborted()
         // 每次记账前重读磁盘账本：上一次 await 期间可能有 Provider 预约/结算落盘，
         // 沿用循环外的内存快照会把这些增量写没。
         ledger = reserveEvaluatorCall(resolveBudgetLedger({ runId, supplied: ledger, limits: config.budgets, preferPersisted: true }))
@@ -757,6 +762,7 @@ const createHatchPetAgentService = ({
           configOverride: completionConfig,
           signal
         })
+        signal?.throwIfAborted()
         const validationOptions = { regions: board?.regions || [], requireScoreEvidence: true }
         const evaluation = String(scope || '').trim() === CANONICAL_COMPARISON_SCOPE
           ? validateCanonicalComparisonEvaluation(completion.arguments, validationOptions)

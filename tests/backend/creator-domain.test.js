@@ -2,11 +2,13 @@
 
 const assert = require("node:assert/strict")
 const fs = require("node:fs")
+const http = require("node:http")
 const os = require("node:os")
 const path = require("node:path")
 const { test } = require("node:test")
 const sharp = require("sharp")
 const { createMessageHandler } = require("../../apps/desktop/src/sidecar/message-handler")
+const { createPluginService } = require("../../apps/desktop/src/services/plugin-service")
 
 async function fixture() {
 	const [{ openDatabase }, { migrate }, { createCreatorDomain }] = await Promise.all([
@@ -147,18 +149,40 @@ test("Desktop Creator jobs can finish after the dialog deadline or be canceled w
 	const { promise: started, resolve: start } = Promise.withResolvers()
 	const { promise: cancelDispatched, resolve: dispatchCancelable } = Promise.withResolvers()
 	const { promise: cancelStarted, resolve: startCancelable } = Promise.withResolvers()
+	const { promise: providerAborted, resolve: abortProvider } = Promise.withResolvers()
+	const { promise: allowLateResult, resolve: releaseLateResult } = Promise.withResolvers()
+	const shellReplies = []
+	const cancels = []
+	const lateResult = { ...result, run: { ...result.run, runId: "canceled-character" } }
 	const shell = createShellClient({ send: (envelope) => {
+		if (envelope.body.type === "creator.cancel") {
+			cancels.push(envelope)
+			void handler.handle(envelope)
+			return
+		}
 		if (envelope.body.payload.characterName === "Cancel Cat") dispatchCancelable(envelope)
 		else dispatch(envelope)
 	} })
 	t.after(() => shell.dispose())
 	const handler = createMessageHandler({
-		send: shell.receive,
-		onCreatorRequest: async ({ operation, payload }) => {
+		send: (envelope) => {
+			shellReplies.push(envelope)
+			shell.receive(envelope)
+		},
+		onCreatorRequest: async ({ operation, payload }, { signal }) => {
 			assert.equal(operation, "generate-character")
+			if (payload.characterName === "Cancel Cat") {
+				const provider = new Promise((_, reject) => {
+					signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+				})
+				startCancelable()
+				await assert.rejects(provider, { name: "AbortError" })
+				abortProvider()
+				await allowLateResult
+				return lateResult
+			}
 			const generation = new Promise((resolve) => setTimeout(resolve, DIALOG_RESULT_TIMEOUT_MS + 1_000))
-			if (payload.characterName === "Cancel Cat") startCancelable()
-			else start()
+			start()
 			await generation
 			return result
 		},
@@ -190,7 +214,8 @@ test("Desktop Creator jobs can finish after the dialog deadline or be canceled w
 		referenceImageToken: "opaque-token",
 	})
 	const cancelable = runner.run()
-	const lateHandling = handler.handle(await cancelDispatched)
+	const request = await cancelDispatched
+	const lateHandling = handler.handle(request)
 	await cancelStarted
 	const cancellation = runner.cancel(canceledJobId)
 	await new Promise((resolve) => setImmediate(resolve))
@@ -198,10 +223,100 @@ test("Desktop Creator jobs can finish after the dialog deadline or be canceled w
 	assert.equal((await cancellation).status, "canceled")
 	await cancelable
 
+	assert.deepEqual(cancels.map(({ id, body }) => ({ id, body })), [{ id: request.id, body: { type: "creator.cancel" } }])
+	await providerAborted
+	releaseLateResult()
 	t.mock.timers.tick(DIALOG_RESULT_TIMEOUT_MS + 1_000)
 	assert.equal(await lateHandling, true)
+	assert.equal(shellReplies.some(({ id }) => id === request.id), false)
+	const unsolicited = []
+	shell.on("creator.result", (reply) => unsolicited.push(reply))
+	shell.receive({ ...request, body: { type: "creator.result", operation: "generate-character", ok: true, result: lateResult } })
+	assert.deepEqual(unsolicited, [])
 	assert.equal(repo.byId(canceledJobId).status, "canceled")
 	assert.equal(repo.byId(canceledJobId).result, null)
+	assert.equal(db.prepare("SELECT COUNT(*) AS count FROM creator_runs WHERE id = ?").get("canceled-character").count, 0)
+})
+
+test("canceling a Shell sprite evaluation job closes its in-flight provider request", { timeout: 5_000 }, async (t) => {
+	const [{ openDatabase }, { migrate }, { createCreatorDomain }, { createShellClient }, { createJobsRepository }, { createQueue }, { createRunner }, { createCreatorJobHandlers }] = await Promise.all([
+		import("../../services/backend/store/db.js"),
+		import("../../services/backend/store/migrate.js"),
+		import("../../services/backend/domains/creator/index.js"),
+		import("../../services/backend/bridge/shell-client.js"),
+		import("../../services/backend/store/repositories/jobs.js"),
+		import("../../services/backend/jobs/queue.js"),
+		import("../../services/backend/jobs/runner.js"),
+		import("../../services/backend/jobs/handlers/creator.js"),
+	])
+	const db = await openDatabase({ file: ":memory:" })
+	t.after(() => db.close())
+	migrate({ db })
+
+	const started = Promise.withResolvers()
+	const disconnected = Promise.withResolvers()
+	const provider = http.createServer((_request, response) => {
+		started.resolve()
+		response.once("close", disconnected.resolve)
+	})
+	await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve))
+	const pluginService = createPluginService({
+		settingsService: { get: () => ({ plugins: { enabled: { "openpet.creator-studio": true } } }) },
+		petService: {},
+		pluginDirs: [path.resolve(__dirname, "../../examples/plugins")],
+		hatchPetAgentService: {
+			evaluateSprite: ({ signal }) => fetch(`http://127.0.0.1:${provider.address().port}`, { signal }),
+		},
+	})
+	const dataDir = pluginService.getPluginCreatorDataDir("openpet.creator-studio")
+	const boardDir = fs.mkdtempSync(path.join(dataDir, "evaluation-cancel-"))
+	t.after(() => fs.rmSync(boardDir, { recursive: true, force: true }))
+	const boardPath = path.join(boardDir, "board.png")
+	fs.writeFileSync(boardPath, "test board")
+
+	const cancels = []
+	const replies = []
+	const handling = []
+	const shell = createShellClient({ send: (message) => {
+		if (message.body.type === "creator.cancel") cancels.push(message)
+		handling.push(handler.handle(message))
+	} })
+	t.after(() => shell.dispose())
+	t.after(async () => {
+		provider.closeAllConnections()
+		await new Promise((resolve) => provider.close(resolve))
+		await Promise.all(handling)
+	})
+	const handler = createMessageHandler({
+		send: (message) => {
+			replies.push(message)
+			shell.receive(message)
+		},
+		onCreatorRequest: ({ operation, payload }, options) => {
+			assert.equal(operation, "evaluate-sprite")
+			return pluginService.runCreatorSpriteEvaluation(payload, options)
+		},
+	})
+	const repo = createJobsRepository({ db })
+	const queue = createQueue({ repo })
+	const creator = createCreatorDomain({ db, shell, enqueueJob: (input) => queue.enqueue(input) })
+	const runner = createRunner({ repo, queue, handlers: createCreatorJobHandlers({ creator }) })
+	const { jobId } = creator.enqueueSpriteEvaluation({
+		operation: "evaluate-sprite",
+		runId: "test-sprite-evaluation",
+		board: { relativePath: path.relative(dataDir, boardPath).split(path.sep).join("/") },
+	})
+
+	const running = runner.run()
+	await started.promise
+	const cancellation = runner.cancel(jobId)
+	assert.equal(cancels.length, 1, "cancel must notify the Shell while the evaluator request is pending")
+	await disconnected.promise
+	assert.equal((await cancellation).status, "canceled")
+	await running
+	await Promise.all(handling)
+	assert.deepEqual(replies, [])
+	assert.equal(repo.byId(jobId).result, null)
 })
 
 test("Shell native approval revocation cancels the Create Job without dropping its workflow result", async (t) => {

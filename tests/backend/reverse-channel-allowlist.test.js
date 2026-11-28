@@ -30,6 +30,7 @@ const EXPECTED_BACKEND_TO_SHELL_TYPES = [
 	"catalog.request",
 	"pet-packs.request",
 	"creator.request",
+	"creator.cancel",
 	"ai.state",
 	"ai.host.request",
 	"ai.talk.request",
@@ -57,7 +58,7 @@ async function contractBackendToShellTypes() {
 		assert.deepEqual(await contractBackendToShellTypes(), EXPECTED_BACKEND_TO_SHELL_TYPES)
 		assert.deepEqual(backendSchema.BACKEND_TO_SHELL_TYPES, EXPECTED_BACKEND_TO_SHELL_TYPES)
 		assert.deepEqual(SHELL_BACKEND_TO_SHELL_TYPES, EXPECTED_BACKEND_TO_SHELL_TYPES)
-		assert.equal(new Set(SHELL_BACKEND_TO_SHELL_TYPES).size, 25)
+		assert.equal(new Set(SHELL_BACKEND_TO_SHELL_TYPES).size, 26)
 	})
 
 	it("drops malformed and non-allowlisted envelopes and logs each rejection", async () => {

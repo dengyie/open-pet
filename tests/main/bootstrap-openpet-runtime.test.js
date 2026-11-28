@@ -45,6 +45,7 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
   let creatorNativeApproved = false
   let creatorRevocations = 0
   let creatorEnabled = true
+  let evaluationSignal
   let failNextSettingsPatch = false
   let holdNextSettingsRead
   const fetchImpl = async (url, init = {}) => {
@@ -242,7 +243,10 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
           return getPluginBlockStatus(candidate)
         },
         pickFrames: selectCreatorAssetFrameFolder,
-        runCreatorSpriteEvaluation: async (payload) => ({ ok: true, marker: 'evaluation', payload }),
+        runCreatorSpriteEvaluation: async (payload, { signal }) => {
+          evaluationSignal = signal
+          return { ok: true, marker: 'evaluation', payload }
+        },
         stopAllServices: () => {}
       }),
       createSecretService: () => undefined,
@@ -298,11 +302,13 @@ test('bootstrap runtime wires plugin install and service block-status lookups th
     marker: 'deleted',
     payload: { targetType: 'editable-action-host', targetId: 'legacy-editable-host' }
   })
-  assert.deepEqual(await coordinatorDependencies.onCreatorRequest({ operation: 'evaluate-sprite', payload: { runId: 'run-1' } }), {
+  const { signal } = new AbortController()
+  assert.deepEqual(await coordinatorDependencies.onCreatorRequest({ operation: 'evaluate-sprite', payload: { runId: 'run-1' } }, { signal }), {
     ok: true,
     marker: 'evaluation',
     payload: { runId: 'run-1' }
   })
+  assert.equal(evaluationSignal, signal)
   assert.deepEqual(await coordinatorDependencies.onCatalogRequest({ operation: 'listCatalog' }), {
     schemaVersion: 1,
     updatedAt: '',

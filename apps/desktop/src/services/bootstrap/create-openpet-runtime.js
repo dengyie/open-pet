@@ -157,7 +157,7 @@ const createOpenPetRuntime = ({
     },
     onPetPackRequest: (request) => ipcRuntimeHelpers.handlePetPackRequest(request),
     onAiTalkRequest: (request) => ipcRuntimeHelpers.handleAiTalkRequest(request),
-    onCreatorRequest: async ({ operation, payload = {} }) => {
+    onCreatorRequest: async ({ operation, payload = {} }, { signal } = {}) => {
       switch (operation) {
         case 'pick-reference': {
           const selected = await showOpenDialogForEvent(null, {
@@ -199,17 +199,19 @@ const createOpenPetRuntime = ({
         case 'generate-character': return creatorWorkflowService.generateNewCharacter({
           characterName: payload.characterName,
           stylePrompt: payload.stylePrompt,
-          referenceImageToken: payload.referenceImageToken
+          referenceImageToken: payload.referenceImageToken,
+          signal
         })
         case 'generate-action': return creatorWorkflowService.generateExistingAction({
           actionName: payload.actionName,
           motionPrompt: payload.motionPrompt,
           actionContract: payload.actionContract,
-          referenceImageToken: payload.referenceImageToken
+          referenceImageToken: payload.referenceImageToken,
+          signal
         })
-        case 'retry-action': return creatorWorkflowService.retryFullPetAction({ runId: payload.runId, actionId: payload.actionId })
-        case 'retry-identity': return creatorWorkflowService.retryFullPetIdentity({ runId: payload.runId })
-        case 'accept-identity': return creatorWorkflowService.acceptCreatorIdentity(payload)
+        case 'retry-action': return creatorWorkflowService.retryFullPetAction({ runId: payload.runId, actionId: payload.actionId, signal })
+        case 'retry-identity': return creatorWorkflowService.retryFullPetIdentity({ runId: payload.runId, signal })
+        case 'accept-identity': return creatorWorkflowService.acceptCreatorIdentity({ ...payload, signal })
         case 'accept-action-candidate': return creatorWorkflowService.acceptCreatorActionCandidate(payload)
         case 'export-recovery': return creatorWorkflowService.exportRecoveryBundle({ runId: payload.runId })
         case 'import-actions': return creatorWorkflowService.importAvailableActions({ runId: payload.runId, activate: payload.activate !== false })
@@ -218,7 +220,7 @@ const createOpenPetRuntime = ({
           throw Object.assign(new Error('Creator workflow operation is unavailable'), { code: 'BACKEND_UNAVAILABLE' })
         }
         case 'evaluate-sprite': {
-          if (typeof pluginService?.runCreatorSpriteEvaluation === 'function') return pluginService.runCreatorSpriteEvaluation(payload)
+          if (typeof pluginService?.runCreatorSpriteEvaluation === 'function') return pluginService.runCreatorSpriteEvaluation(payload, { signal })
           throw Object.assign(new Error('Creator sprite evaluation is unavailable'), { code: 'BACKEND_UNAVAILABLE' })
         }
         default: throw Object.assign(new Error('Unsupported Creator operation'), { code: 'VALIDATION_FAILED' })
