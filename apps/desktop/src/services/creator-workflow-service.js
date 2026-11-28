@@ -2114,15 +2114,25 @@ const createWorkflowProgressView = ({
   }
 }
 
+const readWorkflowRun = ({ runDir, runId }) => {
+  const runPath = path.join(runDir, 'run.json')
+  if (!isPathInsideDirectory({ rootPath: runDir, targetPath: runPath, requireExisting: true })) return null
+  const run = readJsonIfExists(runPath, null)
+  return isPlainObject(run) && normalizeText(run.runId) === runId ? run : null
+}
+
+const readCreatorRunUpdatedAt = ({ pluginDataDir, runId }) => {
+  const safeRun = getSafeCreatorRunDir({ pluginDataDir, runId, requireExisting: true })
+  return safeRun ? readWorkflowRun(safeRun)?.updatedAt : undefined
+}
+
 const readWorkflowDiagnostics = ({ pluginDataDir, runId }) => {
   const safeRun = getSafeCreatorRunDir({ pluginDataDir, runId, requireExisting: true })
   if (!safeRun) return null
-  const runDir = safeRun.runDir
-  const runPath = path.join(runDir, 'run.json')
-  if (!fs.existsSync(runPath)) return null
+  const { runDir } = safeRun
   try {
-    const run = JSON.parse(fs.readFileSync(runPath, 'utf-8'))
-    if (!isPlainObject(run) || normalizeText(run.runId) !== safeRun.runId) return null
+    const run = readWorkflowRun(safeRun)
+    if (!run) return null
     const generatedImage = run?.artifacts?.generatedImage
     const conditioning = generatedImage?.conditioning && typeof generatedImage.conditioning === 'object'
       ? generatedImage.conditioning
@@ -4206,6 +4216,7 @@ module.exports = {
   EDITABLE_TARGET_TYPE,
   IMAGE_PREVIEW_INLINE_MAX_BYTES,
   createFullPetTask,
+  readCreatorRunUpdatedAt,
   readCreatorWorkflowDiagnostics: readWorkflowDiagnostics,
   createCreatorWorkflowService
 }

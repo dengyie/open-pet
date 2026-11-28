@@ -6,7 +6,7 @@ import path from "node:path"
 import { ApiError } from "../../http/middleware.js"
 
 const require = createRequire(import.meta.url)
-const { createFullPetTask, IMAGE_PREVIEW_INLINE_MAX_BYTES, readCreatorWorkflowDiagnostics } = require("../../../../apps/desktop/src/services/creator-workflow-service.js")
+const { createFullPetTask, IMAGE_PREVIEW_INLINE_MAX_BYTES, readCreatorRunUpdatedAt, readCreatorWorkflowDiagnostics } = require("../../../../apps/desktop/src/services/creator-workflow-service.js")
 
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$/
 const SAFE_PATH = /^[^\\/][^\0]*$/
@@ -238,7 +238,20 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 	const byId = (id) => db.prepare("SELECT * FROM creator_flows WHERE owner = ? AND id = ?").get(owner, id)
 	const runById = (id) => db.prepare("SELECT * FROM creator_runs WHERE owner = ? AND id = ?").get(owner, id)
 	const latestRun = () => db.prepare("SELECT * FROM creator_runs WHERE owner = ? ORDER BY updated_at DESC, id ASC LIMIT 1").get(owner)
-	const latestBackendRun = () => db.prepare("SELECT * FROM creator_runs WHERE owner = ? ORDER BY updated_at DESC, id ASC").all(owner).find((row) => backendRunState(row)?.creatorExecution === "backend") || null
+	const latestBackendRun = () => {
+		let pluginDataDir
+		try { pluginDataDir = creatorDataDir?.("openpet.creator-studio") } catch {}
+		let latest = null
+		for (const row of db.prepare("SELECT * FROM creator_runs WHERE owner = ? ORDER BY updated_at DESC, id ASC").all(owner)) {
+			if (backendRunState(row)?.creatorExecution !== "backend") continue
+			const diskTimestamp = runTimestamp({ updatedAt: readCreatorRunUpdatedAt({ pluginDataDir, runId: row.id }) })
+			const updatedAt = Math.max(row.updated_at, diskTimestamp)
+			if (!latest || updatedAt > latest.updated_at || (updatedAt === latest.updated_at && row.id < latest.id)) {
+				latest = { ...row, updated_at: updatedAt }
+			}
+		}
+		return latest
+	}
 	const referencedImageContentHashes = () => {
 		const hashes = new Set()
 		const rows = db.prepare("SELECT state_json FROM creator_runs WHERE owner = ?").all(owner)
@@ -429,8 +442,12 @@ export function createCreatorDomain({ db, shell, ai, enqueueJob, runPluginComman
 
 	const latestRunView = async (operation, runKey, offlineView) => {
 		if (typeof shell?.request !== "function") {
-			const run = creatorPublicRun(latestRun())
-			return { ...offlineView, [runKey]: run, backendLastRun: creatorPublicRun(latestBackendRun()), diagnostics: run?.diagnostics ?? null }
+			const indexedRun = latestRun()
+			const backendRun = latestBackendRun()
+			const backendLastRun = creatorPublicRun(backendRun)
+			const run = backendRun && (!indexedRun || backendRun.id === indexedRun.id || backendRun.updated_at > indexedRun.updated_at)
+				? backendLastRun : creatorPublicRun(indexedRun)
+			return { ...offlineView, [runKey]: run, backendLastRun, diagnostics: run?.diagnostics ?? null }
 		}
 		const desktopView = redact(await authority(operation))
 		const backendLastRun = creatorPublicRun(latestBackendRun())

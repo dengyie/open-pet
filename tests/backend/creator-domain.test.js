@@ -510,6 +510,64 @@ for (const desktopWins of [true, false]) {
 	})
 }
 
+test("Creator endpoints use Studio approval recency even when the Web run's index is older", async (t) => {
+	const { db } = await fixture()
+	t.after(() => db.close())
+	const { createCreatorDomain } = await import("../../services/backend/domains/creator/index.js")
+	const { createRun, updateRunStatus } = require("../../examples/plugins/creator-studio/lib/run-store")
+	const { createCreatorStudioServer } = require("../../examples/plugins/creator-studio/service/studio-service")
+	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openpet-creator-approval-recency-"))
+	t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }))
+	const start = Date.now() - 60_000
+	const { runId } = createRun({
+		dataDir, input: { petName: "Review Cat", creatorExecution: "backend" },
+		now: () => new Date(start).toISOString(),
+	})
+	updateRunStatus({ dataDir, runId, status: "ready_for_review", now: () => new Date(start + 1_000).toISOString() })
+	const desktopRun = { runId: "desktop-preview", state: "preview-ready", updatedAt: start + 3_000 }
+	const insert = db.prepare("INSERT INTO creator_runs (id, owner, mode, status, state_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+	insert.run(runId, "desktop", "full-pet", "ready_for_review", JSON.stringify({ runId, creatorExecution: "backend" }), start, start + 1_000)
+	insert.run("other-web", "desktop", "full-pet", "failed", JSON.stringify({ runId: "other-web", creatorExecution: "backend" }), start, start + 2_000)
+	insert.run(desktopRun.runId, "desktop", "full-pet", "preview-ready", JSON.stringify(desktopRun), start, desktopRun.updatedAt)
+	const shell = { request: async ({ operation }) => ({
+		body: {
+			type: "creator.result", operation, ok: true,
+			result: operation === "get-state" ? { lastRun: desktopRun } : { run: desktopRun },
+		},
+	}) }
+	const creatorDataDir = () => dataDir
+	const creator = createCreatorDomain({ db, shell, creatorDataDir })
+	const offlineCreator = createCreatorDomain({ db, creatorDataDir, runPluginCommand: async () => assert.fail("Unexpected command") })
+	assert.equal((await creator.getState()).lastRun.runId, desktopRun.runId)
+	assert.equal((await creator.getLastRun()).run.runId, desktopRun.runId)
+	assert.equal((await offlineCreator.getState()).lastRun.id, desktopRun.runId)
+
+	const server = createCreatorStudioServer({ dataDir })
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+	t.after(() => new Promise((resolve) => server.close(resolve)))
+	const approval = await fetch(`http://127.0.0.1:${server.address().port}/api/runs/${runId}/approve`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ humanApproval: { approved: true, source: "creator-studio-dashboard", approvedAt: new Date().toISOString(), evidenceVersion: 1 } }),
+	})
+	const approved = await approval.json()
+	assert.equal(approval.status, 200, approved.error)
+	assert.equal(approved.run.status, "approved")
+	const updatedAt = Date.parse(approved.run.updatedAt)
+	assert.ok(updatedAt > desktopRun.updatedAt)
+	assert.equal(db.prepare("SELECT updated_at FROM creator_runs WHERE id = ?").get(runId).updated_at, start + 1_000)
+	for (const domain of [creator, offlineCreator]) {
+		const state = await domain.getState()
+		const last = await domain.getLastRun()
+		assert.equal(state.backendLastRun.id, runId)
+		for (const run of [state.lastRun, last.run]) {
+			assert.equal(run.id, runId)
+			assert.equal(run.status, "approved")
+			assert.equal(run.updatedAt, updatedAt)
+		}
+	}
+})
+
 test("Creator reference deletion is delegated to Shell before metadata removal", async (t) => {
 	const ctx = await fixture()
 	t.after(() => ctx.db.close())
