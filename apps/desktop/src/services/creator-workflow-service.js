@@ -3990,7 +3990,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         }
         let imported
         try {
-          imported = petPackService.importPack(inspection.selectionId, { expectedInstalledPackageHash })
+          imported = await petPackService.importPack(inspection.selectionId, { expectedInstalledPackageHash })
         } catch (error) {
           if (error?.code === 'pet_pack_import_conflict') return createImportConflictResult(error.message)
           throw error
@@ -3999,7 +3999,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
         importedPackageHash = normalizeText(imported?.pack?.packageHash)
         activePet = imported?.pack || null
         if (activate !== false && importedPackId && petPackService.setActivePack) {
-          const activated = petPackService.setActivePack(importedPackId)
+          const activated = await petPackService.setActivePack(importedPackId)
           activatedPackId = normalizeText(activated?.activePackId || importedPackId)
           activePet = activated?.pack || activePet
         }

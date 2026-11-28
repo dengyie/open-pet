@@ -6,4 +6,8 @@ const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => id)
 
 const createPetRendererElements = (createElement) => Object.fromEntries(ids.map((id) => [id, createElement(id)]))
 
-module.exports = { createPetRendererElements }
+const createSpriteImage = (load = (_url, image) => image.onload()) => class {
+  set src(url) { load(url, this) }
+}
+
+module.exports = { createPetRendererElements, createSpriteImage }

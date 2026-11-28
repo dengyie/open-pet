@@ -8,7 +8,7 @@ const zipArchiveUtils = require('./zip-archive-utils')
 const { writeJsonAtomic } = require('./json-file-utils')
 const { getLegacyPetAnimations, loadLegacyPetPack, loadPetPackFromDirectory } = require('../pet/pet-pack/loader')
 const { normalizePetPackManifest } = require('../pet/pet-pack/schema')
-const { decodeSpriteSize } = require('../pet/pet-pack/sprite-image')
+const { assertCompleteSprite, decodeSpriteSize } = require('../pet/pet-pack/sprite-image')
 
 const BUILT_IN_PACK_ID = 'legacy-cat'
 const DEFAULT_BUNDLED_PACKS_DIR = path.join(__dirname, '..', '..', '..', '..', 'assets', 'pet-packs')
@@ -162,20 +162,40 @@ const assertNoSymlinks = (rootPath) => zipArchiveUtils.assertNoSymlinks(rootPath
 
 const invalidPack = (message) => Object.assign(new Error(message), { code: 'VALIDATION_FAILED' })
 
-const validatePackFiles = (pack, { decodeImages = true } = {}) => {
+const resolveSpritePath = (pack, action) => {
+  const spritePath = path.join(pack.rootPath, action.sprite)
+  if (!fs.statSync(spritePath, { throwIfNoEntry: false })?.isFile()) {
+    throw invalidPack(`Pet pack action sprite does not exist: ${action.sprite}`)
+  }
+  assertInsideDirectory(pack.rootPath, spritePath, `action(${action.id}).sprite`)
+  return spritePath
+}
+
+const spriteDecodeError = (action, error) => invalidPack(`Pet pack action sprite could not be decoded: ${action.sprite} (${error.message})`)
+
+const validatePackFiles = (pack, { checkCompleteness = false } = {}) => {
+  const checked = new Set()
+  for (const action of pack.manifest.actions) {
+    const spritePath = resolveSpritePath(pack, action)
+    if (!checkCompleteness || checked.has(spritePath)) continue
+    try {
+      assertCompleteSprite(fs.readFileSync(spritePath))
+    } catch (error) {
+      throw spriteDecodeError(action, error)
+    }
+    checked.add(spritePath)
+  }
+}
+
+const validatePackSprites = async (pack) => {
   const spriteSizes = new Map()
   for (const action of pack.manifest.actions) {
-    const spritePath = path.join(pack.rootPath, action.sprite)
-    if (!fs.existsSync(spritePath)) {
-      throw new Error(`Pet pack action sprite does not exist: ${action.sprite}`)
-    }
-    assertInsideDirectory(pack.rootPath, spritePath, `action(${action.id}).sprite`)
-    if (!decodeImages) continue
+    const spritePath = resolveSpritePath(pack, action)
     if (!spriteSizes.has(spritePath)) {
       try {
-        spriteSizes.set(spritePath, decodeSpriteSize(spritePath))
+        spriteSizes.set(spritePath, await decodeSpriteSize(await fs.promises.readFile(spritePath)))
       } catch (error) {
-        throw invalidPack(`Pet pack action sprite could not be decoded: ${action.sprite} (${error.message})`)
+        throw spriteDecodeError(action, error)
       }
     }
     const { width, height } = spriteSizes.get(spritePath)
@@ -306,7 +326,7 @@ const createPetPackService = ({
 
   const listBundledPacks = () => listBundledPackRoots(bundledPacksDir).map((packRoot) => {
     const pack = loadPetPackFromDirectory(packRoot)
-    validatePackFiles(pack, { decodeImages: false })
+    validatePackFiles(pack)
     return {
       ...pack,
       source: { type: 'built-in', path: packRoot }
@@ -335,12 +355,12 @@ const createPetPackService = ({
     return status
   }
 
-  const loadInstalledPack = (packId) => {
+  const loadInstalledPack = (packId, { checkCompleteness = true } = {}) => {
     const metadata = getSettings().installed[packId]
     if (!metadata) throw new Error(`Pet pack is not installed: ${packId}`)
     const pack = loadPetPackFromDirectory(path.join(userPacksDir, packId))
     if (pack.manifest.id !== packId) throw new Error(`Installed pet pack id mismatch: ${packId}`)
-    validatePackFiles(pack)
+    validatePackFiles(pack, { checkCompleteness })
     return {
       ...pack,
       source: { type: 'user-installed', path: pack.rootPath },
@@ -431,7 +451,7 @@ const createPetPackService = ({
     return { activePackId: petPackSettings.activePackId, packs }
   }
 
-  const inspectPackDirectory = (sourceDir) => {
+  const inspectPackDirectory = async (sourceDir) => {
     const selectionId = createSelectionId()
     const result = {
       selectionId,
@@ -451,7 +471,7 @@ const createPetPackService = ({
       const pack = loadPetPackFromDirectory(sourceDir)
       assertInstallablePackId(pack.manifest.id)
       const blockStatus = assertPackAllowed({ id: pack.manifest.id, sha256: packageHash })
-      validatePackFiles(pack)
+      await validatePackSprites(pack)
       result.valid = true
       result.pack = {
         ...createPackSummary({
@@ -519,7 +539,7 @@ const createPetPackService = ({
       const pack = loadPetPackFromDirectory(petPackRoot)
       assertInstallablePackId(pack.manifest.id)
       const blockStatus = assertPackAllowed({ id: pack.manifest.id, sha256: packageHash, sourceSha256: sourcePackageHash })
-      validatePackFiles(pack)
+      await validatePackSprites(pack)
       result.valid = true
       result.rootPath = petPackRoot
       result.pack = {
@@ -570,7 +590,7 @@ const createPetPackService = ({
     return { ok: true }
   }
 
-  const importPack = (selectionId, { packageHash = '', sourcePackageHash = '', expectedInstalledPackageHash } = {}) => {
+  const importPack = async (selectionId, { packageHash = '', sourcePackageHash = '', expectedInstalledPackageHash } = {}) => {
     const selection = getPendingSelection(selectionId)
     assertNoSymlinks(selection.sourceDir)
     const pack = loadPetPackFromDirectory(selection.sourceDir)
@@ -597,7 +617,8 @@ const createPetPackService = ({
       makeStagedPackWritable(stagedDir)
       const stagedPack = loadPetPackFromDirectory(stagedDir)
       if (stagedPack.manifest.id !== packId) throw new Error('Pet pack id changed during import')
-      validatePackFiles(stagedPack)
+      await validatePackSprites(stagedPack)
+      getPendingSelection(selectionId)
       const contentPackageHash = packageHash || getDirectoryPackageHash(stagedDir)
       const downloadedPackageHash = sourcePackageHash || selection.sourcePackageHash || ''
       assertPackAllowed({ id: packId, packageHash: contentPackageHash, sourceSha256: downloadedPackageHash })
@@ -874,12 +895,14 @@ const createPetPackService = ({
     return structuredClone(loadInstalledPack(packId).manifest)
   }
 
-  const setActivePack = (packId) => {
+  const setActivePack = async (packId) => {
     if (!isSafePackId(packId)) throw new Error('Pet pack id is invalid')
     const metadata = getSettings().installed[packId]
     const bundledPolicyInput = getBundledPackPolicyInput(packId)
     assertPackAllowed(bundledPolicyInput || { id: packId, packageHash: metadata?.packageHash || '', sourceSha256: metadata?.sourcePackageHash || '' })
-    if (!isBuiltInPackId(packId)) loadInstalledPack(packId)
+    if (!bundledPolicyInput && packId !== BUILT_IN_PACK_ID) {
+      await validatePackSprites(loadInstalledPack(packId, { checkCompleteness: false }))
+    }
     const current = getSettings()
     const nextSettings = savePetPackSettings({ ...current, activePackId: packId })
     return { activePackId: nextSettings.activePackId, pack: createPackSummary(getActivePetPack(), { active: true }) }

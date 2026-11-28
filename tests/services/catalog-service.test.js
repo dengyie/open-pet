@@ -5,7 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { execFileSync } = require('node:child_process')
-const { createCanvas } = require('@napi-rs/canvas')
+const sharp = require('sharp')
 
 const { createCatalogService } = require('../../apps/desktop/src/services/catalog-service')
 const { createPluginInstallService } = require('../../apps/desktop/src/services/plugin-install-service')
@@ -64,10 +64,11 @@ const createPluginPackage = ({ id = 'focus-timer', version = '1.0.0' } = {}) => 
   return root
 }
 
-const createPetPackDirectory = ({ id = 'pixel-cat', version = '1.0.0' } = {}) => {
+const createPetPackDirectory = async ({ id = 'pixel-cat', version = '1.0.0' } = {}) => {
   const root = createTempDir('catalog-pet-pack')
   fs.mkdirSync(path.join(root, 'sprites'), { recursive: true })
-  fs.writeFileSync(path.join(root, 'sprites', 'idle.png'), createCanvas(32, 32).toBuffer('image/png'))
+  const sprite = await sharp({ create: { width: 32, height: 32, channels: 3, background: 'black' } }).png().toBuffer()
+  fs.writeFileSync(path.join(root, 'sprites', 'idle.png'), sprite)
   fs.writeFileSync(path.join(root, 'pet.json'), JSON.stringify({
     schemaVersion: 1,
     id,
@@ -290,7 +291,7 @@ test('catalog service downloads, reviews, and installs a plugin package', async 
   })
 
   const selection = await catalogService.prepareInstall({ kind: 'plugin', itemId: 'focus-timer' })
-  const installed = catalogService.installSelection(selection.selectionId)
+  const installed = await catalogService.installSelection(selection.selectionId)
 
   assert.equal(selection.pluginReview.plugin.id, 'focus-timer')
   assert.equal(installed.ok, true)
@@ -299,7 +300,7 @@ test('catalog service downloads, reviews, and installs a plugin package', async 
 })
 
 test('catalog service downloads and installs a pet pack package', async () => {
-  const packZip = zipDirectory(createPetPackDirectory())
+  const packZip = zipDirectory(await createPetPackDirectory())
   const catalogPath = writeCatalog({
     petPacks: [{ id: 'pixel-cat', displayName: 'Pixel Cat', version: '1.0.0', packageUrl: 'https://catalog.test/pixel.zip', sha256: packZip.sha256 }]
   })
@@ -309,7 +310,7 @@ test('catalog service downloads and installs a pet pack package', async () => {
   })
 
   const selection = await catalogService.prepareInstall({ kind: 'pet-pack', itemId: 'pixel-cat' })
-  const installed = catalogService.installSelection(selection.selectionId)
+  const installed = await catalogService.installSelection(selection.selectionId)
 
   assert.equal(selection.petPackReview.pack.id, 'pixel-cat')
   assert.equal(installed.ok, true)
@@ -323,7 +324,7 @@ test('catalog service downloads and installs a pet pack package', async () => {
   assert.equal(catalog.petPacks[0].blockStatus.blocked, true)
   assert.equal(catalog.petPacks[0].blockStatus.reasons.some((reason) => reason === `sha256:${selection.petPackReview.pack.packageHash}`), true)
   assert.equal(catalog.petPacks[0].blockStatus.reasons.some((reason) => reason === `sha256:${packZip.sha256}`), true)
-  assert.throws(() => petPackService.setActivePack('pixel-cat'), /blocked/)
+  await assert.rejects(() => petPackService.setActivePack('pixel-cat'), /blocked/)
 })
 
 test('catalog service rejects unsafe catalog item ids', () => {

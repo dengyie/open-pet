@@ -773,7 +773,7 @@ const registerIpcHandlers = ({ getPetWindow, petService, petPackService, aiServi
             selectionId = inspection.selectionId
           }
           const previousActivePackId = petPackService.listPacks()?.activePackId || ''
-          const result = petPackService.importPack(selectionId)
+          const result = await petPackService.importPack(selectionId)
           const petPacks = petPackService.listPacks()
           if (result?.pack?.id && petPacks?.activePackId === result.pack.id) {
             const animations = reloadAndSendAnimations(getPetWindow, petService)
@@ -804,7 +804,7 @@ const registerIpcHandlers = ({ getPetWindow, petService, petPackService, aiServi
         }
         case 'activate': {
           const previousActivePackId = petPackService.listPacks()?.activePackId || ''
-          const result = petPackService.setActivePack(payload.packId)
+          const result = await petPackService.setActivePack(payload.packId)
           const petPacks = petPackService.listPacks()
           const activePackChanged = previousActivePackId !== petPacks?.activePackId
           const animations = activePackChanged

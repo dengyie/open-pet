@@ -200,7 +200,6 @@
     }
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.100",
     "@openpet/contracts": "0.0.0",
     "@openpet/shared": "0.0.0",
     "@tanstack/react-query": "^5.101.4",

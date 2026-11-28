@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
-const { createPetRendererElements } = require('./fixtures/pet-renderer-elements')
+const { createPetRendererElements, createSpriteImage } = require('./fixtures/pet-renderer-elements')
 
 const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'apps', 'desktop', 'renderer.js'), 'utf-8')
 
@@ -32,7 +32,7 @@ const createElement = (id = '') => ({
   closest() { return null }
 })
 
-const createRendererHarness = async () => {
+const createRendererHarness = async ({ loadSprite } = {}) => {
   const viewportCalls = []
   const elements = createPetRendererElements(createElement)
   let nextTimerId = 1
@@ -48,6 +48,7 @@ const createRendererHarness = async () => {
       createElement: () => createElement()
     },
     window: {
+      Image: createSpriteImage(loadSprite),
       innerWidth: 300,
       innerHeight: 300,
       OpenPetCursorStyle: { resolvePetCursorStyle: () => '' },
@@ -97,6 +98,35 @@ const createRendererHarness = async () => {
   await Promise.resolve()
   return { activeTimers, callbacks, elements, logs, viewportCalls }
 }
+
+test('the renderer keeps the previous sprite until a broken action is replaced by the built-in fallback', async () => {
+  const loading = new Map()
+  const { callbacks, elements, logs } = await createRendererHarness({
+    loadSprite: (url, image) => loading.set(url, image)
+  })
+  loading.get('idle.png').onload()
+  callbacks.action({ actionId: 'waving' })
+  assert.equal(elements.cat.style.backgroundImage, 'url(idle.png)')
+  loading.get('waving.png').onerror()
+  assert.equal(elements.cat.style.backgroundImage, 'url(idle.png)')
+  const fallback = '../../cat_anime/sprites/bai_no_bg.png'
+  loading.get(fallback).onload()
+  assert.equal(elements.cat.style.backgroundImage, `url(${fallback})`)
+  assert.equal(logs.find((entry) => entry.details?.reason === 'sprite-load-failed')?.details.requestedAction, 'waving')
+})
+
+test('a stale sprite error does not replace a newer action', async () => {
+  const loading = new Map()
+  const { callbacks, elements } = await createRendererHarness({
+    loadSprite: (url, image) => loading.set(url, image)
+  })
+  loading.get('idle.png').onload()
+  callbacks.action({ actionId: 'waving' })
+  callbacks.action({ actionId: 'idle' })
+  loading.get('waving.png').onerror()
+  assert.deepEqual([...loading.keys()], ['idle.png', 'waving.png'])
+  assert.equal(elements.cat.style.backgroundImage, 'url(idle.png)')
+})
 
 test('scale changes freeze the pet on the default action instead of continuing an animation', async () => {
   const { activeTimers, callbacks, elements, logs } = await createRendererHarness()

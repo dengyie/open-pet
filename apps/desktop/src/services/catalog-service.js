@@ -353,7 +353,7 @@ const createCatalogService = ({
     return selection
   }
 
-  const installSelection = (selectionId) => {
+  const installSelection = async (selectionId) => {
     const selection = getPendingSelection(selectionId)
     let result
     if (selection.kind === 'plugin') {
@@ -362,7 +362,7 @@ const createCatalogService = ({
         : pluginInstallService.installPlugin(selection.pluginSelectionId, { sourcePackageHash: selection.sourcePackageHash })
       result = { ...result, plugins: pluginService.listPlugins() }
     } else {
-      result = petPackService.importPack(selection.petPackSelectionId, { sourcePackageHash: selection.sourcePackageHash })
+      result = await petPackService.importPack(selection.petPackSelectionId, { sourcePackageHash: selection.sourcePackageHash })
       result = { ...result, petPacks: petPackService.listPacks() }
     }
     pendingSelections.delete(selectionId)
