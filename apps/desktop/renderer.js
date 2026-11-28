@@ -32,8 +32,7 @@ const FALLBACK_ANIMATION = {
   frameWidth: 191,
   frameHeight: 453,
   frameCount: 16,
-  frameMs: 95,
-  loop: true
+  frameMs: 95
 }
 const cursorStyle = {
   resolvePetCursorStyle: () => '',
@@ -573,7 +572,8 @@ const setAction = (action, options = {}) => {
       requestedAction: action,
       reason: 'sprite-load-failed'
     }, { level: 'warn', message: 'Pet sprite failed to load' })
-    preload(FALLBACK_ANIMATION, () => applyLoadedAction(action, FALLBACK_ANIMATION, { ...options, announce: false }), () => {
+    const fallback = { ...FALLBACK_ANIMATION, loop: a.loop || action === state.defaultAction }
+    preload(fallback, () => applyLoadedAction(action, fallback, { ...options, announce: false }), () => {
       state.spritePending = false
       if (state.currentAnimation && !state.scalePreview) scheduleFrameTick()
     })

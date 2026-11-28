@@ -37,6 +37,16 @@ const createRendererHarness = async ({ loadSprite } = {}) => {
   const elements = createPetRendererElements(createElement)
   let nextTimerId = 1
   const activeTimers = new Map()
+  const timerCallbacks = new Map()
+  const clearTimer = (id) => {
+    activeTimers.delete(id)
+    timerCallbacks.delete(id)
+  }
+  const runNextTimer = () => {
+    const [id, callback] = timerCallbacks.entries().next().value
+    clearTimer(id)
+    callback()
+  }
   const callbacks = {}
   const logs = []
   const context = {
@@ -58,12 +68,13 @@ const createRendererHarness = async ({ loadSprite } = {}) => {
         getViewportHitbox: () => ({ left: 0, top: 0, right: 1, bottom: 1 }),
         isPointInHitbox: () => true
       },
-      clearTimeout: (id) => activeTimers.delete(id),
+      clearTimeout: clearTimer,
       addEventListener: () => {},
       setInterval: () => 0,
-      setTimeout: (_callback, delay) => {
+      setTimeout: (callback, delay) => {
         const id = nextTimerId++
         activeTimers.set(id, delay)
+        timerCallbacks.set(id, callback)
         return id
       },
       petAPI: {
@@ -96,7 +107,7 @@ const createRendererHarness = async ({ loadSprite } = {}) => {
   vm.runInNewContext(rendererSource, context, { filename: 'renderer.js' })
   await Promise.resolve()
   await Promise.resolve()
-  return { activeTimers, callbacks, elements, logs, viewportCalls }
+  return { activeTimers, callbacks, elements, logs, viewportCalls, runNextTimer }
 }
 
 test('the renderer keeps the previous sprite until a broken action is replaced by the built-in fallback', async () => {
@@ -125,6 +136,22 @@ test('a stale sprite error does not replace a newer action', async () => {
   callbacks.action({ actionId: 'idle' })
   loading.get('waving.png').onerror()
   assert.deepEqual([...loading.keys()], ['idle.png', 'waving.png'])
+  assert.equal(elements.cat.style.backgroundImage, 'url(idle.png)')
+})
+
+test('the renderer returns to pet idle after one cycle of the fallback for a failed one-shot', async () => {
+  const loading = new Map()
+  const { callbacks, elements, runNextTimer } = await createRendererHarness({
+    loadSprite: (url, image) => loading.set(url, image)
+  })
+  loading.get('idle.png').onload()
+  callbacks.action({ actionId: 'waving' })
+  loading.get('waving.png').onerror()
+  const fallback = '../../cat_anime/sprites/bai_no_bg.png'
+  loading.get(fallback).onload()
+  for (let frame = 0; frame < 15; frame += 1) runNextTimer()
+  assert.equal(elements.cat.style.backgroundImage, `url(${fallback})`)
+  runNextTimer()
   assert.equal(elements.cat.style.backgroundImage, 'url(idle.png)')
 })
 
