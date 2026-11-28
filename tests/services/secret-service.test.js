@@ -186,6 +186,32 @@ test('secret service injects only provider keys and preserves provider metadata'
   })
 })
 
+test('chat key updates preserve both image credentials in an upgraded profile', () => {
+  const storePath = createTempStore()
+  const safeStorage = createFakeSafeStorage()
+  const imageRef = 'secret:model.image.openai.apiKey'
+  const desktopKey = 'fixture-desktop-image-key'
+  const aiPageKey = 'fixture-ai-page-image-key'
+  const entry = (value) => ({ encrypted: true, value: safeStorage.encryptString(value).toString('base64') })
+  fs.writeFileSync(storePath, JSON.stringify({
+    secrets: { [imageRef]: entry(desktopKey), openai: entry(aiPageKey) }
+  }))
+
+  const upgraded = createSecretService({ storePath, safeStorage })
+  assert.equal(upgraded.getSecretValue(imageRef), aiPageKey)
+  upgraded.setSecret({ id: 'ai.default', value: 'fixture-chat-key' })
+
+  const { secrets } = JSON.parse(fs.readFileSync(storePath, 'utf8'))
+  assert.equal(safeStorage.decryptString(Buffer.from(secrets[imageRef].value, 'base64')), desktopKey)
+  assert.equal(safeStorage.decryptString(Buffer.from(secrets.openai.value, 'base64')), aiPageKey)
+  const reloaded = createSecretService({ storePath, safeStorage })
+  assert.equal(reloaded.getSecretValue(imageRef), aiPageKey)
+  assert.equal(reloaded.listProviderKeys().openai, aiPageKey)
+
+  reloaded.deleteSecret('openai')
+  assert.equal(createSecretService({ storePath, safeStorage }).getSecretValue(imageRef), '')
+})
+
 test('secret service migrates the legacy store without deleting it', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openpet-secrets-migration-'))
   const legacyStorePath = path.join(root, 'secrets.json')

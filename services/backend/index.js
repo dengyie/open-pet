@@ -683,7 +683,16 @@ if (!runtime.degraded && runtime.jobs) {
 		onSnapshot: (snapshot) => { if (!runtime.residentBackend) shell.send({ type: "ai.state", snapshot }) },
 		fetchImpl: globalThis.fetch, logger,
 	})
-		runtime.ai = createAiService({ settings: runtime.settings, secrets: runtime.secrets, fetchImpl: globalThis.fetch, logger, userDataDir: runtime.userDataDir })
+		runtime.ai = createAiService({
+			settings: runtime.settings, secrets: runtime.secrets, fetchImpl: globalThis.fetch, logger, userDataDir: runtime.userDataDir,
+			applyImageConfig: runtime.residentBackend ? undefined : async ({ version, config }) => {
+				const reply = await shell.request({
+					type: "settings.apply.request", paths: ["models.imageGeneration"], version,
+					values: { models: { imageGeneration: config } },
+				})
+				if (reply?.body?.ok !== true) throw new ApiError("BACKEND_UNAVAILABLE", "Shell could not apply image provider settings")
+			},
+		})
 		runtime.queue = createQueue({
 			repo: runtime.jobs,
 			logger,

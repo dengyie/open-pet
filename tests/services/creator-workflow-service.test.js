@@ -13,6 +13,7 @@ const {
   EDITABLE_TARGET_TYPE,
   createCreatorWorkflowService
 } = require('../../apps/desktop/src/services/creator-workflow-service')
+const { createImageGenerationModelService } = require('../../apps/desktop/src/services/image-generation-model-service')
 const { readRun } = require('../../examples/plugins/creator-studio/lib/run-store')
 const { getQualityFirstQualityProfile } = require('../../examples/plugins/creator-studio/lib/pet-generation-quality-profile')
 
@@ -520,6 +521,29 @@ test('creator reuses a recent successful health result for generation preflight'
   })
   assert.equal(result.state, 'review-required')
   assert.equal(calls, 1)
+})
+
+test('Create uses verified alternatives discovered by its first read-only provider health check', async () => {
+  const imageModelService = createImageGenerationModelService({
+    settingsService: {
+      get: () => ({ models: { imageGeneration: {
+        provider: 'openai-compatible', baseUrl: 'https://images.example.test/v1', model: 'unverified-model'
+      } } }),
+      save: () => assert.fail('Shell must not persist the Backend-owned model catalog')
+    },
+    secretService: { getSecretValue: () => 'fixture-image-key' },
+    canPersistModelCatalog: () => false,
+    fetchImpl: async () => Response.json({ data: [{ id: 'gpt-image-2' }] })
+  })
+  const { service, commandCalls } = createHealthCoordinationFixture(imageModelService)
+  assert.deepEqual(imageModelService.getConfig().creatorWorkflowModelPolicy.verifiedModels, [])
+
+  const result = await service.generateExistingAction({ actionName: 'spin', motionPrompt: 'spin' })
+
+  assert.equal(result.state, 'review-required')
+  assert.ok(commandCalls.some(([, command]) => command === 'draft-task'))
+  assert.equal((await service.getState()).provider.ready, true)
+  assert.deepEqual(imageModelService.getConfig().creatorWorkflowModelPolicy.fallbackModels, ['gpt-image-2'])
 })
 
 test('creator health cache expires and configuration changes invalidate it', async () => {

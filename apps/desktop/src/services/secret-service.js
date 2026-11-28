@@ -4,6 +4,9 @@ const { CAPABILITY_SECRET_REFS } = require('./provider-owner-policy')
 const { DEFAULT_HATCH_PET_AGENT_CONFIG } = require('./hatch-pet-agent-contracts')
 
 const PLAINTEXT_STORAGE_WARNING = 'safeStorage 不可用，Provider 密钥正以 0600 权限的明文文件保存。'
+const IMAGE_SECRET_REF = CAPABILITY_SECRET_REFS.image
+const BACKEND_IMAGE_SECRET_ID = 'openai'
+const isImageSecretId = (id) => id === BACKEND_IMAGE_SECRET_ID || id === IMAGE_SECRET_REF
 const PROVIDER_SECRET_REFS = new Set([
   ...Object.values(CAPABILITY_SECRET_REFS),
   DEFAULT_HATCH_PET_AGENT_CONFIG.apiKeyRef
@@ -130,6 +133,16 @@ const createSecretService = (options = {}) => {
     ? legacyStorePath
     : storePath
   let store = readStore(migrationSource, resolvedSafeStorage)
+  if (Object.hasOwn(store.secrets, BACKEND_IMAGE_SECRET_ID) && !Object.hasOwn(store.secrets, IMAGE_SECRET_REF)) {
+    store.secrets[IMAGE_SECRET_REF] = store.secrets[BACKEND_IMAGE_SECRET_ID]
+    delete store.secrets[BACKEND_IMAGE_SECRET_ID]
+  }
+  const resolveStorageId = (id) => !isImageSecretId(id) ? id
+    : Object.hasOwn(store.secrets, BACKEND_IMAGE_SECRET_ID) ? BACKEND_IMAGE_SECRET_ID : IMAGE_SECRET_REF
+  const revisions = new Map()
+  const revisionId = (id) => isImageSecretId(id) ? IMAGE_SECRET_REF : id
+  const getSecretRevision = (id) => revisions.get(revisionId(id)) ?? 0
+  const bumpRevision = (id) => revisions.set(revisionId(id), getSecretRevision(id) + 1)
 
   // Keep the legacy file as a rollback/migration source, but make the
   // architecture-owned path authoritative from this startup onward.
@@ -139,11 +152,12 @@ const createSecretService = (options = {}) => {
 
   const setSecret = ({ id, value, label = id, kind }) => {
     if (!id) throw new Error('Secret id is required')
-    const providerSecret = kind === 'provider' || store.secrets[id]?.kind === 'provider' || PROVIDER_SECRET_REFS.has(id)
+    const storageId = resolveStorageId(id)
+    const providerSecret = kind === 'provider' || store.secrets[storageId]?.kind === 'provider' || PROVIDER_SECRET_REFS.has(revisionId(id))
     const nextStore = {
       secrets: {
         ...store.secrets,
-        [id]: {
+        [storageId]: {
           label,
           value: String(value || ''),
           updatedAt: new Date().toISOString(),
@@ -153,17 +167,24 @@ const createSecretService = (options = {}) => {
     }
     persist(nextStore)
     store = nextStore
+    bumpRevision(storageId)
     return { id, label, hasValue: Boolean(value) }
   }
 
-  const getSecretValue = (id) => store.secrets[id]?.value || ''
+  const getSecretValue = (id) => store.secrets[resolveStorageId(id)]?.value || ''
 
   const deleteSecret = (id) => {
     const secrets = { ...store.secrets }
-    delete secrets[id]
+    if (isImageSecretId(id)) {
+      delete secrets[IMAGE_SECRET_REF]
+      delete secrets[BACKEND_IMAGE_SECRET_ID]
+    } else {
+      delete secrets[id]
+    }
     const nextStore = { secrets }
     persist(nextStore)
     store = nextStore
+    bumpRevision(id)
   }
 
   const listSecretRefs = () => Object.entries(store.secrets)
@@ -173,17 +194,22 @@ const createSecretService = (options = {}) => {
       hasValue: Boolean(secret.value)
     }))
 
-  const listProviderKeys = () => Object.fromEntries(
-    Object.entries(store.secrets)
-      .filter(([id, secret]) => Boolean(secret.value) && (secret.kind === 'provider' || PROVIDER_SECRET_REFS.has(id)))
-      .map(([id, secret]) => [id, secret.value])
-  )
+  const listProviderKeys = () => {
+    const keys = Object.fromEntries(
+      Object.entries(store.secrets)
+        .filter(([id, secret]) => !isImageSecretId(id) && Boolean(secret.value) && (secret.kind === 'provider' || PROVIDER_SECRET_REFS.has(id)))
+        .map(([id, secret]) => [id, secret.value])
+    )
+    const imageKey = getSecretValue(IMAGE_SECRET_REF)
+    if (imageKey) keys[BACKEND_IMAGE_SECRET_ID] = imageKey
+    return keys
+  }
 
   const getSecurityState = () => isSafeStorageAvailable(resolvedSafeStorage)
     ? { encryptionAvailable: true, storage: 'safeStorage', warning: '' }
     : { encryptionAvailable: false, storage: 'plaintext-0600', warning: PLAINTEXT_STORAGE_WARNING }
 
-  return { setSecret, getSecretValue, deleteSecret, listSecretRefs, listProviderKeys, getSecurityState }
+  return { setSecret, getSecretValue, getSecretRevision, deleteSecret, listSecretRefs, listProviderKeys, getSecurityState }
 }
 
 module.exports = { createSecretService }

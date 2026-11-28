@@ -74,15 +74,14 @@ function resolveWebImageRoot(userDataDir) {
 	return fs.realpathSync.native(webRoot)
 }
 
-function settingsAdapter(settings) {
+function settingsAdapter(settings, applyImageConfig) {
 	let pending = Promise.resolve()
 	const saveCapability = (capability, next) => {
-		const operation = pending.then(() => {
+		const operation = pending.then(async () => {
 			const current = settings.read()
-			return settings.patch({ ifVersion: current.version, patch: { [`models.${capability}`]: next } })
-		}, () => {
-			const current = settings.read()
-			return settings.patch({ ifVersion: current.version, patch: { [`models.${capability}`]: next } })
+			const result = await settings.patch({ ifVersion: current.version, patch: { [`models.${capability}`]: next } })
+			if (capability === "imageGeneration") await applyImageConfig?.({ version: result.version, config: next })
+			return result
 		})
 		const mapped = operation.catch((cause) => {
 			if (cause instanceof ApiError) throw cause
@@ -157,10 +156,10 @@ function assertRealContained(root, candidate, message) {
 	return realExisting
 }
 
-export function createAiService({ settings, secrets, fetchImpl, logger, userDataDir } = {}) {
+export function createAiService({ settings, secrets, fetchImpl, logger, userDataDir, applyImageConfig } = {}) {
 	if (!settings?.read || !settings?.patch) throw new TypeError("AI domain requires settings")
 	if (!secrets?.get) throw new TypeError("AI domain requires secrets")
-	const settingsBridge = settingsAdapter(settings)
+	const settingsBridge = settingsAdapter(settings, applyImageConfig)
 	const secretsBridge = secretAdapter(secrets)
 	const provider = createImageGenerationModelService({
 		settingsService: settingsBridge,

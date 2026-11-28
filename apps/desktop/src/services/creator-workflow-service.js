@@ -2663,7 +2663,7 @@ const createWorkflowInProgressResult = () => createWorkflowResult({
 
     const health = await getProviderHealth()
     const providerReadiness = createCreatorProviderReadiness({
-      config: providerConfig,
+      config: imageGenerationModelService.getConfig(),
       health
     })
     if (!providerReadiness.ok) {
