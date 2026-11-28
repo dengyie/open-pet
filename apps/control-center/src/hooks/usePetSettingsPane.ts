@@ -6,7 +6,7 @@ import { cloneSettings, defaultSettings } from '../lib/defaults.ts'
 import { messageFromError } from '../lib/errors.ts'
 import { shouldRestoreScalePreview } from '../lib/pet-scale-preview.mjs'
 import { mergeSavedFields, shouldApplySaveResponse } from '../lib/async-save-state.mjs'
-import { mergeExternalCursorSettings, resolvePersistedCursorMutation } from '../lib/pet-settings-cursor-state.mjs'
+import { resolvePersistedCursorMutation } from '../lib/pet-settings-cursor-state.mjs'
 import { useSse } from './useSse.ts'
 import {
   CUSTOM_CURSOR_MAX_SIZE_PERCENT,
@@ -172,8 +172,8 @@ export function usePetSettingsPane() {
     [settings.customCursors, settings.hiddenCursorIds]
   )
 
-  const persistSettings = async (nextSettings: ControlCenterSettings, successMessage: string, errorFallback: string) => {
-    const submittedSettings = cloneSettings(nextSettings)
+  const persistSettings = async (submittedSettings: Partial<ControlCenterSettings>, successMessage: string, errorFallback: string) => {
+    const previousSettings = originalRef.current
     const revision = ++saveRevisionRef.current
     // Invalidate GETs already in flight; a response started before this write
     // must not overwrite the optimistic mutation after it settles.
@@ -185,10 +185,10 @@ export function usePetSettingsPane() {
       const saved = await saveSettingsWithRetry({
         api: settingsHttpApi,
         base,
-        previousView: originalRef.current,
+        previousView: previousSettings,
         nextView: submittedSettings,
       })
-      const submittedPatch = createCanonicalSettingsPatch(originalRef.current, submittedSettings)
+      const submittedPatch = createCanonicalSettingsPatch(previousSettings, submittedSettings)
       const savedSnapshot = { version: saved.version, values: applyCanonicalSettingsPatch(saved.snapshot?.values || base.values, submittedPatch) }
       snapshotRef.current = savedSnapshot
       acceptedSettingsVersionRef.current = Math.max(acceptedSettingsVersionRef.current, savedSnapshot.version)
@@ -199,7 +199,7 @@ export function usePetSettingsPane() {
       setOriginalSettings(savedSettings)
       setSettings((current) => cloneSettings(mergeSavedFields({
         current,
-        submitted: submittedSettings,
+        submitted: { ...previousSettings, ...submittedSettings },
         saved: savedSettings
       })))
       if (successMessage) setStatus(successMessage)
@@ -214,6 +214,10 @@ export function usePetSettingsPane() {
       setSaving(pendingSaveCountRef.current > 0)
     }
   }
+
+  const persistCursorSettings = (nextSettings: ControlCenterSettings, successMessage: string, errorFallback: string) => (
+    persistSettings(normalizeCursorState(nextSettings), successMessage, errorFallback)
+  )
 
   const onChange = (partial: Partial<ControlCenterSettings>, previewScale = false) => {
     const nextSettings = applyCursorState(settings, {
@@ -244,7 +248,7 @@ export function usePetSettingsPane() {
     const previousSettings = settings
     const nextSettings = applyCursorState(settings, { customCursorScope: nextScope })
     setSettings(nextSettings)
-    const savedSettings = await persistSettings(
+    const savedSettings = await persistCursorSettings(
       nextSettings,
       nextScope === 'system' ? '已将自定义指针应用到整个电脑' : '已设置为仅 OpenPet 使用自定义指针',
       '指针作用范围保存失败'
@@ -274,8 +278,9 @@ export function usePetSettingsPane() {
     const previousSettings = settings
     const nextSettings = applyCursorState(settings, { selectedCursorId: cursorId || SYSTEM_CURSOR_ID })
     setSettings(nextSettings)
+    const { selectedCursorId, customCursor, customCursorScope } = nextSettings
     const savedSettings = await persistSettings(
-      nextSettings,
+      { selectedCursorId, customCursor, customCursorScope },
       cursorId === SYSTEM_CURSOR_ID
         ? '已切换为系统默认指针'
         : nextSettings.customCursorScope === 'system'
@@ -305,7 +310,7 @@ export function usePetSettingsPane() {
         customCursors: nextCustomCursors
       })
       setSettings(nextSettings)
-      const savedSettings = await persistSettings(
+      const savedSettings = await persistCursorSettings(
         nextSettings,
         `已添加并启用指针：${result.cursor.name}`,
         '鼠标指针图片保存失败'
@@ -341,7 +346,7 @@ export function usePetSettingsPane() {
     ])
     const nextSettings = applyCursorState(settings, { customCursors: nextCustomCursors })
     setSettings(nextSettings)
-    const savedSettings = await persistSettings(
+    const savedSettings = await persistCursorSettings(
       nextSettings,
       `已将 ${targetCursor.name} 调整为 ${Math.min(CUSTOM_CURSOR_MAX_SIZE_PERCENT, Math.max(CUSTOM_CURSOR_MIN_SIZE_PERCENT, sizePercent))}%`,
       '指针尺寸保存失败'
@@ -374,7 +379,7 @@ export function usePetSettingsPane() {
       )
     })
     setSettings(nextSettings)
-    const savedSettings = await persistSettings(
+    const savedSettings = await persistCursorSettings(
       nextSettings,
       deletingSelectedCursor
         ? `已删除指针：${targetCursor.name}，并切换为系统默认`
@@ -407,7 +412,7 @@ export function usePetSettingsPane() {
       customCursors: nextCursorState.customCursors
     })
     setSettings(nextSettings)
-    const savedSettings = await persistSettings(
+    const savedSettings = await persistCursorSettings(
       nextSettings,
       `已恢复 ${targetCursor.name} 的默认大小`,
       '指针默认大小恢复失败'

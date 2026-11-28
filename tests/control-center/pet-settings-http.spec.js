@@ -56,3 +56,72 @@ test('a Home anchor notification preserves a draft size preview and updates the 
   ])
   await expect(scale).toHaveValue('135')
 })
+
+test('an instant cursor save leaves pet edits in the draft until Save', async ({ page }) => {
+  let snapshot = {
+    version: 1,
+    values: {
+      scale: 1,
+      selectedCursorId: 'system',
+      petBehavior: { grounded: true, home: { enabled: true, radius: 'medium' } },
+      companion: { enabled: true }
+    }
+  }
+  const previews = []
+  const patches = []
+  await page.route(/\/api\/v1\/settings(?:\/preview-scale)?$/, async (route) => {
+    const request = route.request()
+    let data = snapshot
+    if (request.method() === 'POST') {
+      data = request.postDataJSON()
+      previews.push(data.scale)
+    } else if (request.method() === 'PATCH') {
+      const body = request.postDataJSON()
+      patches.push(body)
+      snapshot = { version: snapshot.version + 1, values: { ...snapshot.values, ...body.patch } }
+      data = { version: snapshot.version, changedPaths: Object.keys(body.patch) }
+    }
+    await route.fulfill({ json: { ok: true, data, meta: { requestId: 'pet-settings-browser', elapsedMs: 1 } } })
+  })
+  await page.addInitScript(() => {
+    window.openpetBackend = { getBackend: () => ({ baseUrl: location.origin + '/api/v1', sessionToken: 'pet-settings-fixture' }) }
+  })
+  await page.goto('/')
+
+  const scale = page.getByRole('slider', { name: 'Pet size' })
+  const grounded = page.getByRole('switch', { name: 'Enable grounded mode' })
+  const home = page.getByRole('switch', { name: 'Enable home anchor' })
+  const companion = page.getByRole('switch', { name: 'Enable companion output' })
+  const cursor = page.locator('.cursor-option-card').filter({ hasText: '爪爪紫' })
+  await expect(scale).toHaveValue('100')
+  await expect(home).toHaveAttribute('aria-checked', 'true')
+  await expect(companion).toHaveAttribute('aria-checked', 'true')
+  await scale.fill('130')
+  await grounded.click()
+  await companion.click()
+  expect(patches).toEqual([])
+
+  await cursor.click()
+  await expect.poll(() => patches).toEqual([
+    { ifVersion: 1, patch: { selectedCursorId: 'builtin-claw-purple', customCursor: expect.objectContaining({ enabled: true }) } }
+  ])
+  await expect(page.locator('.status-line')).toContainText('指针已立即应用')
+  await expect(scale).toHaveValue('130')
+  await expect(grounded).toHaveAttribute('aria-checked', 'false')
+  await expect(home).toHaveAttribute('aria-checked', 'false')
+  await expect(companion).toHaveAttribute('aria-checked', 'false')
+
+  await page.getByRole('button', { name: '还原', exact: true }).click()
+  await expect(scale).toHaveValue('100')
+  await expect(grounded).toHaveAttribute('aria-checked', 'true')
+  await expect(home).toHaveAttribute('aria-checked', 'true')
+  await expect(companion).toHaveAttribute('aria-checked', 'true')
+  await expect(page.locator('.cursor-option-card.selected')).toContainText('爪爪紫')
+  await expect.poll(() => previews).toEqual([1.3, 1])
+
+  await scale.fill('130')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => patches.slice(1)).toEqual([{ ifVersion: 2, patch: { scale: 1.3 } }])
+  await page.getByRole('button', { name: '还原', exact: true }).click()
+  await expect(scale).toHaveValue('130')
+})
