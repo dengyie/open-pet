@@ -486,13 +486,7 @@ const sanitizeModelId = (value) => String(value || '')
 const isVerifiedCreatorWorkflowImageModel = (value) => VERIFIED_CREATOR_WORKFLOW_IMAGE_MODELS
   .includes(normalizeImageModelCapabilityKey(sanitizeModelId(value)))
 
-const createCreatorWorkflowModelPolicy = ({ config = {}, storedState = {} }) => {
-  const catalog = getScopedProviderModelCatalog({
-    capability: 'image',
-    provider: config.provider,
-    baseUrl: config.baseUrl,
-    catalog: storedState.modelCatalog
-  })
+const createCreatorWorkflowModelPolicy = ({ config, catalog }) => {
   const discoveredModels = Array.isArray(catalog?.models)
     ? uniqueModelIds(catalog.models.map(sanitizeModelId).filter(Boolean))
     : []
@@ -970,6 +964,7 @@ const createImageGenerationModelService = ({
 
   let activeProviderJobs = 0
   let healthCacheRevision = 0
+  let runtimeModelCatalog
   const queuedProviderJobs = []
   const responseLimits = normalizeProviderResponseLimits(providerResponseLimits)
 
@@ -979,14 +974,21 @@ const createImageGenerationModelService = ({
       ? settingsService.get().models.imageGeneration
       : {}
   )
-  const getModelCatalog = (config = getStoredConfig(), storedState = getStoredImageGenerationState()) => (
+  const scopeModelCatalog = (config, catalog) => (
     getScopedProviderModelCatalog({
       capability: 'image',
       provider: config.provider,
       baseUrl: config.baseUrl,
-      catalog: storedState.modelCatalog,
+      catalog,
       secrets: [secretService.getSecretValue(config.apiKeyRef)]
     })
+  )
+  const getCreatorModelCatalog = (config, savedCatalog) => (
+    savedCatalog.source === 'none' &&
+    !canPersistModelCatalog() &&
+    runtimeModelCatalog?.revision === getHealthCacheRevision()
+      ? scopeModelCatalog(config, runtimeModelCatalog.catalog)
+      : savedCatalog
   )
   const getProviderTimeoutMs = (config) => Math.max(1, Number(cloudGenerationTimeoutMs ?? providerGenerationTimeoutMs ?? config.timeoutMs ?? PROVIDER_GENERATION_TIMEOUT_MS) || PROVIDER_GENERATION_TIMEOUT_MS)
   const getConfigLogDetails = (config) => ({
@@ -1103,7 +1105,7 @@ const createImageGenerationModelService = ({
     return awaitPersistence ? Promise.resolve(saved) : saved
   }
 
-  const persistModelCatalog = (config, models) => {
+  const persistModelCatalog = (config, models, revision) => {
     const nextCatalog = createSavedProviderModelCatalog({
       capability: 'image',
       provider: config.provider,
@@ -1112,7 +1114,12 @@ const createImageGenerationModelService = ({
       fetchedAt: now().toISOString(),
       secrets: [secretService.getSecretValue(config.apiKeyRef)]
     })
-    if (!canPersistModelCatalog()) return nextCatalog
+    if (!canPersistModelCatalog()) {
+      if (revision === getHealthCacheRevision() && scopeModelCatalog(getStoredConfig(), nextCatalog).source !== 'none') {
+        runtimeModelCatalog = { catalog: nextCatalog, revision }
+      }
+      return nextCatalog
+    }
     const current = getStoredImageGenerationState()
     const saved = saveStoredConfig({
       ...toPersistedConfig(current),
@@ -1123,7 +1130,7 @@ const createImageGenerationModelService = ({
 
   const getConfig = () => {
     const config = getStoredConfig()
-    const storedState = getStoredImageGenerationState()
+    const modelCatalog = scopeModelCatalog(config, getStoredImageGenerationState().modelCatalog)
     const secretValue = secretService.getSecretValue(config.apiKeyRef)
     return {
       ...config,
@@ -1131,8 +1138,11 @@ const createImageGenerationModelService = ({
       hasApiKey: Boolean(secretValue),
       apiKeyPreview: maskSecret(secretValue),
       apiKeyLabel: 'Image API Key',
-      modelCatalog: getModelCatalog(config, storedState),
-      creatorWorkflowModelPolicy: createCreatorWorkflowModelPolicy({ config, storedState })
+      modelCatalog,
+      creatorWorkflowModelPolicy: createCreatorWorkflowModelPolicy({
+        config,
+        catalog: getCreatorModelCatalog(config, modelCatalog)
+      })
     }
   }
 
@@ -1286,6 +1296,7 @@ const createImageGenerationModelService = ({
 
   const checkHealth = async (options = {}) => {
     const config = getStoredConfig()
+    const revision = getHealthCacheRevision()
     let runtimeConfig = config
     const requestId = idFactory()
     const startedMs = nowMs()
@@ -1408,7 +1419,7 @@ const createImageGenerationModelService = ({
         )
       }
       const availableModels = extractDiscoveredModels(body, { secrets: [apiKey] })
-      await persistModelCatalog(runtimeConfig, availableModels)
+      await persistModelCatalog(runtimeConfig, availableModels, revision)
       return completeHealth(
         {
           ok: true,
@@ -1444,6 +1455,7 @@ const createImageGenerationModelService = ({
 
   const discoverModels = async () => {
     const config = getStoredConfig()
+    const revision = getHealthCacheRevision()
     let runtimeConfig = config
     const requestId = idFactory()
     const startedMs = nowMs()
@@ -1574,7 +1586,7 @@ const createImageGenerationModelService = ({
         )
       }
       const discoveredModels = extractDiscoveredModels(body, { secrets: [apiKey] })
-      await persistModelCatalog(runtimeConfig, discoveredModels)
+      await persistModelCatalog(runtimeConfig, discoveredModels, revision)
       return completeDiscovery(
         {
           ok: true,
@@ -2035,8 +2047,11 @@ const createImageGenerationModelService = ({
     if (!primaryVariant) {
       throw new Error('Image Provider prompt variants do not include the current Host model')
     }
-    const storedState = getStoredImageGenerationState()
-    const workflowPolicy = createCreatorWorkflowModelPolicy({ config, storedState })
+    const modelCatalog = scopeModelCatalog(config, getStoredImageGenerationState().modelCatalog)
+    const workflowPolicy = createCreatorWorkflowModelPolicy({
+      config,
+      catalog: getCreatorModelCatalog(config, modelCatalog)
+    })
     const candidateModels = [
       config.model,
       ...(Array.isArray(workflowPolicy.fallbackModels) ? workflowPolicy.fallbackModels : [])
