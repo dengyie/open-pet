@@ -9,6 +9,7 @@ const { crc32 } = require('node:zlib')
 const sharp = require('sharp')
 
 const { createActionService } = require('../../apps/desktop/src/services/action-service')
+const { createActionImportService } = require('../../apps/desktop/src/services/action-import-service')
 const { BUILT_IN_PACK_ID, createPetPackService } = require('../../apps/desktop/src/services/pet-pack-service')
 const zipArchiveUtils = require('../../apps/desktop/src/services/zip-archive-utils')
 const { createMinimalWebp: createFixtureWebp } = require('../../examples/plugins/creator-studio/lib/fake-hatch-pet')
@@ -436,7 +437,7 @@ test('pet pack service rejects oversized sprite metadata before pixel decode', a
   const service = createService()
   const root = createTempDir('oversized-sprite')
   const actions = [{
-    id: 'idle', sprite: 'sprites/idle.png', frameCount: 1, frameMs: 100, frameWidth: 8192, frameHeight: 4096
+    id: 'idle', sprite: 'sprites/idle.png', frameCount: 1, frameMs: 100, frameWidth: 16384, frameHeight: 8192
   }]
   await createPetPackDirectory(root)
   const manifestPath = path.join(root, 'pet.json')
@@ -444,11 +445,44 @@ test('pet pack service rejects oversized sprite metadata before pixel decode', a
   fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, clickAction: 'idle', actions }))
   const sprite = path.join(root, 'sprites', 'idle.png')
   const bytes = fs.readFileSync(sprite)
-  bytes.writeUInt32BE(8192, 16)
-  bytes.writeUInt32BE(4096, 20)
+  bytes.writeUInt32BE(16384, 16)
+  bytes.writeUInt32BE(8192, 20)
   bytes.writeUInt32BE(crc32(bytes.subarray(12, 29)), 29)
   fs.writeFileSync(sprite, bytes)
   assert.match((await service.inspectPackDirectory(root)).errors[0], /pixel limit/i)
+})
+
+test('an installed pet pack can reactivate after importing a frame strip larger than 16 megapixels', async (t) => {
+  const root = createTempDir('large-frame-strip')
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const source = path.join(root, 'source-pack')
+  const sourceDir = path.join(root, 'frames')
+  await createPetPackDirectory(source)
+  fs.mkdirSync(sourceDir)
+  const frame = await sharp({
+    create: { width: 512, height: 2048, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 0.8 } }
+  }).png().toBuffer()
+  for (let index = 0; index < 17; index += 1) {
+    fs.writeFileSync(path.join(sourceDir, `frame-${index}.png`), frame)
+  }
+  const service = createPetPackService({
+    settingsService: createSettingsService(),
+    userPacksDir: path.join(root, 'packs')
+  })
+  const { selectionId } = await service.inspectPackDirectory(source)
+  const { pack } = await service.importPack(selectionId)
+  await service.setActivePack(pack.id)
+  const importer = createActionImportService({
+    framesRoot: path.join(pack.rootPath, 'frames'),
+    spritesDir: path.join(pack.rootPath, 'sprites'),
+    configPath: path.join(pack.rootPath, 'pet.json'),
+    configType: 'pet-pack',
+    spriteRelativeDir: 'sprites'
+  })
+  const { importedAction } = await importer.importActionFrames({ sourceDir, actionId: 'large-wave' })
+  assert.equal(importedAction.frameCount * importedAction.frameWidth * importedAction.frameHeight, 17_825_792)
+  await service.setActivePack(BUILT_IN_PACK_ID)
+  assert.equal((await service.setActivePack(pack.id)).activePackId, pack.id)
 })
 
 test('pet pack service decodes PNG image data even when the chunks have valid checksums', async () => {

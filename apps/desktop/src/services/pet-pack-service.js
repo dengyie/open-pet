@@ -203,6 +203,7 @@ const validatePackSprites = async (pack) => {
       throw spriteDecodeError(actions[0], error)
     }
     const { width, height } = sprite
+    let declaredPixelCount
     for (const action of actions) {
       const columns = action.atlas?.columns ?? action.frameCount
       const rows = action.atlas?.rows ?? 1
@@ -213,9 +214,10 @@ const validatePackSprites = async (pack) => {
           || (action.frameColumn ?? 0) + action.frameCount > columns || (action.frameRow ?? 0) >= rows) {
         throw invalidPack(`Pet pack action ${action.id} sprite dimensions do not match the manifest: ${action.sprite} (${width}x${height}, expected ${expectedWidth}x${expectedHeight})`)
       }
+      declaredPixelCount ??= expectedWidth * expectedHeight
     }
     try {
-      await sprite.decode?.()
+      await sprite.decode?.(declaredPixelCount)
     } catch (error) {
       throw spriteDecodeError(actions[0], error)
     }

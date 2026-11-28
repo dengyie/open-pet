@@ -2,7 +2,7 @@ const { crc32 } = require('zlib')
 const sharp = require('sharp')
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-const MAX_SPRITE_PIXELS = 16 * 1024 * 1024
+const MAX_SPRITE_PIXELS = 64 * 1024 * 1024
 
 const assertSpriteSize = (width, height) => {
   if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
@@ -94,7 +94,11 @@ const inspectSprite = async (bytes) => {
   const image = sharp(bytes, { failOn: 'warning', limitInputPixels: MAX_SPRITE_PIXELS })
   const { width, height } = await image.metadata()
   assertSpriteSize(width, height)
-  return { width, height, decode: () => image.raw().toBuffer() }
+  return {
+    width,
+    height,
+    decode: (limitInputPixels) => sharp(bytes, { failOn: 'warning', limitInputPixels }).raw().toBuffer()
+  }
 }
 
-module.exports = { assertCompleteSprite, inspectSprite }
+module.exports = { assertCompleteSprite, assertSpriteSize, inspectSprite }
